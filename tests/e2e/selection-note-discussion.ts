@@ -350,7 +350,7 @@ for (const mobile of devices) await withHost(async host => {
       const noteId = await savedNote(page, extraNote).getAttribute('data-note-id');
       assert.ok(noteId);
       await page.locator('#mobileRail').click();
-      const notebook = page.getByLabel('Reading notebook', { exact: true });
+      const notebook = page.getByLabel('阅读笔记本', { exact: true });
       const linkedNote = notebook.locator('.notebook-source[data-note-id=' + JSON.stringify(noteId) + ']');
       await linkedNote.getByRole('button', { name: 'Delete linked note', exact: true }).click();
       await notebook.getByRole('button', { name: '保存', exact: true }).click();

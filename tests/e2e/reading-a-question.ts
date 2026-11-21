@@ -258,7 +258,7 @@ async function saveReaderNote(page: Page, reply: Locator, mobile: boolean) {
   const turn = reply.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," chat-turn ")][1]');
   await activate(turn.getByRole('button', { name: '记下选句', exact: true }), mobile);
   await turn.getByText('已记入', { exact: true }).waitFor();
-  const notebook = page.getByLabel('Reading notebook', { exact: true });
+  const notebook = page.getByLabel('阅读笔记本', { exact: true });
   const editor = notebook.getByRole('textbox', { name: 'Notebook Markdown' });
   await activate(turn.getByRole('button', { name: '查看', exact: true }), mobile);
   await editor.press('Control+End');
@@ -408,7 +408,7 @@ for (const mobile of mode) await withHost(async host => {
     const reopened = await openDesk(browser, host, url, mobile);
     const nextPage = reopened.page;
     await activate(nextPage.getByRole('button', { name: '打开笔记本', exact: true }), mobile);
-    const freshNotebook = nextPage.getByLabel('Reading notebook', { exact: true });
+    const freshNotebook = nextPage.getByLabel('阅读笔记本', { exact: true });
     const freshEditor = freshNotebook.getByRole('textbox', { name: 'Notebook Markdown' });
     await freshEditor.getByText(ownNote, { exact: true }).waitFor();
     const content = await freshEditor.innerText();
