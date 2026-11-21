@@ -381,6 +381,8 @@ await withHost(async host => {
       await page.locator('#loading').waitFor({ state: 'hidden' });
       await pose(page, 'float');
       assert.ok(Math.abs((await box(rail)).x - moved.x) <= 2 && Math.abs((await box(rail)).y - moved.y) <= 2);
+      await rail.getByRole('tab', { name:'Marks', selected:true, exact:true }).waitFor();
+      await notes.click();
       assert.equal(await display.inputValue(), 'separate');
       await marks.click();
       await rail.locator('.annotation-entry').filter({ hasText: markComment }).click();

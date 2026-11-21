@@ -13,7 +13,7 @@ interface DeskSettings {
   notebookFloating?: boolean;
   notebookPosition?: { x: number; y: number };
   notebookOpen?: boolean;
-  compactNotebookOpen?: boolean;
+  drawerOpen?: boolean;
   focus?: TranslationFocus;
   mode?: ReadingMode;
   zoom?: number;
@@ -23,7 +23,15 @@ const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(ma
 function read(): DeskSettings {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(preference) || '{}');
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as DeskSettings : {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const settings = value as DeskSettings & { compactNotebookOpen?: boolean };
+    if (typeof settings.compactNotebookOpen === 'boolean') {
+      // Older layouts stored the sidebar's only open/closed choice under the compact key.
+      settings.notebookOpen ??= settings.compactNotebookOpen;
+      settings.drawerOpen ??= settings.compactNotebookOpen;
+      delete settings.compactNotebookOpen;
+    }
+    return settings;
   }
   catch { return {}; }
 }
@@ -47,7 +55,7 @@ export class ReadingDesk {
   get isNarrow(): boolean { return this.narrow.matches; }
   get visibleLanguage(): 'original' | 'translation' { return this.isNarrow && this.mode === 'bilingual' ? 'translation' : 'original'; }
   get notebookOpen(): boolean {
-    if (this.isNarrow) return this.settings.compactNotebookOpen ?? this.settings.notebookOpen ?? false;
+    if (this.isNarrow) return this.settings.drawerOpen ?? this.settings.notebookOpen ?? false;
     return this.settings.notebookOpen ?? this.book;
   }
   get highlightDisplay(): HighlightDisplay { return this.settings.highlightDisplay === 'separate' ? 'separate' : 'inline'; }
@@ -75,10 +83,10 @@ export class ReadingDesk {
     const trigger = byId(this.contents ? 'contentsToggle' : 'mobileRail');
     if (value && active instanceof HTMLElement && !rail.contains(active) && active !== document.body) this.returnTo = active;
     if (value === this.notebookOpen) return;
-    if (drawerOnly && this.isNarrow) this.settings.compactNotebookOpen = value;
+    if (drawerOnly && this.isNarrow) this.settings.drawerOpen = value;
     else {
       this.settings.notebookOpen = value;
-      delete this.settings.compactNotebookOpen;
+      delete this.settings.drawerOpen;
     }
     this.applyKeepingPage();
     this.save();
