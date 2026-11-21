@@ -797,7 +797,7 @@ class Reader implements ReaderPort {
       return;
     }
     const switching=this.desk.notebookOpen;
-    this.selectTab(tab);this.desk.showNotebook();
+    this.selectTab(tab);this.desk.showNotebook(true,tab==='contents');
     if(switching)byId(tab==='contents'?'contentsTab':'notesTab').focus({preventScroll:true});
   }
   private closeMenu(restoreFocus=false):void {

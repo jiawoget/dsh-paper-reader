@@ -406,6 +406,7 @@ async function bookJourney(host: HostFixture, vault: string, trace: ReturnType<t
     await contentsPanel(page).waitFor({ state: 'hidden' });
     await trace.expect('Choose a cached book section from the narrow sidebar', []);
     await page.setViewportSize(viewport);
+    await contentsPanel(page).waitFor({state:'visible'});
 
     await pasteAddress(page, bookRoot + sections.first.slug);
     assert.equal((await activeSection(page, sections.first)).doc, bookId);

@@ -70,13 +70,16 @@ export class ReadingDesk {
     this.contents = active;
     this.updateSidebarButtons();
   }
-  showNotebook(value = true): void {
+  showNotebook(value = true, drawerOnly = false): void {
     const rail = byId('rail'), active = document.activeElement;
     const trigger = byId(this.contents ? 'contentsToggle' : 'mobileRail');
     if (value && active instanceof HTMLElement && !rail.contains(active) && active !== document.body) this.returnTo = active;
     if (value === this.notebookOpen) return;
-    if (this.isNarrow) this.settings.compactNotebookOpen = value;
-    else this.settings.notebookOpen = value;
+    if (drawerOnly && this.isNarrow) this.settings.compactNotebookOpen = value;
+    else {
+      this.settings.notebookOpen = value;
+      delete this.settings.compactNotebookOpen;
+    }
     this.applyKeepingPage();
     this.save();
     if (value) (this.isNarrow ? byId('closeRail') : rail.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]'))?.focus({ preventScroll: true });
@@ -91,7 +94,7 @@ export class ReadingDesk {
   }
   dismissDrawer(): boolean {
     if (!this.isNarrow || !this.notebookOpen) return false;
-    this.showNotebook(false);
+    this.showNotebook(false, true);
     return true;
   }
   private notebookLimits(): [number, number] {
