@@ -114,21 +114,38 @@ async function drawCrop(page: Page, area: Bounds, touch = false): Promise<Crop> 
   const start = { x: Math.round(rect.x + area[0] * rect.width), y: Math.round(rect.y + area[1] * rect.height) };
   const end = { x: Math.round(rect.x + area[2] * rect.width), y: Math.round(rect.y + area[3] * rect.height) };
   const width = end.x - start.x, height = end.y - start.y;
-  const reference = await page.locator('#original canvas.pdf-raster').evaluate((raster, input) => {
-    const source = raster as HTMLCanvasElement, bounds = source.getBoundingClientRect();
-    const crop = document.createElement('canvas');
-    crop.width = input.sampleWidth; crop.height = input.sampleHeight;
-    const ctx = crop.getContext('2d')!;
-    ctx.imageSmoothingQuality = 'high';
-    const sx = source.width / bounds.width, sy = source.height / bounds.height;
-    ctx.drawImage(source, (input.start.x - bounds.left) * sx, (input.start.y - bounds.top) * sy,
-      input.width * sx, input.height * sy, 0, 0, crop.width, crop.height);
-    return Array.from(ctx.getImageData(0, 0, crop.width, crop.height).data);
-  }, { start, width, height, sampleWidth, sampleHeight });
-  assert.ok(reference.some((value, index) => index % 4 === 0 && value < 190), 'The named PDF area contains drawn ink.');
+  const paper = await box(page.locator('#original canvas.pdf-raster'));
+  const sourceArea = { x: (start.x - paper.x) / paper.width, y: (start.y - paper.y) / paper.height,
+    width: width / paper.width, height: height / paper.height };
   await drag(page, start, end, touch);
   await page.locator('.pdf-capture-actions').waitFor();
-  return { aspect: width / height, pixels: reference };
+  const marker = await box(page.locator('#original .pdf-region-marker'));
+  const endError = Math.max(Math.abs(marker.x - start.x), Math.abs(marker.y - start.y),
+    Math.abs(marker.x + marker.width - end.x), Math.abs(marker.y + marker.height - end.y));
+  assert.ok(endError <= 2, 'The selection marker must follow both pointer endpoints.');
+
+  // Sample the original PDF at a fixed resolution. The displayed phone canvas can change density between gestures.
+  const pixels = await page.evaluate(async ({ sourceArea, sampleWidth, sampleHeight }) => {
+    const moduleUrl = new URL('../vendor/pdf.mjs', location.href).href;
+    const pdfjs: typeof import('pdfjs-dist') = await import(moduleUrl);
+    const task = pdfjs.getDocument({ url: new URL('assets/pagedattention.pdf', location.href).href,
+      standardFontDataUrl: new URL('../vendor/standard_fonts/', location.href).href });
+    try {
+      const sheet = await (await task.promise).getPage(6), viewport = sheet.getViewport({ scale: 3 });
+      const source = document.createElement('canvas');
+      source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
+      await sheet.render({ canvas: source, viewport, background: '#ffffff' }).promise;
+      const sample = document.createElement('canvas');
+      sample.width = sampleWidth; sample.height = sampleHeight;
+      const ctx = sample.getContext('2d')!;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(source, sourceArea.x * source.width, sourceArea.y * source.height,
+        sourceArea.width * source.width, sourceArea.height * source.height, 0, 0, sampleWidth, sampleHeight);
+      return Array.from(ctx.getImageData(0, 0, sampleWidth, sampleHeight).data);
+    } finally { await task.destroy(); }
+  }, { sourceArea, sampleWidth, sampleHeight });
+  assert.ok(pixels.some((value, index) => index % 4 === 0 && value < 190), 'The named PDF area contains drawn ink.');
+  return { aspect: width / height, pixels };
 }
 
 async function matchesCrop(page: Page, url: string | undefined, expected: Crop): Promise<void> {
@@ -153,7 +170,7 @@ async function matchesCrop(page: Page, url: string | undefined, expected: Crop):
   assert.ok(values.some((value, index) => index % 4 === 0 && value < 190), 'The PNG must contain ink from the PDF.');
   const meanError = values.reduce((total, value, index) => total + (index % 4 === 3 ? 0 : Math.abs(value - expected.pixels[index])), 0) /
     (sampleWidth * sampleHeight * 3);
-  assert.ok(meanError < 18, 'The PNG must contain the pixels in the dragged box, mean sample error ' + meanError.toFixed(2) + '.');
+  assert.ok(meanError < 14, 'The PNG must contain the pixels in the dragged box, mean sample error ' + meanError.toFixed(2) + '.');
 }
 
 function chat(page: Page) {
