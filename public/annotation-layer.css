@@ -1,0 +1,106 @@
+::highlight(paper-annotation-yellow) { background-color: rgb(246 205 64 / 48%); }
+::highlight(paper-annotation-green) { background-color: rgb(123 198 143 / 49%); }
+::highlight(paper-annotation-purple) { background-color: rgb(182 142 222 / 49%); }
+
+.web-reading-sheet, .pdf-reading-text { position: relative; }
+.annotation-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+}
+.annotation-highlight {
+  position: absolute;
+  border: 0;
+  border-radius: 2px;
+  padding: 0;
+  pointer-events: none;
+  background: transparent;
+}
+.annotation-pin, .annotation-location {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transform: translate(-50%, -50%);
+  padding: 2px 6px;
+  min-width: 28px;
+  height: 27px;
+  border-radius: 6px;
+  border: 1px solid #9d85b4;
+  color: #492a68;
+  background: #f1e6fa;
+  box-shadow: 0 1px 3px #2b183426;
+  font: 650 12px/1 system-ui, sans-serif;
+  pointer-events: auto;
+}
+.annotation-pin:hover { background: #e5d3f3; }
+.annotation-location { z-index: 6; }
+.annotation-highlight:focus, .annotation-pin:focus-visible, .annotation-location:focus {
+  outline: 2px solid #72459b;
+  outline-offset: 2px;
+}
+.annotation-chooser {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: max-content;
+  max-width: min(290px, calc(100vw - 12px));
+  max-height: min(42dvh, 300px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 9px;
+  border: 1px solid #cbbbd6;
+  border-radius: 8px;
+  color: #392e43;
+  background: #fff;
+  box-shadow: 0 5px 16px #36244328;
+  font: 13px/1.4 "Segoe UI", sans-serif;
+}
+.annotation-chooser strong { display: block; margin: 2px 5px 6px; }
+.annotation-chooser button {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.annotation-chooser button:hover, .annotation-chooser button:focus-visible { background: #f0e9f6; }
+.annotation-placement {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: crosshair;
+}
+.annotation-crosshair {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #693a93;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: #f1e7f966;
+  box-shadow: 0 0 0 1px #fff;
+  pointer-events: none;
+}
+.annotation-crosshair::before, .annotation-crosshair::after {
+  content: "";
+  position: absolute;
+  inset: 7px -4px;
+  background: #693a93;
+}
+.annotation-crosshair::after { inset: -4px 7px; }

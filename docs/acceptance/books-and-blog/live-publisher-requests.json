@@ -1,0 +1,185 @@
+{
+  "actions": [
+    {
+      "action": "Open book landing",
+      "paths": [
+        "/apps/cms/api/books/principles-finance/",
+        "/apps/cms/api/v2/pages/583/",
+        "/books/principles-finance/pages/1-why-it-matters"
+      ]
+    },
+    {
+      "action": "Inspect book contents without fetching more sections",
+      "paths": []
+    },
+    {
+      "action": "Next section",
+      "paths": [
+        "/books/principles-finance/pages/1-1-what-is-finance"
+      ]
+    },
+    {
+      "action": "Previous cached section",
+      "paths": []
+    },
+    {
+      "action": "Contents to second section",
+      "paths": [
+        "/books/principles-finance/pages/1-2-the-role-of-finance-in-an-organization"
+      ]
+    },
+    {
+      "action": "Jump ahead with contents",
+      "paths": [
+        "/books/principles-finance/pages/19-1-what-is-working-capital"
+      ]
+    },
+    {
+      "action": "Open another publisher chapter",
+      "paths": [
+        "/books/principles-finance/pages/2-1-business-structures"
+      ]
+    },
+    {
+      "action": "Read real publisher section from extension",
+      "paths": [
+        "/books/principles-finance/pages/1-3-importance-of-data-and-technology"
+      ]
+    },
+    {
+      "action": "Paste same publisher section URL",
+      "paths": []
+    },
+    {
+      "action": "Return to cached section and read a paragraph",
+      "paths": []
+    },
+    {
+      "action": "Reopen in fresh Chrome from device library",
+      "paths": []
+    },
+    {
+      "action": "Choose a cached book section from the narrow sidebar",
+      "paths": []
+    },
+    {
+      "action": "Explicit section URL overrides saved reading position",
+      "paths": []
+    },
+    {
+      "action": "Click cross-section notebook source chip",
+      "paths": []
+    },
+    {
+      "action": "Follow actual vault file backlink to exact source",
+      "paths": []
+    }
+  ],
+  "requests": [
+    {
+      "url": "https://openstax.org/apps/cms/api/books/principles-finance/",
+      "method": "GET",
+      "accept": "application/json"
+    },
+    {
+      "url": "https://openstax.org/apps/cms/api/v2/pages/583/",
+      "method": "GET",
+      "accept": "application/json"
+    },
+    {
+      "url": "https://openstax.org/books/principles-finance/pages/1-why-it-matters",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://openstax.org/apps/image-cdn/v1/f=webp/apps/archive/20260604.144757/resources/0e94434473d9b958adbbd3e731760b3ce35b7ab1",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://openstax.org/books/principles-finance/pages/1-1-what-is-finance",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://openstax.org/apps/image-cdn/v1/f=webp/apps/archive/20260604.144757/resources/a2c4a544c39aed7cb7092a80f3df32f20c574ae1",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://openstax.org/apps/image-cdn/v1/f=webp/apps/archive/20260604.144757/resources/edc01f6ed7f97adc9db47029ec9cc6fe1cdc5116",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://openstax.org/books/principles-finance/pages/1-2-the-role-of-finance-in-an-organization",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://openstax.org/apps/image-cdn/v1/f=webp/apps/archive/20260604.144757/resources/0d60b80586e41119e7340258108c94df9a456eeb",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://openstax.org/books/principles-finance/pages/19-1-what-is-working-capital",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://openstax.org/books/principles-finance/pages/2-1-business-structures",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://openstax.org/books/principles-finance/pages/1-3-importance-of-data-and-technology",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://research.google/blog/empty-shelves-or-lost-keys-recall-is-the-bottleneck-for-parametric-factuality/",
+      "method": "GET",
+      "accept": "text/html,application/xhtml+xml,application/pdf"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling1_Overview.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling2_Operationalize.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling4_Results1.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling3_WikiProfile.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling5_Results2.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling6_Results3.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling7_Results4.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    },
+    {
+      "url": "https://storage.googleapis.com/gweb-research2023-media/images/KnowledgeProfiling8_Results5.width-1250.png",
+      "method": "GET",
+      "accept": "image/*"
+    }
+  ]
+}

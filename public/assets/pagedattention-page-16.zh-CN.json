@@ -1,0 +1,6 @@
+{
+  "ref-62": "[62] Susan Zhang、Stephen Roller、Naman Goyal、Mikel Artetxe、Moya Chen、Shuohui Chen、Christopher Dewan、Mona Diab、Xian Li、Xi Victoria Lin 等（2022）。OPT：开放的预训练 Transformer 语言模型。arXiv 预印本 arXiv:2205.01068（2022）。",
+  "ref-63": "[63] 作者：Lianmin Zheng、Zhuohan Li、Hao Zhang、Yonghao Zhuang、Zhifeng Chen、Yanping Huang、Yida Wang、Yuanzhong Xu、Danyang Zhuo、",
+  "ref-63-cont": "Eric P Xing 等（2022）。Alpa：自动实现分布式深度学习中的算子间与算子内并行。第 16 届 USENIX 操作系统设计与实现研讨会（OSDI 22），559–578。",
+  "ref-64": "[64] Zhe Zhou、Xuechao Wei、Jiejing Zhang、Guangyu Sun（2022）。PetS：面向参数高效型 Transformer 的统一推理服务框架。2022 USENIX 年度技术会议（USENIX ATC 22），489–504。"
+}

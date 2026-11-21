@@ -1,0 +1,87 @@
+{
+  "name": "dsh-paper-reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bilingual paper reading, contextual lookup, and source-linked notes for DeepSeek Harness",
+  "engines": {
+    "node": ">=24.9"
+  },
+  "exports": {
+    ".": "./dist/server/index.js",
+    "./client": "./dist/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "install:translation-model": "tsx scripts/install-translation-model.ts",
+    "build": "npm run typecheck && tsx scripts/build.ts",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:browser": "tsx tests/browser.ts && npm run test:pdf-translation && npm run test:pdf-recovery",
+    "test:pdf-translation": "tsx tests/e2e/pdf-translation.ts",
+    "test:pdf-recovery": "tsx tests/e2e/pdf-translation-recovery.ts",
+    "test:pdf-artwork": "tsx tests/e2e/pdf-artwork.ts",
+    "test:reader-selection": "tsx tests/e2e/reader-selection.ts",
+    "test:floating-selection": "tsx tests/e2e/floating-selection.ts",
+    "test:passage-links": "tsx tests/e2e/passage-links.ts",
+    "test:reading-layout": "tsx tests/e2e/reading-layout.ts",
+    "test:reading-modes": "tsx tests/e2e/reading-modes.ts",
+    "test:annotations": "tsx tests/e2e/annotations.ts",
+    "test:selection-note-draft": "tsx tests/e2e/selection-note-draft.ts",
+    "test:selection-note-discussion": "tsx tests/e2e/selection-note-discussion.ts",
+    "test:discussion-excerpt": "tsx tests/e2e/discussion-excerpt.ts",
+    "test:notebook-scenarios": "tsx tests/e2e/notebook-scenarios.ts",
+    "test:region-discussion": "tsx tests/e2e/region-discussion.ts",
+    "test:discussion-continuity": "tsx tests/e2e/discussion-continuity.ts",
+    "test:reading-a-question": "tsx tests/e2e/reading-a-question.ts",
+    "test:discussion-recovery": "tsx tests/e2e/discussion-continuity.ts archive --same-reply-probe && tsx tests/e2e/discussion-continuity.ts return --return-location-probe --column",
+    "test:extension-journeys": "tsx tests/e2e/extension-journeys.ts",
+    "test:reader-journey-edges": "tsx tests/e2e/reader-journey-edges.ts",
+    "test:paper-chat": "tsx tests/e2e/paper-chat.ts",
+    "test:zotero-desktop": "tsx tests/e2e/zotero-desktop.ts",
+    "test:zotero-public": "tsx tests/e2e/zotero-public.ts",
+    "test:web-zotero": "tsx tests/e2e/web-zotero-delivery.ts",
+    "test:book-reading": "tsx tests/e2e/book-reading.ts",
+    "test:sidebar-contents": "tsx tests/e2e/sidebar-contents.ts",
+    "test:sidebar-model": "tsx tests/e2e/sidebar-contents-live-model.ts",
+    "test:extension": "tsx tests/e2e/extension-flow.ts",
+    "test:integrations": "tsx tests/e2e/integrations.ts",
+    "test:e2e": "npm run test:extension && npm run test:extension-journeys && npm run test:browser && npm run test:integrations && npm run test:reader-selection && npm run test:passage-links && npm run test:reading-layout && npm run test:reading-modes && npm run test:annotations && npm run test:selection-note-draft && npm run test:selection-note-discussion && npm run test:discussion-excerpt && npm run test:notebook-scenarios && npm run test:region-discussion && npm run test:discussion-continuity && npm run test:discussion-recovery && npm run test:reading-a-question && npm run test:reader-journey-edges && npm run test:paper-chat && npm run test:zotero-desktop && npm run test:web-zotero && npm run test:book-reading && npm run test:sidebar-contents",
+    "start": "dsh web --patch ./paper-reader.patch.yml --host 127.0.0.1 --port 29812"
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@huggingface/transformers": "3.8.1",
+    "@lezer/highlight": "1.2.5",
+    "@mdit/plugin-cjk-friendly": "1.0.0",
+    "@mdit/plugin-katex": "1.2.0",
+    "katex": "0.19.1",
+    "markdown-it": "15.0.3",
+    "opencc-js": "1.4.2",
+    "parse5": "8.1.1",
+    "pdfjs-dist": "6.5.438",
+    "sharp": "0.34.5"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.7",
+    "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.65.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

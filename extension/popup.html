@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSH Paper Reader</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <header>
+    <span class="book" aria-hidden="true"><i></i><i></i></span>
+    <h1>DSH Paper Reader</h1>
+    <button id="launch" class="plain" title="Open your local DSH">Open DSH ↗</button>
+  </header>
+  <main>
+    <button class="primary" id="toggle" disabled>Enable selection cards</button>
+    <button class="secondary" id="read" disabled>Open in Paper Reader</button>
+    <p id="message" role="status" aria-live="polite">Select a word or sentence to translate, ask a question, or add a note.</p>
+  </main>
+  <details>
+    <summary>Connection settings</summary>
+    <form>
+      <label for="origin">Local DSH address</label>
+      <div class="address"><input id="origin" type="url" required spellcheck="false" autocomplete="off"><button type="submit">Save address</button></div>
+    </form>
+  </details>
+</body>
+</html>

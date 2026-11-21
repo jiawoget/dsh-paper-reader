@@ -1,0 +1,3 @@
+- insert:
+    - id: paper-reader
+      name: ./dist/server/index.js

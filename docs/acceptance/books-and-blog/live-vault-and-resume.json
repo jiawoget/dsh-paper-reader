@@ -1,0 +1,45 @@
+{
+  "tocSections": 261,
+  "farPage": 238,
+  "chapters": [
+    "principles-finance\\1 Introduction to Finance.md",
+    "principles-finance\\2 Corporate Structure and Governance.md"
+  ],
+  "nativeVerified": true,
+  "resumeAnchor": "p-12",
+  "resumeParagraph": "Financial planning is critical",
+  "originalPosition": 35.59375,
+  "restoredPosition": 35.59375,
+  "backlinks": [
+    {
+      "doc": "book-141f57d0f23dde4db30d9c2fb6084f2c3cc82f378b93465f1490768cda32a6d6",
+      "page": "3",
+      "anchor": "p-8",
+      "quote": "Finance is the study",
+      "rangeStart": "0",
+      "endAnchor": "p-8",
+      "rangeEnd": "20",
+      "rangeTail": "Finance is the study"
+    },
+    {
+      "doc": "book-141f57d0f23dde4db30d9c2fb6084f2c3cc82f378b93465f1490768cda32a6d6",
+      "page": "4",
+      "anchor": "p-10",
+      "quote": "chief financial officer",
+      "rangeStart": "4",
+      "endAnchor": "p-10",
+      "rangeEnd": "27",
+      "rangeTail": "chief financial officer"
+    },
+    {
+      "doc": "book-141f57d0f23dde4db30d9c2fb6084f2c3cc82f378b93465f1490768cda32a6d6",
+      "page": "17",
+      "anchor": "p-9",
+      "quote": "executive management teams",
+      "rangeStart": "22",
+      "endAnchor": "p-9",
+      "rangeEnd": "48",
+      "rangeTail": "executive management teams"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "DSH Paper Reader",
+  "version": "0.1.0",
+  "description": "Translate a selection, save a note, or read a webpage side by side in your local DSH Paper Reader.",
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "host_permissions": ["*://127.0.0.1/*", "*://localhost/*", "*://[::1]/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "DSH Paper Reader", "default_popup": "popup.html" }
+}

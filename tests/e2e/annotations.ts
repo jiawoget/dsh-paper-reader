@@ -1,0 +1,150 @@
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { chromium, type Page } from 'playwright-core';
+import { withHost } from './host.js';
+import type { NotebookSnapshot, Operations } from '../../src/shared/types.js';
+
+await withHost(async ({origin, authenticatedUrl, executable}) => {
+  const browser=await chromium.launch({executablePath:executable});
+  try {
+    const ctx=await browser.newContext({locale:'en-US',viewport:{width:1440,height:900}});
+    const page=await ctx.newPage(), errors:string[]=[];
+    page.on('pageerror',error=>errors.push(error.message));
+    const appUrl=origin+'/api/paper-reader/app/index.html?doc=pagedattention&page=6';
+    await page.goto(authenticatedUrl); await page.goto(appUrl);
+    const loaded=(p:Page)=>p.locator('#loading').waitFor({state:'hidden'});
+    const go=async(n:number)=>{await page.locator('#pageCount').click();await page.locator('#pageNumber').fill(String(n));await page.locator('#pageNumber').press('Enter');await page.waitForURL(url=>url.searchParams.get('page')===String(n));await loaded(page);};
+    const action=async<K extends keyof Operations>(op:K,payload:Operations[K][0]):Promise<Operations[K][1]>=>{
+      const res=await page.request.post(origin+'/api/paper-reader/action',{data:{op,payload}});
+      assert.ok(res.ok(),op+' '+res.status());return res.json();
+    };
+    const marks=async()=>(await action('annotation.list',{docId:'pagedattention'})).annotations;
+    const book=():Promise<NotebookSnapshot>=>action('notebook.get',{docId:'pagedattention',title:'PagedAttention.pdf',sourceUrl:appUrl});
+    const screenshots=process.env.PAPER_READER_ANNOTATION_ARTIFACTS;
+    if(screenshots)await mkdir(screenshots,{recursive:true});
+    const capture=async(name:string)=>{if(screenshots)await page.screenshot({path:path.join(screenshots,name+'.png')});};
+    await loaded(page);const initialBook=await book();
+    const run=page.locator('#original .pdf-native-text [data-block-id="block-tables"]').filter({hasText:/mapping between logical/i}).first();
+    await run.evaluate(e=>{
+      const text=e.firstChild as Text;
+      const candidates=[...document.querySelectorAll('#original .pdf-native-text [data-block-id="block-tables"]')];
+      const last=candidates.slice(candidates.indexOf(e)).find(node=>node.textContent?.includes('each request'))?.firstChild as Text;
+      if(!last||text.data.indexOf('the mapping')<0)throw Error('Missing the block table mapping in the real PDF');
+      document.getSelection()!.setBaseAndExtent(text,text.data.indexOf('the mapping'),last,last.data.indexOf('each request')+'each request'.length);
+      e.dispatchEvent(new KeyboardEvent('keyup',{key:'Shift',bubbles:true}));
+    });
+    await page.getByRole('button',{name:'Highlight',exact:true}).click();
+    const highlight=page.locator('#original .annotation-highlight').first();
+    await highlight.waitFor({state:'attached'});
+    assert.equal((await book()).markdown,initialBook.markdown);
+    assert.equal((await marks()).length,1);
+
+    const reader=page.locator('#reader'), rail=page.locator('#rail'), marksTab=page.locator('#annotationsTab');
+    await page.locator('#mobileRail').click();
+    const presentation=rail.getByRole('combobox',{name:'Highlight display'});
+    assert.equal(await presentation.count(),1,'Readers can choose how highlights appear in their notebook.');
+    assert.equal(await presentation.inputValue(),'inline');
+    const inline=rail.locator('.notebook-highlight');
+    await inline.getByText(/the mapping between logical/i).waitFor();
+    await presentation.selectOption('separate');
+    assert.equal(await inline.count(),0);
+    assert.equal((await book()).markdown,initialBook.markdown);
+    await marksTab.click();
+    await rail.locator('.annotation-entry').first().click();
+    await rail.getByRole('button',{name:'Green',exact:true}).click();
+    const comment=rail.getByRole('textbox',{name:'Comment',exact:true});
+    await comment.fill('Use this as evidence of block indirection.');
+    await page.locator('#notebookPose').selectOption('float');
+    assert.equal(await reader.getAttribute('data-notebook-pose'),'float');
+    assert.equal(await comment.inputValue(),'Use this as evidence of block indirection.');
+    await capture('Floating notebook');
+    await page.locator('#notebookPose').selectOption('left');
+    assert.equal(await reader.getAttribute('data-notebook-pose'),'left');
+    await rail.getByRole('button',{name:'Save',exact:true}).click();
+    await rail.getByRole('heading',{name:'Annotations',exact:true}).waitFor();
+    assert.equal((await marks())[0].color,'green');
+    await capture('Docked notebook');
+    await rail.locator('.annotation-entry').first().click();
+    await comment.fill('Trace the mapping before comparing throughput.');
+    await page.reload();await loaded(page);await marksTab.click();await rail.locator('.annotation-entry').first().click();
+    assert.equal(await comment.inputValue(),'Trace the mapping before comparing throughput.');
+    const latest=(await marks())[0];
+    await action('annotation.save',{...latest,text:'Changed in another reader.',expectedUpdatedAt:latest.updatedAt});
+    await rail.getByRole('button',{name:'Save',exact:true}).click();
+    await rail.getByText('Changed in another reader.',{exact:true}).waitFor();
+    assert.equal(await comment.inputValue(),'Trace the mapping before comparing throughput.');
+    await rail.getByRole('button',{name:'Keep my draft'}).click();
+    await rail.getByRole('button',{name:'Save',exact:true}).click();
+    await rail.getByRole('heading',{name:'Annotations',exact:true}).waitFor();
+    await page.locator('#closeRail').click();
+
+    async function pin(text:string,figure:string){
+      const target=page.locator('#original .pdf-figure[data-block-id="'+figure+'"]');
+      await target.scrollIntoViewIfNeeded();
+      const bounds=(await target.boundingBox())!;
+      await page.locator('#placePin').click();const cross=page.locator('.annotation-placement');
+      if(figure==='figure-6'){
+        await cross.press('ArrowLeft');await cross.press('Escape');
+        assert.equal(await page.locator('#placePin').getAttribute('aria-pressed'),'false');
+        await page.locator('#placePin').click();
+      }
+      await page.mouse.click(bounds.x+bounds.width*.16,bounds.y+bounds.height*.35);
+      const popup=page.getByRole('region',{name:'Page note',exact:true});
+      await popup.getByRole('textbox',{name:'Comment'}).fill(text);
+      if(figure==='figure-6'){
+        const card=(await popup.boundingBox())!;
+        assert.ok(card.x+card.width<=bounds.x || card.x>=bounds.x+bounds.width ||
+          card.y+card.height<=bounds.y || card.y>=bounds.y+bounds.height,'Writing the margin note should leave the figure visible.');
+        await capture('At Figure 6');
+      }
+      await popup.getByRole('button',{name:'Save',exact:true}).click();
+      await popup.waitFor({state:'hidden'});
+    }
+    const first='Figure 6: why does logical block zero map to physical block seven?';
+    await pin(first,'figure-6');
+    assert.equal((await book()).markdown,initialBook.markdown);
+    await go(7);await pin('Figure 8: trace the write after sharing the initial blocks.','figure-8');
+    assert.equal((await marks()).length,3);
+    await page.locator('#mobileRail').click();await marksTab.click();
+    const cite=async(value:string)=>{
+      await rail.locator('.annotation-entry').filter({hasText:value}).click();
+      await rail.getByRole('button',{name:'Cite in notebook'}).click();
+      await rail.locator('.notebook-passage-link').last().waitFor();
+    };
+    await cite(first);
+    await marksTab.click(); await cite('Figure 8:');
+    const links=rail.locator('.notebook-passage-link');
+    const firstLink=links.filter({hasText:'p. 6'}).first(), secondLink=links.filter({hasText:'p. 7'}).first();
+    await secondLink.waitFor();const firstHref=(await firstLink.getAttribute('href'))!, secondHref=(await secondLink.getAttribute('href'))!;
+    assert.match(new URL(firstHref).searchParams.get('anchor')!,/^point-/);
+    await firstLink.click();await page.waitForURL(url=>url.searchParams.get('page')==='6');await loaded(page);
+    await page.locator('#original .annotation-pin').first().waitFor();
+    await page.locator('#zoom').selectOption('1.5');
+    const savedPin=(await marks()).find(n=>n.kind==='pin'&&n.page===6)!;
+    const sheet=page.locator('#original .pdf-sheet');
+    const paperBounds=(await sheet.boundingBox())!, pinBounds=(await sheet.locator('.annotation-pin').first().boundingBox())!;
+    assert.ok(Math.abs(pinBounds.x+pinBounds.width/2-paperBounds.x-paperBounds.width*savedPin.point!.x)<2);
+    assert.ok(Math.abs(pinBounds.y+pinBounds.height/2-paperBounds.y-paperBounds.height*savedPin.point!.y)<2);
+    await secondLink.click();await page.waitForURL(url=>url.searchParams.get('page')==='7');await loaded(page);
+    await page.locator('#original .annotation-pin').first().waitFor();
+    await page.locator('#zoom').selectOption('1');
+    await marksTab.click();
+    const firstEntry=rail.locator('.annotation-entry').filter({hasText:first});
+    await firstEntry.click();await rail.getByRole('button',{name:'Remove',exact:true}).click();
+    await rail.getByRole('button',{name:'Remove mark',exact:true}).click();await firstEntry.waitFor({state:'detached'});
+    assert.equal((await marks()).length,2);
+    const revisit=await ctx.newPage();await revisit.goto(firstHref);await loaded(revisit);
+    assert.equal(new URL(revisit.url()).searchParams.get('anchor'),new URL(firstHref).searchParams.get('anchor'));
+    await revisit.locator('#original .annotation-location').waitFor();
+    await revisit.close();await page.locator('#toast').getByText('Undo',{exact:true}).click();await firstEntry.waitFor();
+    assert.equal((await marks()).length,3);
+    await page.locator('#parallel').click();assert.equal(await reader.getAttribute('data-notebook-pose'),'left');await capture('Bilingual notes');
+    await page.setViewportSize({width:390,height:844});await page.goto(secondHref);await loaded(page);
+    await page.locator('#original .annotation-pin').first().click();await rail.getByRole('textbox',{name:'Comment'}).waitFor();
+    assert.equal(await reader.getAttribute('data-notebook-pose'),'sheet');
+    await capture('Mobile page note');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1),true);
+    assert.deepEqual(errors,[]);console.log('Passed: mark-only indexing, color, float/dock, persistent PDF pins, citations across pages, deletion/undo, original-page links, bilingual and mobile sheet.');
+  } finally {await browser.close();}
+});
