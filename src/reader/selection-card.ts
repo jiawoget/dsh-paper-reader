@@ -1,9 +1,8 @@
-import type { SelectionHit, SourceRecord } from '../shared/types.js';
+import type { RegionIntent, SelectionHit, SourceRecord } from '../shared/types.js';
 import { quoteLocator, writeSelectionRange, writeTranslatedLocator } from '../shared/source-link.js';
 import { hasPassageGutter, positionPassageCard } from './floating-position.js';
 import type { ReaderPort } from './panels.js';
 import type { PdfPageView } from './pdf-view.js';
-import type { RegionIntent } from './pdf/region-picker.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import { discussionId } from './passage-links.js';
 import { correspondingText, pairSelection } from './pdf/alignment.js';

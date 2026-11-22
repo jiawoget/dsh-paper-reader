@@ -6,8 +6,8 @@ import path from 'node:path';
 import { chromium, type Locator, type Page } from 'playwright-core';
 import type { Operations } from '../../src/shared/types.js';
 import { openReader, withHost, type HostFixture } from './host.js';
+import { dragBox } from './selection-gestures.js';
 
-type Point = { x: number; y: number };
 type Bounds = readonly [left: number, top: number, right: number, bottom: number];
 interface Crop { aspect: number; pixels: number[] }
 interface ModelPart { type: string; text?: string; image_url?: { url?: string } }
@@ -84,25 +84,6 @@ async function box(locator: Locator) {
   return bounds;
 }
 
-async function drag(page: Page, start: Point, end: Point, touch: boolean): Promise<void> {
-  if (!touch) {
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(end.x, end.y, { steps: 12 });
-    await page.mouse.up();
-    return;
-  }
-  const input = await page.context().newCDPSession(page);
-  try {
-    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
-    for (let step = 1; step <= 12; step++) {
-      const x = start.x + (end.x - start.x) * (step / 12), y = start.y + (end.y - start.y) * (step / 12);
-      await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
-    }
-    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  } finally { await input.detach(); }
-}
-
 async function drawCrop(page: Page, area: Bounds, touch = false): Promise<Crop> {
   const trigger = page.locator('#captureRegion');
   if (touch) await trigger.tap();
@@ -117,7 +98,7 @@ async function drawCrop(page: Page, area: Bounds, touch = false): Promise<Crop> 
   const paper = await box(page.locator('#original canvas.pdf-raster'));
   const sourceArea = { x: (start.x - paper.x) / paper.width, y: (start.y - paper.y) / paper.height,
     width: width / paper.width, height: height / paper.height };
-  await drag(page, start, end, touch);
+  await dragBox(page, start, end, touch);
   await page.locator('.pdf-capture-actions').waitFor();
   const marker = await box(page.locator('#original .pdf-region-marker'));
   const endError = Math.max(Math.abs(marker.x - start.x), Math.abs(marker.y - start.y),

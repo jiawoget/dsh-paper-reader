@@ -1,6 +1,6 @@
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 import type { PDFDocumentProxy, TextContent } from 'pdfjs-dist/types/src/display/api.js';
-import type { PageView, ReaderBlock, ReadingSide, SelectionHit, SelectionSegment } from '../shared/types.js';
+import type { PageView, ReaderBlock, ReadingSide, RegionAction, SelectionHit, SelectionSegment } from '../shared/types.js';
 import type { SavedSelectionRange, TranslatedLocator } from '../shared/source-link.js';
 import type { PdfOutlineEntry, PdfOutlinePage } from '../shared/pdf-outline.js';
 import { clipToText, textRange } from './quote-range.js';
@@ -13,7 +13,7 @@ import { correspondingText, pairSelection } from './pdf/alignment.js';
 import type { PageLayout, Passage } from './pdf/model.js';
 import { cropFigure, element, fitText, makeSheet, newAnchor, place, translatedText, type Sheet } from './pdf/paper.js';
 import { PageRaster, cropPdfPage } from './pdf/raster.js';
-import { PdfRegionPicker, type RegionAction } from './pdf/region-picker.js';
+import { pdfRegionPicker } from './pdf/region-picker.js';
 import { readRegion, regionBox, figureAtRegion } from './pdf/region-geometry.js';
 import { PdfFocus, type TranslationFocus } from './pdf/focus.js';
 import { pageText } from './pdf/reading-text.js';
@@ -188,7 +188,7 @@ function mount(input: MountedPage): PdfPageView {
       segments: [{ id, ...pairSelection(passage, text, 'original', 0), ranges: [], offset: 0 }], trigger });
   }));
   options.sourceEl.append(reading.root);
-  const regions = new PdfRegionPicker(source, raster, nativeLayer.textDivs, options.page,
+  const regions = pdfRegionPicker(source, raster, nativeLayer.textDivs, options.page,
     { x: 0, y: 0, width: pageWidth, height: pageHeight }, signal, options.onRegion,
     area => figureAtRegion(area, layout.passages), options.canContinueRegion);
   function sizeSheets(): void {

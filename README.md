@@ -1,22 +1,23 @@
 # DSH Paper Reader
 
-[中文安装与交付说明](交付说明.md)
+[中文安装说明](交付说明.md)
 
 Read a paper in two synchronized columns, select a passage in either language and keep notes that reopen the original page and passage. Paper Reader runs inside the DeepSeek Harness Web sidebar. The companion Chrome and Edge extension provides lookup and article capture on ordinary web pages.
 
-## Run locally
+## Install in DSH
 
-Use Node.js 24.9 or newer and DeepSeek Harness Web. This project uses DSH `0.2.2-rc.5` for acceptance testing. From the project directory run the following commands. If you unpacked a release ZIP, the reader and extension are already built, so you can skip `npm run build`.
+1. In the DSH sidebar, open **Plugins → Add plugin**.
+2. Paste `github:jiawoget/dsh-paper-reader` and choose **Install**. If DSH lists install scripts for `onnxruntime-node`, `protobufjs`, or `sharp`, review the list and choose **Allow these scripts and retry** to continue.
+3. Choose **Enable now**. If DSH asks you to restart, restart it. Open **Paper Reader** in the sidebar to read the bundled bilingual paper.
+
+For DSH Web, you can also install from a terminal. Stop your running Web host, then run these commands. The three flags allow the install scripts for the dependencies listed above.
 
 ```sh
-npm ci
-npm run build
-npm start
+dsh plugin --profile web add github:jiawoget/dsh-paper-reader --allow-build=onnxruntime-node --allow-build=protobufjs --allow-build=sharp
+dsh web
 ```
 
-Open the browser session started by DSH and choose **Paper Reader** in the sidebar. For another Chrome profile, open the complete `dsh web:` address printed by the running host in that profile. DSH establishes a local session and redirects to its main window. The default port is `29812`. To choose another, run `dsh web --patch ./paper-reader.patch.yml --host 127.0.0.1 --port 29813` and enter that address in the extension's **Connection settings**.
-
-For offline English-to-Chinese translation of imported PDFs, run `npm run install:translation-model`. It downloads and verifies about 120 MB of model files. The bundled bilingual paper is available immediately. The installer and reader honor `PAPER_READER_MT_MODEL_DIR` for a custom location. [OPUS-MT model card](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) · [Pinned ONNX conversion](https://huggingface.co/Xenova/opus-mt-en-zh/tree/046f55aec303cdee3e0318604406d4df20f1e8ea)
+Tested with DeepSeek Harness Web `0.2.2-rc.5`. To uninstall, open **Plugins → Installed plugins → dsh-paper-reader → Uninstall**.
 
 ## Read and annotate
 
@@ -43,17 +44,22 @@ For offline English-to-Chinese translation of imported PDFs, run `npm run instal
 - To connect Obsidian, use **Connect Obsidian** to choose your local vault. Chrome and Obsidian edit the same `.md` file in its `Paper Reader` folder. **Saved to vault** confirms a write. Returning to the reader or choosing **Refresh notebook** reads external changes. When edits conflict, **Compare latest** lets you review the saved file alongside your draft. Existing reader notes accompany the paper when you connect the vault.
 - For desktop access, enable **Allow other applications on this computer to communicate with Zotero** in Zotero’s advanced settings. To switch to a Web library, choose **Library → Connection settings → Web library**. Public libraries need a library ID, and private libraries also need a key with read access. Use **Reference** to link a document or file it in a collection. [Zotero Local API](https://www.zotero.org/support/dev/web_api/v3/local_api) · [Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/basics)
 
-## Use the browser extension
+## Optional browser extension
 
-In Chrome or Edge, open the extensions page, enable developer mode and choose **Load unpacked**. Select `dist/extension` from this project. Keep a signed-in DSH tab open in the same browser profile.
+For lookup and capture on other websites, download and extract the [repository ZIP](https://github.com/jiawoget/dsh-paper-reader/archive/refs/heads/main.zip). In Chrome or Edge, open the extensions page, enable developer mode and choose **Load unpacked**. Select the extracted `dist/extension` folder. In the extension's **Connection settings**, enter the origin of your local DSH Web tab, including its port. Keep that DSH tab open in the same browser profile.
 
 Open the extension on an article and choose **Enable selection cards**. Select a word or sentence to translate, ask a follow-up or save a note. **Open in Paper Reader** captures the page you are viewing, including pages that need a browser login.
 
-## Project and verification
+## Optional offline PDF translation
+
+For English-to-Chinese translation on this device, run `dsh plugin --profile web exec paper-reader-install-model` after installing the plugin in the Web profile. This downloads and verifies about 120 MB. The bundled bilingual paper opens immediately. [OPUS-MT model card](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh) · [Pinned model files](https://huggingface.co/Xenova/opus-mt-en-zh/tree/046f55aec303cdee3e0318604406d4df20f1e8ea)
+
+## Development
 
 Application logic, build scripts and tests are authored in strict TypeScript. The `dist` directory contains the compiled DSH and browser entry points. Source data and UI assets live in `public` and `extension`.
 
 ```sh
+npm ci
 npm run build
 npm test
 npm run test:e2e

@@ -3,10 +3,12 @@ import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { annotationSchema, listAnnotations, saveAnnotation, deleteAnnotation } from './annotations.js';
+import { readArticleLocation, readArticleRegion } from '../shared/article-region.js';
 import { bookPlace, type BookPlace } from '../shared/book-place.js';
 import type { PdfOutlineEntry } from '../shared/pdf-outline.js';
 import type { ChatExchange } from '../shared/types.js';
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
+import { readRegionImage } from './region-image.js';
 import {
   address, initialSettings, isObject, mergeSettings, pageNumber, ServiceError, single, stringValue,
   type Entries, type Entry, type EntryKind, type Input, type PrivateSettings
@@ -41,6 +43,13 @@ function readColumn(row: Row, column: string): string {
   const value = row[column];
   if (typeof value !== 'string') throw new ServiceError(500, 'A stored reading record contains an invalid field.');
   return value;
+}
+function articleCaptureScope(input: Input): { docId: string; page: number } {
+  const docId = input.docId;
+  if (typeof docId !== 'string' || !/^(?:book|web)-[0-9a-f]{64}$/u.test(docId)) {
+    throw new ServiceError(400, 'The screenshot needs a book or web article ID.');
+  }
+  return { docId, page: pageNumber(input.page) };
 }
 function decodeEntry(row: Row): Entry {
   return {
@@ -257,8 +266,8 @@ export class ReaderStore {
       const version = db.prepare('PRAGMA user_version').get()?.user_version;
       // The added tables are independent of the v2 schema. Older open readers can keep using their notes and history.
       const hasExtensions = version === 2 && db.prepare(
-        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines')"
-      ).get()?.n === 5;
+        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures')"
+      ).get()?.n === 6;
       if (version === 0 || version === 1 || version === 2 && !hasExtensions) {
         db.exec('BEGIN IMMEDIATE');
         if (version === 0) for (const sql of setupSql) db.exec(sql);
@@ -270,6 +279,10 @@ export class ReaderStore {
         db.exec(annotationSchema);
         db.exec('CREATE TABLE IF NOT EXISTS book_positions(docId TEXT PRIMARY KEY, updated INTEGER NOT NULL, place TEXT NOT NULL) STRICT');
         db.exec('CREATE TABLE IF NOT EXISTS pdf_outlines(docId TEXT PRIMARY KEY, contents TEXT NOT NULL) STRICT');
+        db.exec(`CREATE TABLE IF NOT EXISTS article_captures(
+          docId TEXT NOT NULL, page INTEGER NOT NULL, anchor TEXT NOT NULL,
+          image BLOB NOT NULL, regionText TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY(docId,page,anchor)
+        ) STRICT`);
         db.exec('PRAGMA user_version=2');
         db.exec('COMMIT');
       } else if (version !== 2) throw new ServiceError(500, 'This reader database version is unsupported.');
@@ -287,6 +300,34 @@ export class ReaderStore {
   }
   withNotebook<T>(run: (records: NotebookRecords) => T): T {
     return this.#transaction(true, db => run(new NotebookRecords(db)));
+  }
+  async saveArticleCapture(input: Input, attachments?: Input): Promise<{ anchor: string }> {
+    const { docId, page } = articleCaptureScope(input);
+    const { location } = input;
+    if (typeof location !== 'string' || !readArticleLocation(location)) throw new ServiceError(400, 'Invalid article screenshot location.');
+    if (typeof input.regionText !== 'string') throw new ServiceError(400, 'Include the selected text or an empty string for an image-only screenshot.');
+    const regionText = stringValue(input.regionText, 'text inside selected area', 100_000, false, true);
+    const label = stringValue(input.label, 'screenshot label', 512, true, true);
+    const { bytes } = await readRegionImage(input.image, attachments);
+    const hash = createHash('sha256').update(JSON.stringify([docId, page, location, regionText, label])).update(bytes).digest('hex');
+    const anchor = 'article-' + location + '-' + hash.slice(0, 32);
+    return this.#transaction(true, db => {
+      db.prepare(`INSERT INTO article_captures(docId,page,anchor,image,regionText,label) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(docId,page,anchor) DO NOTHING`).run(docId, page, anchor, bytes, regionText, label);
+      return { anchor };
+    });
+  }
+  articleCapture(input: Input): { image: string; regionText: string; label: string } {
+    const { docId, page } = articleCaptureScope(input);
+    const { anchor } = input;
+    if (typeof anchor !== 'string' || !readArticleRegion(anchor)) throw new ServiceError(400, 'Invalid article screenshot anchor.');
+    return this.#transaction(false, db => {
+      const row = db.prepare('SELECT image,regionText,label FROM article_captures WHERE docId=? AND page=? AND anchor=?').get(docId, page, anchor);
+      if (!row) throw new ServiceError(404, 'This screenshot was not found in the selected article or book section.');
+      if (!(row.image instanceof Uint8Array)) throw new ServiceError(500, 'The saved screenshot is damaged.');
+      return { image: 'data:image/png;base64,' + Buffer.from(row.image).toString('base64'),
+        regionText: readColumn(row, 'regionText'), label: readColumn(row, 'label') };
+    });
   }
   pdfOutline(docId: string, completed?: PdfOutlineEntry[]): PdfOutlineEntry[] {
     return this.#transaction(completed !== undefined, db => {

@@ -6,7 +6,7 @@ type Handler = (request: IncomingMessage, url: URL, body: unknown) => Reply;
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
-async function start(handle: Handler) {
+export async function startJsonFixture(handle: Handler) {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
       const input: Buffer[] = [];
@@ -30,7 +30,7 @@ export async function modelFixture(answer = 'The request receives free physical 
   const key = randomUUID();
   const model = 'local-reading-fixture';
   let completed = 0;
-  const server = await start((req, url, body) => {
+  const server = await startJsonFixture((req, url, body) => {
     if (url.pathname !== '/v1/chat/completions' || req.method !== 'POST') return { status: 404 };
     if (req.headers.authorization !== 'Bearer ' + key) return { status: 403 };
     if (!record(body) || body.model !== model || !Array.isArray(body.messages) || !JSON.stringify(body.messages).includes(expectedContext)) return { status: 400 };
@@ -53,7 +53,7 @@ export async function zoteroFixture() {
   let updates = 0;
   let searches = 0;
   let creates = 0;
-  const server = await start((req, url, body) => {
+  const server = await startJsonFixture((req, url, body) => {
     if (req.headers['zotero-api-key'] !== credential || req.headers['zotero-api-version'] !== '3') return { status: 403 };
     const path = '/groups/' + libraryId;
     const item = () => ({ key: itemKey, version, links: { alternate: { href: alternate } }, data: {

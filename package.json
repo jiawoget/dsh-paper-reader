@@ -1,9 +1,18 @@
 {
   "name": "dsh-paper-reader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Bilingual paper reading, contextual lookup, and source-linked notes for DeepSeek Harness",
+  "files": [
+    "cordis.patch.yml",
+    "dist/",
+    "交付说明.md",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "bin": {
+    "paper-reader-install-model": "./dist/server/install-translation-model.js"
+  },
   "engines": {
     "node": ">=24.9"
   },
@@ -13,6 +22,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
@@ -42,6 +54,7 @@
     "test:discussion-excerpt": "tsx tests/e2e/discussion-excerpt.ts",
     "test:notebook-scenarios": "tsx tests/e2e/notebook-scenarios.ts",
     "test:region-discussion": "tsx tests/e2e/region-discussion.ts",
+    "test:article-capture": "tsx tests/e2e/article-capture.ts",
     "test:discussion-continuity": "tsx tests/e2e/discussion-continuity.ts",
     "test:reading-a-question": "tsx tests/e2e/reading-a-question.ts",
     "test:discussion-recovery": "tsx tests/e2e/discussion-continuity.ts archive --same-reply-probe && tsx tests/e2e/discussion-continuity.ts return --return-location-probe --column",
@@ -56,7 +69,7 @@
     "test:sidebar-model": "tsx tests/e2e/sidebar-contents-live-model.ts",
     "test:extension": "tsx tests/e2e/extension-flow.ts",
     "test:integrations": "tsx tests/e2e/integrations.ts",
-    "test:e2e": "npm run test:extension && npm run test:extension-journeys && npm run test:browser && npm run test:integrations && npm run test:reader-selection && npm run test:passage-links && npm run test:reading-layout && npm run test:reading-modes && npm run test:annotations && npm run test:selection-note-draft && npm run test:selection-note-discussion && npm run test:discussion-excerpt && npm run test:notebook-scenarios && npm run test:region-discussion && npm run test:discussion-continuity && npm run test:discussion-recovery && npm run test:reading-a-question && npm run test:reader-journey-edges && npm run test:paper-chat && npm run test:zotero-desktop && npm run test:web-zotero && npm run test:book-reading && npm run test:sidebar-contents",
+    "test:e2e": "npm run test:extension && npm run test:extension-journeys && npm run test:browser && npm run test:integrations && npm run test:reader-selection && npm run test:passage-links && npm run test:reading-layout && npm run test:reading-modes && npm run test:annotations && npm run test:selection-note-draft && npm run test:selection-note-discussion && npm run test:discussion-excerpt && npm run test:notebook-scenarios && npm run test:region-discussion && npm run test:article-capture && npm run test:discussion-continuity && npm run test:discussion-recovery && npm run test:reading-a-question && npm run test:reader-journey-edges && npm run test:paper-chat && npm run test:zotero-desktop && npm run test:web-zotero && npm run test:book-reading && npm run test:sidebar-contents",
     "start": "dsh web --patch ./paper-reader.patch.yml --host 127.0.0.1 --port 29812"
   },
   "dependencies": {

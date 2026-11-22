@@ -1,7 +1,8 @@
 import type { ChatSource } from '../shared/types.js';
 import { goToNoteChapter, type NotebookInsertion } from './notebook.js';
 import { paperNotebook, type ReaderPort } from './panels.js';
-import { readRegion, screenshotFigureLabel } from './pdf/region-geometry.js';
+import { screenshotFigureLabel } from './pdf/region-geometry.js';
+import { isScreenshotAnchor } from './selection-context.js';
 import { markdownPassageLabel } from './passage-links.js';
 import { button, el, message, readerLabel as label } from './ui.js';
 
@@ -82,7 +83,7 @@ export class AnswerNotebookAction {
         if (!editor) throw Error(label('Open the notebook and try again.', '请打开本篇笔记后重试。'));
         let citation = label('Paper discussion', '全文问答');
         if ('selected' in this.source) {
-          const caption = readRegion(this.source.anchor)
+          const caption = isScreenshotAnchor(this.source.anchor)
             ? screenshotFigureLabel(this.source.label) ?? label('Screenshot', '截图选区') : this.source.selected;
           const place = this.app.doc.book?.sections[this.source.page - 1]?.title ??
             (this.app.doc.kind === 'web' ? this.source.label || label('Article', '文章') : this.source.page);

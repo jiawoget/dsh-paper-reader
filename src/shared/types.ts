@@ -47,7 +47,7 @@ export interface SelectionHit {
   translatedOffset?: number;
   segments?: SelectionSegment[];
   image?: string;
-  /** Text inside a reader-drawn PDF screenshot. An empty string denotes an image-only crop. */
+  /** Text inside a reader-drawn screenshot. An empty string denotes an image-only crop. */
   regionText?: string;
   /** A single pointer click that normally previews a figure, term or translated paragraph. */
   previewClick?: boolean;
@@ -65,6 +65,8 @@ export interface SelectionSegment {
   ranges: Range[];
 }
 export interface ReaderBlock { id: string; text: string; label?: string; translation?: string }
+export type RegionIntent = 'ask' | 'explain' | 'note' | 'continue' | 'reopen';
+export type RegionAction = (hit: SelectionHit, intent: RegionIntent) => void | Promise<void>;
 export interface PageView {
   blocks: ReaderBlock[];
   select(hit?: SelectionHit): void;
@@ -72,6 +74,9 @@ export interface PageView {
   locate(id: string, quote?: string, target?: TranslatedLocator, range?: SavedSelectionRange): boolean;
   figureImage?(id: string): string | null;
   sourceRect?(id: string): DOMRect | null;
+  beginRegion?(attach?: boolean): void;
+  cancelRegion?(): void;
+  reopenRegion?(id: string, receive?: RegionAction): Promise<void>;
   setTranslations?(map: Record<string, string>): void;
   dispose?(): void;
 }
@@ -130,6 +135,8 @@ export interface Operations {
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
+  'article.capture.save': [{ docId: string; page: number; location: string; image: string; regionText: string; label: string }, { anchor: string }];
+  'article.capture.get': [{ docId: string; page: number; anchor: string }, { image: string; regionText: string; label: string }];
   'translation.get': [{ docId: string; page: number }, { translations: Record<string,string> }];
   'translation.page': [{ docId: string; page: number; blocks: ReaderBlock[] }, { translations: Record<string,string> }];
   'ai': [{ mode: 'translate' | 'explain' | 'followup'; text: string; context: string; image?: string; regionText?: string;

@@ -11,6 +11,11 @@ export interface RegionImage { url: string; bytes: Buffer }
 interface PreviousMaterial { label: string; text: string; image?: RegionImage; readerNotes?: string[] }
 export class UnsupportedImageInput extends Error {}
 
+export function hostAttachments(ctx: unknown): Input | undefined {
+  const store = isObject(ctx) ? ctx.attachments : undefined;
+  return isObject(store) ? store : undefined;
+}
+
 export async function readRegionImage(value: unknown, attachments?: Input): Promise<RegionImage> {
   const invalid = () => new ServiceError(400, 'The selected area must be a valid PNG image. Select the area again.');
   const tooLarge = () => new ServiceError(413, 'The screenshot is too large. Select a smaller area.');

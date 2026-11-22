@@ -1,4 +1,5 @@
-import type { DocumentInfo, NotebookSnapshot, OpenDocument, PageView, ReaderState, SelectionHit, SourceRecord } from '../shared/types.js';
+import type { DocumentInfo, NotebookSnapshot, OpenDocument, PageView, ReaderState, RegionIntent, SelectionHit, SourceRecord } from '../shared/types.js';
+import { readArticleRegion } from '../shared/article-region.js';
 import { savedBookPlace, trackBookPlace } from './book-position.js';
 import { showSectionControls } from './book-navigation.js';
 import { outlineAnchor, outlineLocation, ReaderContents, type ContentsDestination } from './contents.js';
@@ -17,7 +18,7 @@ import type { ChatSource } from '../shared/types.js';
 import { ReadingDesk, type ReadingMode } from './reading-desk.js';
 import type { TranslationFocus } from './pdf/focus.js';
 import { readRegion } from './pdf/region-geometry.js';
-import type { RegionIntent } from './pdf/region-picker.js';
+import { isScreenshotAnchor } from './selection-context.js';
 import { discussionId } from './passage-links.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, toast, type Glyph } from './ui.js';
@@ -28,6 +29,11 @@ interface ReadingPosition {
 }
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
 type SidebarTab = typeof sidebarTabs[keyof typeof sidebarTabs];
+
+function needsTranslation(anchor: string, target?: TranslatedLocator): boolean {
+  const side = readArticleRegion(anchor)?.side;
+  return Boolean(target) || side === 'translation' || side === 'both';
+}
 
 class Reader implements ReaderPort {
   doc:DocumentInfo={id:'pagedattention',title:'PagedAttention.pdf',kind:'pdf',defaultPage:6};
@@ -176,11 +182,11 @@ class Reader implements ReaderPort {
       history.replaceState(null,'',local);
       return;
     }
-    const anchor = query.get('anchor')!, quote = query.get('quote') ?? '';
+    const anchor = query.get('anchor') ?? '', quote = query.get('quote') ?? '';
     const target = readTranslatedLocator(url), range = readSelectionRange(url);
     if (this.view && !this.navigating && this.doc.id === doc && this.page === page && this.card.inspectSource()) {
       this.desk.showNotebook(false);
-      if (target) this.setReadingMode('bilingual');
+      if (needsTranslation(anchor, target)) this.setReadingMode('bilingual');
       else if (this.desk.isNarrow) this.setReadingMode('source');
       if (readRegion(anchor)) { this.readingText=false; this.updatePageFormat(); }
       this.locateAnchor(this.view, anchor, quote, target, range);
@@ -210,9 +216,9 @@ class Reader implements ReaderPort {
     const initial = this.readingPosition();
     await this.navigate(source.docId,source.page,source.anchor,source.original,target,range);
     if(this.doc.id!==source.docId || this.page!==source.page || !this.view)return;
-    if(readRegion(source.anchor)){
-      if(!this.pdfView)throw Error(label('Open the original PDF to continue this discussion.', '请打开原 PDF 继续讨论这张截图。'));
-      await this.pdfView.reopenRegion(source.anchor, hit => this.card.openRegion(hit,'ask',{source,thread},replyId));
+    if(isScreenshotAnchor(source.anchor)){
+      if(!this.view.reopenRegion)throw Error(label('Open the original document to continue this discussion.', '请打开原文档继续讨论这张截图。'));
+      await this.view.reopenRegion(source.anchor, hit => this.card.openRegion(hit,'ask',{source,thread},replyId));
       if (this.doc.id===source.docId && this.page===source.page) this.beforeCapture=initial;
       return;
     }
@@ -304,9 +310,10 @@ class Reader implements ReaderPort {
       this.readingText=false;
       this.updatePageFormat();
     }
-    const revealTranslation=Boolean(target && !this.parallel);
+    const translatedSource=needsTranslation(anchor,target);
+    const revealTranslation=translatedSource && !this.parallel;
     if(revealTranslation)this.setReadingMode('bilingual');
-    else if(readingLink && !target && this.desk.isNarrow)this.setReadingMode('source');
+    else if(readingLink && !translatedSource && this.desk.isNarrow)this.setReadingMode('source');
     if(!revealTranslation && this.view && !this.navigating && id===this.loadedId && (page??this.page)===this.page){
       if(anchor)this.locateAnchor(this.view,anchor,quote,target,range);
       else if(this.doc.book && page && options?.opened)byId('paperScroll').scrollTop=0;
@@ -431,7 +438,8 @@ class Reader implements ReaderPort {
       onAmbiguousQuote:()=>toast(label('This quote occurs more than once. Showing its paragraph.', '这段引文在段内出现多次，已定位到段落。')),
       canContinueRegion:(anchor:string)=>{
         const ref=this.card.currentQuestion;
-        return Boolean(ref && (ref.source.page!==page || ref.source.anchor!==anchor));
+        return Boolean(ref && (ref.source.page!==page ||
+          (ref.source.anchor!==anchor && !ref.source.anchor.startsWith('article-'+anchor+'-'))));
       },
       onRegion:async (hit:SelectionHit,intent:RegionIntent)=>{
         if(version!==this.epoch)return;
@@ -550,7 +558,7 @@ class Reader implements ReaderPort {
     byId('readText').hidden=!available || this.capturing;
     pin.hidden=!pinAvailable || this.capturing;
     const capture=byId<HTMLButtonElement>('captureRegion');
-    capture.hidden=!view;
+    capture.hidden=!this.view?.beginRegion;
     capture.setAttribute('aria-pressed',String(this.capturing));
     const captureLabel=this.capturing ? label('Cancel screenshot','取消截图') : label('Ask with a screenshot','截图问 AI');
     capture.ariaLabel=capture.title=captureLabel;
@@ -560,7 +568,7 @@ class Reader implements ReaderPort {
       reading || this.desk.visibleLanguage==='translation' ? label('Pin on PDF','在 PDF 原页标注') : label('Add page note','添加页边笔记');
     pin.setAttribute('aria-pressed',String(this.placingPin));
     byId('readText').textContent=reading?label('View PDF page','查看 PDF 原页'):label('Read text','读正文');
-    byId('pageTextHint').textContent=this.capturing?label('Drag across the part you want to ask about.','在原页上拖框，选中想问的部分。'):this.placingPin?label('Click the PDF, or use arrow keys and Enter.','点击原页放置，或用方向键定位后按回车。'):reading?label('Figures and equations are in the PDF.','图表和公式可在 PDF 原页查看。'):this.parallel?'':label('Select a passage to translate or highlight.','划选原文可查看译文或高亮。');
+    byId('pageTextHint').textContent=this.capturing?label('Drag over the area, then choose Explain or Ask.','拖框选中图或文字，再点「解释」或「提问」。'):this.placingPin?label('Click the PDF, or use arrow keys and Enter.','点击原页放置，或用方向键定位后按回车。'):reading?label('Figures and equations are in the PDF.','图表和公式可在 PDF 原页查看。'):this.parallel?'':label('Select a passage to translate or highlight.','划选原文可查看译文或高亮。');
     byId('zoomControl').hidden=reading;
     view?.setTextView(reading);
   }
@@ -589,20 +597,26 @@ class Reader implements ReaderPort {
   }
   addDiscussionScreenshot():void { this.beginCapture(true); }
   async discussionScreenshot(source:ChatSource):Promise<string> {
-    if(this.doc.id!==source.docId || !this.pdf) throw Error(label('Reopen this paper to use its screenshot.', '请重新打开这篇论文以使用原图。'));
-    return this.pdf.cropRegion(source.page,source.anchor);
+    if(this.doc.id===source.docId) {
+      if(readArticleRegion(source.anchor)) {
+        const { image }=await api('article.capture.get',{docId:source.docId,page:source.page,anchor:source.anchor});
+        return image;
+      }
+      if(this.pdf)return this.pdf.cropRegion(source.page,source.anchor);
+    }
+    throw Error(label('Reopen this document to use its screenshot.', '请重新打开这份文档以使用原图。'));
   }
   private beginCapture(attach = false):void {
     if(this.capturing){this.cancelCapture(true);return;}
-    const view=this.pdfView;
-    if(!view)return;
+    const view=this.view;
+    if(!view?.beginRegion)return;
     const initial=this.readingPosition();
     const returnTo=this.beforeCapture;
     this.cancelPin();this.marks.closePageEditor();this.desk.dismissDrawer();
     const suspended=this.card.discussionVisible && this.card.inspectSource();
     if(!suspended)this.card.close();
     this.captureOrigin={suspended, returnTo};
-    if(this.desk.visibleLanguage==='translation')this.setReadingMode('source');
+    if(this.pdfView && this.desk.visibleLanguage==='translation')this.setReadingMode('source');
     this.beforeCapture=initial;
     this.readingText=false;this.capturing=true;
     this.updatePageFormat();view.beginRegion(attach);
@@ -611,7 +625,7 @@ class Reader implements ReaderPort {
     if(!this.capturing)return;
     const origin=this.captureOrigin;
     this.captureOrigin=undefined;
-    this.capturing=false;this.pdfView?.cancelRegion();
+    this.capturing=false;this.view?.cancelRegion?.();
     if(restore)this.regionDiscussionClosed(true);
     else this.beforeCapture=undefined;
     this.updatePageFormat();

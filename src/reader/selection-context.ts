@@ -1,4 +1,5 @@
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
+import { readArticleRegion } from '../shared/article-region.js';
 import type { ChatSource, JournalNote, SelectionHit, SourceRecord } from '../shared/types.js';
 import { readRegion } from './pdf/region-geometry.js';
 
@@ -18,9 +19,13 @@ export function chatSource(item: SelectionContext): ChatSource {
   return { ...item.source, selected: item.selection, original: item.original, context: item.context, side: item.hit.side };
 }
 
+export function isScreenshotAnchor(anchor: string): boolean {
+  return Boolean(readRegion(anchor) || readArticleRegion(anchor));
+}
+
 export function materialKey(source: ChatSource): string {
   const location = [source.docId, source.page, source.anchor];
-  if (readRegion(source.anchor)) return JSON.stringify(location);
+  if (isScreenshotAnchor(source.anchor)) return JSON.stringify(location);
   const url = new URL(source.sourceUrl);
   return JSON.stringify([...location, source.original, readSelectionRange(url), readTranslatedLocator(url)]);
 }
@@ -76,7 +81,7 @@ export function notesForRecordedSource(notes: JournalNote[], source: ChatSource)
   const target = url && readTranslatedLocator(url);
   return notesForSelection(notes, { source, original: source.original, selection: source.selected, hit: {
     side: source.side, context: source.context,
-    regionText: readRegion(source.anchor) ? source.context : undefined,
+    regionText: isScreenshotAnchor(source.anchor) ? source.context : undefined,
     sourceOffset: source.side === 'source' ? range?.start : undefined,
     translatedOffset: target?.offset ?? (source.side === 'translation' ? range?.start : undefined)
   } });

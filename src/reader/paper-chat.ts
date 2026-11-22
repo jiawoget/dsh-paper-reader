@@ -1,8 +1,8 @@
 import type { ChatExchange, ChatRequest, ChatSource, DocumentInfo, WordRecord } from '../shared/types.js';
 import { answerMarkdown, selectedAnswer } from './answer-markdown.js';
 import { AnswerNotebookAction } from './answer-notebook.js';
-import { readRegion, screenshotFigureLabel } from './pdf/region-geometry.js';
-import { materialKey } from './selection-context.js';
+import { screenshotFigureLabel } from './pdf/region-geometry.js';
+import { isScreenshotAnchor, materialKey } from './selection-context.js';
 import { paperQuestions, type DiscussionRef } from './discussion-drafts.js';
 import { needsEnglishSearch, paperEvidence, readPaper } from './paper-evidence.js';
 import { settingsDialog, sourceChip, type ReaderPort } from './panels.js';
@@ -276,7 +276,7 @@ export class PaperChat {
       if (exchange.thread !== 'paper' && exchange.source) {
         const source = exchange.source;
         const caption = materials.get(exchange.thread)!.size > 1 ? label('Continue this discussion', '继续这次讨论') :
-          readRegion(exchange.source.anchor) ? label('Continue with this screenshot', '继续问这张截图') :
+          isScreenshotAnchor(exchange.source.anchor) ? label('Continue with this screenshot', '继续问这张截图') :
           label('Continue with this passage', '继续问这段原文');
         actions.append(button(caption, () => this.resume({source, thread: exchange.thread}), 'text-btn resume-discussion'));
       }
@@ -294,7 +294,7 @@ export class PaperChat {
     header.append(el('span', 'paper-chat-speaker', 'You'));
     if (turn.source) {
       const source = turn.source;
-      const kind = readRegion(source.anchor) ? screenshotFigureLabel(source.label) ?? label('Screenshot','截图') : passageThread ? label('Selection chat','选段讨论') : label('Selected passage','所选原文');
+      const kind = isScreenshotAnchor(source.anchor) ? screenshotFigureLabel(source.label) ?? label('Screenshot','截图') : passageThread ? label('Selection chat','选段讨论') : label('Selected passage','所选原文');
       const sourceUrl = new URL(source.sourceUrl);
       if (passageThread) sourceUrl.searchParams.set('reply',turn.requestId);
       const chip = sourceChip(this.app, { ...source, sourceUrl:sourceUrl.href, label: kind,

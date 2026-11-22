@@ -65,7 +65,7 @@ async function execute(blocks: readonly Block[], directory: string): Promise<Rec
 }
 
 export async function translateLocally(blocks: readonly Block[], directory = localModelDirectory()): Promise<Record<string,string>> {
-  if (!localTranslationAvailable(directory)) throw new ServiceError(503, 'The local English-to-Chinese model is unavailable. Install it with npm run install:translation-model.');
+  if (!localTranslationAvailable(directory)) throw new ServiceError(503, 'The local English-to-Chinese model is unavailable. See the Paper Reader installation guide for the optional model download.');
   const job = lastJob.then(() => execute(blocks, directory));
   lastJob = job.then(() => undefined, () => undefined);
   return job;

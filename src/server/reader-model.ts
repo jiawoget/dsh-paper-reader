@@ -1,5 +1,5 @@
 import { readJson, send, type Fetcher } from './provider-http.js';
-import { checkRegionAnswer, imageInputRejected, readPreviousMaterial, readReaderNotes, readRegionImage, responseRejectsImage, UnsupportedImageInput, type RegionImage } from './region-image.js';
+import { checkRegionAnswer, hostAttachments, imageInputRejected, readPreviousMaterial, readReaderNotes, readRegionImage, responseRejectsImage, UnsupportedImageInput, type RegionImage } from './region-image.js';
 import type { ChatRequest, PaperEvidence } from '../shared/types.js';
 import { localTranslationAvailable, translateLocally } from './local-translation.js';
 import { translationQualityError, targetsSimplifiedChinese } from '../shared/translation-quality.js';
@@ -60,10 +60,6 @@ export class ReaderModel {
   readonly #ctx: unknown;
   readonly #fetch: Fetcher;
   constructor(ctx: unknown, fetcher: Fetcher) { this.#ctx = ctx; this.#fetch = fetcher; }
-  get #attachments(): Input | undefined {
-    const store = isObject(this.#ctx) ? this.#ctx.attachments : undefined;
-    return isObject(store) ? store : undefined;
-  }
   async #route(settings: PrivateSettings): Promise<Route> {
     if (settings.apiKey || onLoopback(new URL(settings.baseUrl))) return { kind: 'api' };
     if (settings.baseUrl === initialSettings.baseUrl && isObject(this.#ctx)) {
@@ -115,7 +111,7 @@ export class ReaderModel {
     let finish: Input | undefined;
     try {
       if (images.length) {
-        const store = this.#attachments;
+        const store = hostAttachments(this.#ctx);
         if (route.acceptsImages === false || typeof store?.saveImage !== 'function') throw new UnsupportedImageInput();
         if (route.host.prepareCall) {
           // Bind capability and dispatch to the same adapter, before it can substitute a text placeholder.
@@ -175,14 +171,15 @@ export class ReaderModel {
     const mode = input.mode;
     if (mode !== 'translate' && mode !== 'explain' && mode !== 'followup') throw new ServiceError(400, 'Choose translate, explain or followup.');
     const target = single(input.targetLanguage ?? 'Simplified Chinese', 'target language', 64, true);
-    const image = input.image === undefined ? undefined : await readRegionImage(input.image, this.#attachments);
+    const attachments = hostAttachments(this.#ctx);
+    const image = input.image === undefined ? undefined : await readRegionImage(input.image, attachments);
     if (!image && input.regionText !== undefined) throw new ServiceError(400, 'The screenshot is missing. Select the area again.');
     const regionText = stringValue(input.regionText, 'text inside selected area', 100_000);
     const data: Input = image ? { regionText } :
       { text: stringValue(input.text, 'selected passage', 100_000, true), context: stringValue(input.context, 'context', 120_000) };
     const readerNotes = readReaderNotes(input.readerNotes);
     if (readerNotes) data.readerNotes = readerNotes;
-    const previous = await readPreviousMaterial(input.previousMaterial, image, this.#attachments);
+    const previous = await readPreviousMaterial(input.previousMaterial, image, attachments);
     if (previous.length) {
       data.previousMaterial = previous.map(({ label, text, readerNotes }) => ({ label, text, readerNotes }));
       if (isObject(input.record) && isObject(input.record.source) && input.record.source.label) {
@@ -219,7 +216,7 @@ export class ReaderModel {
     try {
       const visual = system + (previous.length
         ? ' Each imageNumber identifies its attached screenshot, starting at 1. Read each image with the text for that selection. Use the supplied passages and pixels to answer the question.'
-        : ' Use the attached crop of the selected PDF area as primary evidence. regionText, when present, is text extracted from inside that area.');
+        : ' Use the attached crop of the selected area as primary evidence. regionText, when present, is text extracted from inside that area.');
       const visualData = previous.length ? { ...data, previousMaterial: visualMaterial, ...(image && { imageNumber: images.length }) } : data;
       const answer = await this.#complete(settings, visual, visualData, { route, images });
       return { text: checkRegionAnswer(answer, images) };

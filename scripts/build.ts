@@ -20,7 +20,7 @@ await Promise.all([
   })
 ]);
 await Promise.all([
-  build({ ...defaults, entryPoints: ['src/server/index.ts', 'src/server/local-translation-worker.ts'], outdir: 'dist/server', platform: 'node', format: 'esm', packages: 'external', target: 'node24' }),
+  build({ ...defaults, entryPoints: ['src/server/index.ts', 'src/server/local-translation-worker.ts', 'scripts/install-translation-model.ts'], entryNames: '[name]', outdir: 'dist/server', platform: 'node', format: 'esm', packages: 'external', target: 'node24' }),
   build({ ...defaults, entryPoints: ['src/client/dsh.ts'], outfile: 'dist/client.js', platform: 'browser', format: 'iife' }),
   build({ ...defaults, entryPoints: ['src/reader/app.ts'], outfile: 'dist/web/app.js', platform: 'browser', format: 'esm',
     plugins: [{ name: 'local-pdfjs', setup(build) { build.onResolve({ filter: /^pdfjs-dist(?:\/build\/pdf\.mjs)?$/ }, () => ({ path: '/api/paper-reader/vendor/pdf.mjs', external: true })); } }] }),

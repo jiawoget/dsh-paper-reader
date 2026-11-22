@@ -5,8 +5,8 @@ import { AnswerNotebookAction } from './answer-notebook.js';
 import { readQuestions, saveQuestions, type AnswerQuote, type MessageDraft } from './discussion-drafts.js';
 import { compactReader } from './reading-desk.js';
 import { settingsDialog, type ReaderPort } from './panels.js';
-import { chatSource, materialKey, notesForRecordedSource, notesForSelection, previousDiscussionSources, readerNoteTexts, selectionKey, type SelectionContext } from './selection-context.js';
-import { readRegion, screenshotFigureLabel } from './pdf/region-geometry.js';
+import { chatSource, isScreenshotAnchor, materialKey, notesForRecordedSource, notesForSelection, previousDiscussionSources, readerNoteTexts, selectionKey, type SelectionContext } from './selection-context.js';
+import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import type { SelectionNotes } from './selection-notes.js';
 import { activateAfterTouchDrag, api, button, byId, el, icon, message, readerLabel as label, toast } from './ui.js';
@@ -117,7 +117,7 @@ export class SelectionChat {
       const preview = button('', () => this.app.openNotebookSource(new URL(source.sourceUrl)), 'discussion-region-source');
       const image = el('img');
       image.src = hit.image;
-      image.alt = label('Selected PDF area', '框选的 PDF 区域');
+      image.alt = this.app.doc.kind === 'pdf' ? label('Selected PDF area', '框选的 PDF 区域') : label('Selected article area', '框选的阅读区域');
       const caption = el('span');
       caption.append(el('span', '', source.label), el('span', 'discussion-region-link', label('View in paper', '查看原处')));
       preview.append(image, caption);
@@ -335,13 +335,13 @@ export class SelectionChat {
 
   private sourceLink(source: ChatSource): HTMLButtonElement {
     let caption = summary(source.selected);
-    if (readRegion(source.anchor)) {
+    if (isScreenshotAnchor(source.anchor)) {
       const ordered = new Map<string, ChatSource>();
       for (const turn of this.state.turns) if (turn.source) ordered.set(materialKey(turn.source), turn.source);
       const current = chatSource(this.item);
       ordered.set(materialKey(current), current);
       const name = screenshotFigureLabel(source.label);
-      const matching = [...ordered.values()].filter(entry => readRegion(entry.anchor) && screenshotFigureLabel(entry.label) === name);
+      const matching = [...ordered.values()].filter(entry => isScreenshotAnchor(entry.anchor) && screenshotFigureLabel(entry.label) === name);
       const index = matching.findIndex(entry => materialKey(entry) === materialKey(source)) + 1;
       caption = name && matching.length === 1 ? name : (name ? name + ' · ' : '') + label('Crop ', '选区 ') + index;
     }
@@ -376,7 +376,8 @@ export class SelectionChat {
     if (draft.quote) this.form.append(el('blockquote', 'answer-quote', draft.quote.text));
     const current = chatSource(this.item), previous = this.earlierSources(current);
     const following = this.state.turns.length > 0 || Boolean(this.state.pending);
-    if ((this.app.doc.kind === 'pdf' && following) || previous.length) {
+    const canAddScreenshot = this.app.view?.beginRegion && following;
+    if (canAddScreenshot || previous.length) {
       const material = el('div', 'followup-material');
       const unasked = previous.length > 0 && !this.state.turns.some(turn => turn.source && materialKey(turn.source) === materialKey(current));
       if (previous.length) {
@@ -389,7 +390,7 @@ export class SelectionChat {
           remove.append(icon('close', 13)); material.append(remove);
         }
       }
-      if (this.app.doc.kind === 'pdf' && following) {
+      if (canAddScreenshot) {
         const caption = unasked ? label('Replace with a screenshot', '重新框选') : label('Add a screenshot', '再截一张');
         material.append(button(caption, () => this.app.addDiscussionScreenshot(), 'text-btn add-discussion-material', 'capture'));
       }
@@ -455,9 +456,9 @@ export class SelectionChat {
       const prior = this.earlierSources(chatSource(item));
       if (prior.length > maxPreviousMaterials) throw Error(label('Start a separate question to use more material.', '这次讨论的材料已满，可从选区单独提问。'));
       const previousMaterial = request.payload || !prior.length ? undefined : await Promise.all(prior.map(async source => ({
-        label: source.label, text: readRegion(source.anchor) ? source.context : source.selected,
+        label: source.label, text: isScreenshotAnchor(source.anchor) ? source.context : source.selected,
         readerNotes: readerNoteTexts(notesForRecordedSource(savedNotes, source)),
-        image: readRegion(source.anchor) ? await this.app.discussionScreenshot(source) : undefined
+        image: isScreenshotAnchor(source.anchor) ? await this.app.discussionScreenshot(source) : undefined
       })));
       request.payload ??= { mode: request.mode, text: item.selection, context: context.join('\n\n'),
         ...(item.hit.regionText !== undefined && { image: item.hit.image, regionText: item.hit.regionText }),

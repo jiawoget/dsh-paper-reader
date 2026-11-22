@@ -1,6 +1,27 @@
 import assert from 'node:assert/strict';
 import type { Locator, Page } from 'playwright-core';
 
+type Point = { x: number; y: number };
+
+export async function dragBox(page: Page, start: Point, end: Point, touch: boolean): Promise<void> {
+  if (!touch) {
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 12 });
+    await page.mouse.up();
+    return;
+  }
+  const input = await page.context().newCDPSession(page);
+  try {
+    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+    for (let step = 1; step <= 12; step++) {
+      const x = start.x + (end.x - start.x) * (step / 12), y = start.y + (end.y - start.y) * (step / 12);
+      await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+    }
+    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } finally { await input.detach(); }
+}
+
 export async function dragAnswer(page: Page, excerpt: Locator): Promise<string> {
   await excerpt.scrollIntoViewIfNeeded();
   const { start, end } = await excerpt.evaluate(element => {

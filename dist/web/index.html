@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Paper Reader</title>
+  <link rel="stylesheet" href="./reader.css">
+  <link rel="stylesheet" href="./paper-chat.css">
+  <link rel="stylesheet" href="./pdf-view.css">
+  <link rel="stylesheet" href="./article-view.css">
+  <link rel="stylesheet" href="./notebook.css">
+  <link rel="stylesheet" href="./citations.css">
+  <link rel="stylesheet" href="./selection-card.css">
+  <link rel="stylesheet" href="./katex/katex.min.css">
+  <link rel="stylesheet" href="./selection-workspace.css">
+  <link rel="stylesheet" href="./reading-desk.css">
+  <link rel="stylesheet" href="./library.css">
+  <link rel="stylesheet" href="./annotation-layer.css">
+  <link rel="stylesheet" href="./annotations.css">
+</head>
+<body>
+  <main id="reader">
+    <section class="workspace" aria-label="Reading area">
+      <header class="topbar">
+        <button id="library" class="icon-btn" aria-label="Open library" title="Library and imports"></button>
+        <button id="contentsToggle" class="icon-btn" type="button" aria-controls="contentsPanel" aria-expanded="false">Contents</button>
+        <div class="doc-heading"><strong id="docTitle">Paper Reader</strong><span id="docMeta"></span></div>
+        <div class="toolbar" aria-label="Reading tools">
+          <div class="page-navigation">
+            <button id="prev" aria-label="Previous page" class="icon-btn" disabled></button>
+            <button id="pageCount" type="button" aria-label="Go to page" title="Go to page" popovertarget="pageJump" disabled></button>
+            <button id="next" aria-label="Next page" class="icon-btn" disabled></button>
+          </div>
+          <div id="articleNavigation" hidden>
+            <button id="previousSection" type="button" class="icon-btn" aria-label="Previous section" hidden></button>
+            <button id="nextSection" type="button" class="icon-btn" aria-label="Next section" hidden></button>
+          </div>
+          <div id="zoomControl"><select id="zoom" aria-label="Zoom"><option value="1">Fit width</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
+          <div class="reader-mode-switch" role="group" aria-label="Reading mode"><button id="originalMode" type="button" aria-pressed="true">Original</button><button id="parallel" type="button" aria-pressed="false"><span class="mode-wide">Bilingual</span><span class="mode-narrow">Translation</span></button></div>
+        </div>
+        <button id="captureRegion" class="btn" type="button" aria-pressed="false" hidden></button>
+        <button id="mobileRail" class="icon-btn" aria-label="Show notebook" aria-controls="rail" aria-expanded="false"></button>
+        <button id="more" class="icon-btn" aria-label="More actions" aria-controls="menu" aria-expanded="false"></button>
+        <nav id="menu" aria-label="Reader actions" hidden></nav>
+        <form id="pageJump" popover aria-label="Go to page">
+          <label for="pageNumber">Page number</label>
+          <div><input id="pageNumber" type="number" min="1" step="1" inputmode="numeric" aria-describedby="pageLimit" required autofocus><span id="pageLimit"></span><button class="btn primary" type="submit">Go</button></div>
+        </form>
+      </header>
+      <div id="pageFormat" hidden><span id="pageTextHint"></span><button id="placePin" class="btn" type="button">Add page note</button><button id="readText" class="btn" type="button" aria-controls="original">Read text</button></div>
+      <div class="headings"><span><b>Original</b><small id="sourceInfo"></small></span><span class="target-heading" id="pinHeading"><span><b>Translation</b><small id="translationInfo">Simplified Chinese</small></span><select id="translationMode" aria-label="Translation scope" title="Translation scope"><option value="page">Full page</option><option value="column">Active column</option><option value="passage">Active passage</option></select><button id="translate" hidden>Translate page</button></span></div>
+      <div id="paperScroll" tabindex="0" aria-label="Document pages">
+        <div class="pages"><div class="lane"><div id="original"></div></div><div id="pageSplit" class="desk-split" role="separator" tabindex="0" aria-label="Resize original and translation" aria-orientation="vertical" aria-controls="original translated" title="Resize original and translation"></div><div class="lane translated"><div id="translated"></div></div></div>
+        <div id="loading" role="status">Opening document…</div>
+      </div>
+      <section id="selectionDock" aria-label="Passage workspace" hidden></section>
+      <button id="returnDiscussion" class="btn" type="button" hidden></button>
+    </section>
+    <div id="notesSplit" class="desk-split" role="separator" tabindex="0" aria-label="Resize notebook" aria-orientation="vertical" aria-controls="rail" title="Resize notebook"></div>
+    <div id="notebookBackdrop" aria-hidden="true" hidden></div>
+    <aside id="rail" aria-label="Reading notebook">
+      <div class="notebook-titlebar">
+        <h2 id="notebookHandle" tabindex="-1">Notebook</h2>
+        <select id="notebookPose" class="sidebar-position" aria-label="Notebook position"></select>
+        <button id="closeRail" type="button" class="icon-btn" aria-label="Close notebook" title="Close notebook"></button>
+      </div>
+      <header class="rail-head">
+        <div role="tablist" aria-label="Reading sidebar"><button id="contentsTab" role="tab" aria-controls="contentsPanel" aria-selected="false" tabindex="-1">Contents</button><button id="notesTab" role="tab" aria-selected="true" aria-controls="railBody">Notes</button><button id="annotationsTab" role="tab" aria-controls="railBody" aria-selected="false" tabindex="-1">Marks</button><button id="refsTab" role="tab" aria-selected="false" aria-controls="railBody" tabindex="-1">Reference</button></div>
+        <span id="saveState"></span>
+      </header>
+      <label class="highlight-preference" for="highlightDisplay"><span>Highlights</span>
+        <select id="highlightDisplay" aria-label="Highlight display"><option value="inline">In notes</option><option value="separate">In Marks only</option></select>
+      </label>
+      <div id="railBody" role="tabpanel" aria-labelledby="notesTab"></div>
+      <div id="contentsPanel" role="tabpanel" aria-labelledby="contentsTab" hidden></div>
+    </aside>
+  </main>
+  <section id="card" aria-label="Selection card" hidden></section>
+  <dialog id="dialog" aria-labelledby="dialogTitle"><header><h2 id="dialogTitle"></h2><button id="closeDialog" class="icon-btn" aria-label="Close dialog"></button></header><div id="dialogBody"></div></dialog>
+  <div id="toast" role="status" hidden></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

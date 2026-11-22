@@ -34,7 +34,7 @@ const tree = { contents: [
     [{ slug: '19-why-it-matters', title: 'Why It Matters' }, sections.far])
 ] };
 
-function bookPage(slug: string, title: string): string {
+function bookPage(slug: string, title: string, includeDiagram: boolean): string {
   const parts: string[] = [];
   for (let index = 1; index <= 36; index++) {
     const opening = slug === sections.first.slug && index === 6 ? fixturePassages.first :
@@ -43,6 +43,9 @@ function bookPage(slug: string, title: string): string {
       slug === sections.otherChapter.slug && index === 6 ? fixturePassages.otherChapter :
       'Worked example ' + index + ' for section ' + slug;
     parts.push(`<p id="example-${index}">${opening}. Observe how the dates and amounts affect the outcome of the example. Enter each change in the appropriate column. When the period ends, compare the total with the starting projection before deciding what to adjust.</p>`);
+    if (includeDiagram && slug === sections.first.slug && index === 4) {
+      parts.push('<figure><img src="/book-reading-fixture-finance.svg" alt="Bank financing and equity financing"><figcaption>Figure 1.1. Two sources of financing.</figcaption></figure>');
+    }
   }
   const state = { content: { book: { slug: 'principles-finance', title: bookTitle, tree },
     params: { book: { slug: 'principles-finance' }, page: { slug } } } };
@@ -69,7 +72,7 @@ export const fixtureGooglePage = `<!doctype html><html><head><title>${fixtureBlo
 
 const illustration = '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="90" viewBox="0 0 300 90"><path d="M12 10h104v70H12z" fill="#146c94"/><path d="M144 10h144v70H144z" fill="#608f53"/></svg>';
 
-export async function startPublisherFixture() {
+export async function startPublisherFixture({ includeFinanceDiagram = false } = {}) {
   const server = createServer((request, response) => {
     const target = URL.parse(String(request.headers['x-reader-e2e-original-url'] ?? ''));
     if (!target || request.method !== 'GET') { response.writeHead(405).end(); return; }
@@ -79,6 +82,7 @@ export async function startPublisherFixture() {
       if (/^\/book-reading-fixture-(?:wiki|recall)\.svg$/.test(target.pathname)) { send(illustration, 'image/svg+xml'); return; }
     }
     if (target.origin === 'https://openstax.org') {
+      if (includeFinanceDiagram && target.pathname === '/book-reading-fixture-finance.svg') { send(illustration, 'image/svg+xml'); return; }
       if (target.pathname === cmsPath) { response.writeHead(302, { Location: cmsDetailPath }).end(); return; }
       if (target.pathname === cmsDetailPath) {
         send(JSON.stringify({ title: bookTitle, slug: 'principles-finance', webview_rex_link: bookRoot + sections.start.slug }), 'application/json');
@@ -86,7 +90,7 @@ export async function startPublisherFixture() {
       }
       const slug = target.href.slice(bookRoot.length);
       const item = tree.contents.flatMap(entry => 'contents' in entry ? entry.contents : [entry]).find(entry => entry.slug === slug);
-      if (target.href.startsWith(bookRoot) && item) { send(bookPage(item.slug, item.title)); return; }
+      if (target.href.startsWith(bookRoot) && item) { send(bookPage(item.slug, item.title, includeFinanceDiagram)); return; }
     }
     response.writeHead(404).end('No fixture at this publisher address.');
   });

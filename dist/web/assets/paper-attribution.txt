@@ -1,0 +1,16 @@
+Efficient Memory Management for Large Language Model Serving with PagedAttention
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu,
+Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. SOSP 2023.
+
+© 2023 the authors. The authors deposited arXiv:2309.06180v1 under the
+Creative Commons Attribution 4.0 International license.
+Paper and license record: https://arxiv.org/abs/2309.06180
+PDF: https://arxiv.org/pdf/2309.06180
+License: https://creativecommons.org/licenses/by/4.0/
+Proceedings DOI: https://doi.org/10.1145/3600006.3613165
+
+pagedattention.pdf is the original arXiv PDF. DSH Paper Reader adds a
+Simplified Chinese translation of all sixteen pages, including section
+headings, prose, captions and reference titles. The figures and mathematical
+notation come from the original. The translation is an adaptation under the
+same Creative Commons Attribution 4.0 International license.

@@ -1,6 +1,7 @@
 import type { PDFPageProxy, RenderTask } from 'pdfjs-dist/types/src/display/api.js';
 import type { Box } from './model.js';
 import { element, paintArtwork } from './paper.js';
+import { regionCanvas, regionPng } from '../region-png.js';
 
 /** Render at the physical size of the larger visible page, including a cropped column. */
 export class PageRaster {
@@ -111,10 +112,7 @@ export class PageRaster {
 export async function cropPdfPage(page: PDFPageProxy, area: Box, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted();
   // Render only this rectangle at a readable resolution, including on a small phone.
-  const scale = Math.min(3, 1600 / Math.max(area.width, area.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.min(1600, Math.ceil(area.width * scale)));
-  canvas.height = Math.max(1, Math.min(1600, Math.ceil(area.height * scale)));
+  const { canvas, scale } = regionCanvas(document, area.width, area.height);
   const task = page.render({ canvas, viewport: page.getViewport({ scale }),
     transform: [1, 0, 0, 1, -area.x * scale, -area.y * scale], background: '#ffffff' });
   const cancel = () => task.cancel();
@@ -122,17 +120,7 @@ export async function cropPdfPage(page: PDFPageProxy, area: Box, signal?: AbortS
   try {
     await task.promise;
     signal?.throwIfAborted();
-    let image = canvas;
-    let data = image.toDataURL('image/png');
-    while (data.length > 2 * 1024 * 1024) {
-      const next = document.createElement('canvas');
-      next.width = Math.max(1, Math.floor(image.width * 0.75));
-      next.height = Math.max(1, Math.floor(image.height * 0.75));
-      next.getContext('2d')!.drawImage(image, 0, 0, next.width, next.height);
-      image = next;
-      data = image.toDataURL('image/png');
-    }
-    return data;
+    return regionPng(canvas);
   } finally {
     signal?.removeEventListener('abort', cancel);
   }

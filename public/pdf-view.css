@@ -117,6 +117,8 @@
   position: fixed;
   z-index: 50;
   display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 12px);
   gap: 4px;
   padding: 4px;
   background: white;

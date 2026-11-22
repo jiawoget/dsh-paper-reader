@@ -1,8 +1,9 @@
-import type { DocumentInfo, PageView, ReaderBlock, ReadingSide, SelectionHit, SelectionSegment } from '../shared/types.js';
+import type { DocumentInfo, PageView, ReaderBlock, ReadingSide, RegionAction, SelectionHit, SelectionSegment } from '../shared/types.js';
 import type { SavedSelectionRange, TranslatedLocator } from '../shared/source-link.js';
 import { articleUrl, type ArticleBlock } from '../shared/web-article.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { articleContent, rangeInArticle, selectedArticleText, unchangedArticleBlock } from './article-content.js';
+import { articleRegionPicker } from './article-region-picker.js';
 import { message, readerLabel as label, sourceUrl, toast } from './ui.js';
 import { sectionFooter } from './book-navigation.js';
 import { pairSelection } from './pdf/alignment.js';
@@ -16,6 +17,8 @@ interface ArticleOptions {
   translations?: Record<string, string>;
   zoom?: number;
   onSelect: (hit: SelectionHit) => void;
+  onRegion?: RegionAction;
+  canContinueRegion?: (anchor: string) => boolean;
   onAmbiguousQuote?: () => void;
   onNavigateAnchor?: (anchor: string) => void;
   onBookSection?: (page: number, fragment?: string) => Promise<void>;
@@ -26,7 +29,8 @@ interface ParagraphPair {
   translation: HTMLElement;
 }
 
-export function renderArticle({ doc, sourceEl, translationEl, translations = {}, zoom = 1, onSelect, onAmbiguousQuote, onNavigateAnchor, onBookSection }: ArticleOptions): PageView {
+export function renderArticle({ doc, sourceEl, translationEl, translations = {}, zoom = 1, onSelect, onRegion,
+  canContinueRegion, onAmbiguousQuote, onNavigateAnchor, onBookSection }: ArticleOptions): PageView {
   const owner = sourceEl.ownerDocument;
   const paneWindow = owner.defaultView!;
   const events = new AbortController();
@@ -110,6 +114,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
       pair.translation.style.minHeight = height + 'px';
     }
     annotationLayoutChanged(original);
+    regions?.refresh();
   }
   const sizes = new ResizeObserver(() => {
     if (!sizingFrame) sizingFrame = paneWindow.requestAnimationFrame(sizeRows);
@@ -234,6 +239,9 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     }, options);
   }
 
+  const pages = original.closest<HTMLElement>('.pages');
+  const regions = pages && pairs.size && onRegion
+    ? articleRegionPicker(doc, page, pages, original, translated, events.signal, onRegion, canContinueRegion) : undefined;
   connect(original, 'source');
   connect(translated, 'translation');
   setTranslations(translations);
@@ -256,6 +264,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     location = undefined;
   }
   function select(hit?: SelectionHit): void {
+    regions?.mark(hit?.regionText !== undefined ? hit.id : '');
     if (selectionHit) {
       clearParts(selectionHit.segments);
       if ('highlights' in CSS) CSS.highlights.delete('dsh-web-quote');
@@ -329,8 +338,18 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
   }
   const view: PageView = {
     blocks: Array.from(pairs.values(), pair => pair.block), highlight, select, setTranslations,
-    sourceRect(id) { return pairs.get(id)?.source.getBoundingClientRect() || null; },
+    ...(regions && {
+      beginRegion: (attach?: boolean) => regions.begin(attach), cancelRegion: () => regions.end(),
+      reopenRegion: (id: string, receive?: RegionAction) => regions.reopen(id, receive)
+    }),
+    sourceRect(id) { return pairs.get(id)?.source.getBoundingClientRect() ?? regions?.rect(id) ?? null; },
     locate(id, quote, target, range) {
+      if (regions?.rect(id)) {
+        select();
+        clearLocation();
+        regions.mark(id, true);
+        return true;
+      }
       const pair = pairs.get(id);
       if (!pair) return false;
       select();

@@ -4,6 +4,7 @@ import { ReaderModel } from './reader-model.js';
 import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
+import { hostAttachments } from './region-image.js';
 import { inputObject, mergeSettings, ServiceError, type Input, type ServiceResults } from './service-types.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
@@ -26,6 +27,8 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
   const outlines = new PdfOutlines(documents, database, model);
   const zotero = () => new ZoteroLibrary(database.settings(), fetchImpl, database);
   const handlers = {
+    'article.capture.save': input => database.saveArticleCapture(input, hostAttachments(ctx)),
+    'article.capture.get': input => database.articleCapture(input),
     'outline.get': input => outlines.get(input),
     'outline.generate': input => outlines.generate(input),
     'book.progress.get': input => ({place:database.bookPosition(input.docId)}),

@@ -1,0 +1,233 @@
+#card .selection-notes {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e5dfe9;
+  font-size: 13px;
+}
+#card .saved-note-heading,
+#card .selection-note-footer,
+#card .chat-heading,
+#card .quote-heading,
+#card .answer-actions,
+#card .chat-starters,
+#card .chat-input-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+#card .saved-note-heading { color: #3f6957; }
+#card .saved-note-heading h3,
+#card .chat-heading h3 { margin: 0; font-size: 13px; font-weight: 650; }
+#card .selection-saved-note {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 8px 0;
+}
+#card .selection-saved-note + .selection-saved-note { border-top: 1px solid #eeeaf0; }
+#card .selection-saved-note > .text-btn,
+#card .selection-note-footer .text-btn { display: inline-flex; align-items: center; gap: 4px; }
+#card .selection-note-footer { justify-content: space-between; margin: 8px 0 0; }
+#card .selection-status { color: #597265; font-size: 11px; }
+#card .selection-note-field { display: grid; gap: 5px; }
+#card .selection-note-field > span { font-size: 12px; font-weight: 600; }
+#card .selection-note-list:not(:empty) + .selection-note-editor .selection-note-field { margin-top: 6px; }
+#card .selection-note-field textarea, #card .chat-composer textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 7px 9px;
+  border: 1px solid #d4cedb;
+  border-radius: 6px;
+  background: white;
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+}
+#card .selection-problem, #card .chat-notice {
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: #fbf2ec;
+  color: #804732;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+#card .selection-problem { margin-top: 6px; }
+#card .selection-problem .text-btn, #card .chat-notice .text-btn { margin-inline-start: 6px; }
+#card .selection-problem blockquote { margin: 5px 0; padding-left: 8px; border-left: 2px solid #cd9b86; }
+#card .selection-chat {
+  min-width: 0;
+  min-height: 0;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  color: #35313f;
+  background: #fcfbfd;
+  border-left: 1px solid #dfd8e6;
+  font-size: 13px;
+}
+#card .chat-heading { justify-content: space-between; flex: none; }
+#card .chat-heading h3 { font-size: 15px; letter-spacing: -.015em; }
+#card .chat-heading .icon-btn { color: #706978; }
+#card .chat-starters { flex-wrap: wrap; flex: none; }
+#card .chat-starter {
+  padding: 3px 8px;
+  color: #5f477a;
+  border: 1px solid #ddd4e6;
+  border-radius: 5px;
+  background: #fff;
+  font-size: 11.5px;
+}
+#card .chat-starter:hover { background: #f3eef7; }
+#card .selection-chat-log {
+  min-height: min(88px, 13dvh);
+  max-height: min(39dvh, 370px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  line-height: 1.5;
+  user-select: text;
+}
+#card .selection-chat-log:empty { display: none; }
+#card .chat-turn { margin: 0 0 11px; }
+#card .chat-turn:last-child { margin-bottom: 0; }
+#card .chat-turn.user { padding: 6px 9px; border-radius: 5px; background: #f1edf5; }
+#card .chat-turn.user p { margin: 1px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#card .chat-turn .speaker { display: block; margin-bottom: 2px; color: #6c5683; font-size: 11px; font-weight: 650; }
+#card .chat-turn.assistant .speaker { color: #5e6570; }
+#card .chat-wait { color: #756b80; font-size: 12px; }
+#card .selection-prose { min-width: 0; overflow-wrap: anywhere; user-select: text; }
+#card .selection-prose > :first-child { margin-top: 0; }
+#card .selection-prose > :last-child { margin-bottom: 0; }
+#card .selection-prose p { margin: 0 0 6px; }
+#card .selection-prose :is(h1,h2,h3,h4,h5,h6) { font-size: 14px; margin: 9px 0 4px; }
+#card .selection-prose :is(ul,ol) { margin: 5px 0 6px; padding-inline-start: 1.5em; }
+#card .selection-prose li { margin: 2px 0; }
+#card .selection-prose a { color: #69429a; text-decoration: underline; text-underline-offset: 2px; }
+#card .selection-prose pre, #card .selection-prose :not(pre) > code {
+  background: #f1eff4;
+  border-radius: 4px;
+  font-family: "Courier Prime", Consolas, monospace;
+  font-size: .92em;
+}
+#card .selection-prose pre { margin: 5px 0; padding: 7px 8px; overflow-x: auto; }
+#card .selection-prose :not(pre) > code { padding: 1px 4px; }
+#card .selection-prose blockquote { margin: 4px 0; padding-left: 8px; border-left: 2px solid #b9a4c9; }
+#card .selection-prose .katex-block { overflow-x: auto; padding-block: 2px; }
+#card .selection-prose .katex-display { margin: .4em 0; }
+#card .selection-prose table { display: block; overflow-x: auto; border-collapse: collapse; }
+#card .selection-prose :is(th,td) { padding: 3px 6px; border: 1px solid #dfd8e6; }
+#card .chat-composer { display: grid; gap: 5px; flex: none; }
+#card .followup-material {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+#card .followup-material button, #card .chat-turn .material-source {
+  min-height: 26px;
+  max-width: 100%;
+  color: var(--purple);
+  font: inherit;
+}
+#card .material-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+#card .material-remove, #card .add-discussion-material {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+#card .material-remove { min-width: 26px; justify-content: center; }
+#card .add-discussion-material { margin-inline-start: auto; }
+@media (pointer: coarse) {
+  #card .followup-material button { min-height: 40px; }
+}
+#card .chat-input-row { align-items: flex-end; }
+#card .chat-input-row textarea { flex: 1; max-height: 23vh; }
+#card .chat-input-row .btn, #card .answer-actions .btn { font-size: 12px; padding: 5px 8px; }
+#card .chat-drafts { color: #5e4974; max-width: 100%; min-width: 0; font-size: 12px; }
+#card .chat-notice[role="status"] { background: #f1edf5; color: #59496a; }
+#card .answer-notebook, #card .answer-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}
+#card .answer-notebook { margin-block-start: 6px; }
+#card .answer-notebook .text-btn {
+  min-height: 30px;
+  padding: 2px 0;
+  color: var(--purple);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+#card .answer-notebook-status { color: #385c4a; font-size: 12px; overflow-wrap: anywhere; }
+#card .discussion-source {
+  color: var(--muted);
+  font-size: 13px;
+}
+#card .discussion-source summary { width: fit-content; cursor: pointer; color: var(--purple); }
+#card .discussion-source blockquote {
+  max-height: 6.5em;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 11px;
+  background: #f7f5fa;
+  color: var(--desk-ink);
+  line-height: 1.6;
+}
+#card[data-selection="region"] > .selection-chat { grid-column: 1 / -1; }
+#card .discussion-region-source {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 10px;
+  max-width: 100%;
+  padding: 2px;
+  color: var(--desk-ink);
+  text-align: start;
+}
+#card .discussion-region-source img {
+  width: 104px;
+  height: 64px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+}
+#card .discussion-region-source > span { display: grid; gap: 2px; }
+#card .discussion-region-link { color: var(--purple); text-decoration: underline; text-underline-offset: 3px; }
+#card .discussion-region-source:hover img { border-color: var(--purple); }
+#card .answer-quote {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  margin: 3px 0 7px;
+  padding-inline-start: 7px;
+  border-inline-start: 2px solid #b9a4cb;
+  color: #514759;
+  font-size: 12px;
+}
+#card .answer-actions { flex-wrap: wrap; }
+#card .answer-actions .btn { min-height: 25px; padding-block: 2px; }
+@media (max-width: 680px) {
+  #card .selection-chat { border-left: 0; border-top: 1px solid #dfd8e6; padding: 10px 12px; gap: 6px; }
+  #card .selection-chat-log { max-height: min(27dvh, 240px); }
+}

@@ -113,6 +113,8 @@ export interface ZoteroItem extends ReaderZoteroItem {
   doi: string; url: string; type: string; creator: string; date: string;
 }
 export interface ServiceResults {
+  'article.capture.save': Operations['article.capture.save'][1];
+  'article.capture.get': Operations['article.capture.get'][1];
   'outline.get': Operations['outline.get'][1];
   'outline.generate': Operations['outline.generate'][1];
   'book.progress.get': Operations['book.progress.get'][1];

@@ -1,3 +1,4 @@
+.pages:has(.web-reading-sheet) { position: relative; }
 .web-reading-sheet {
   min-height: 100%; box-sizing: border-box; margin: 0; padding: clamp(18px, 6%, 50px) clamp(14px, 5%, 42px);
   border: 1px solid #e1e6ed; border-radius: 6px; color: #20242d; background: #fff;
