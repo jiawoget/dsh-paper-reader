@@ -27,7 +27,7 @@ export function readerAddress(origin: string, doc: string, anchor: string, page:
   return url.href;
 }
 
-export const extensionActions = ['ai', 'history.add', 'web.import', 'web.open', 'vocab.save', 'note.save'] as const;
+export const extensionActions = ['ai', 'ai.models', 'ai.selectModel', 'history.add', 'web.import', 'web.open', 'vocab.save', 'note.save'] as const;
 export type ExtensionAction = typeof extensionActions[number];
 export type TabCommand = 'status' | 'enable' | 'disable' | 'translate' | 'capture';
 type ActionRequest = { [K in ExtensionAction]: { type: 'action'; op: K; payload: Operations[K][0] } }[ExtensionAction];

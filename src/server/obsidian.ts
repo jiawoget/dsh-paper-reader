@@ -8,6 +8,8 @@ import { chapterPassageLabel, escapedComments, markdownHeading as heading } from
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator } from '../shared/source-link.js';
 import { ReaderStore, type NotebookChapter } from './reader-store.js';
 import { address, isObject, ServiceError, single, stringValue, type Entries, type Entry, type Input } from './service-types.js';
+import { vaultMarkdown } from './vault-markdown.js';
+import { portableCitation, type VaultSources } from './vault-sources.js';
 
 function hash(text: string): string { return createHash('sha256').update(text).digest('hex'); }
 export function filenameStem(title: string, max = 75): string {
@@ -135,22 +137,29 @@ export function writeMarkdown(file: string, observed: string | undefined, next: 
     try { unlinkSync(temp); } catch (error) { if (!isObject(error) || error.code !== 'ENOENT') throw error; }
   }
 }
-export function exportNotebook(store: ReaderStore, input: Input): { path: string; notes: number; words: number } {
+export function exportNotebook(store: ReaderStore, input: Input, sources: VaultSources, notebook?: string): { path: string; notes: number; words: number } {
   const docId = single(input.docId, 'document ID', 512, true);
   const title = stringValue(input.title, 'paper title', 2048, true);
   const supplied = address(input.sourceUrl);
-  return store.notebook(docId, ({ settings, entries, filename }) => {
+  return store.notebook(docId, ({ settings, entries, filename, zotero }) => {
     const candidates = [supplied, ...entries.notes.map(row => row.sourceUrl), ...entries.vocabulary.map(row => row.sourceUrl)];
-    const base = candidates.find(url => url && /^\/api\/paper-reader\/app\/(?:index\.html)?$/.test(new URL(url).pathname));
-    if (!base) throw new ServiceError(400, 'Open the paper in Paper Reader to export a note with working passage links.');
+    sources.useSavedSources([zotero?.original ?? '', ...candidates]);
+    const base = candidates.find(url => url && /^\/api\/paper-reader\/app\/(?:index\.html)?$/.test(new URL(url).pathname))
+      ?? (supplied || 'http://localhost/');
     try {
       const folder = vaultFolder(settings.vaultPath, undefined, true);
       const name = filename ?? filenameFor(title, docId);
       if (name !== path.basename(name) || !name.endsWith('.md')) throw new ServiceError(500, 'The stored note filename is invalid.');
       const file = path.join(folder, name);
       const observed = fileContent(file);
-      const generated = markdown(title, docId, base, entries);
-      writeMarkdown(file, observed, mergeMarkdown(observed ?? '', generated, docId));
+      const content = notebook === undefined ? markdown(title, docId, base, entries) :
+        notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, '').trimEnd() +
+          (entries.vocabulary.length ? '\n\n' + vocabulary(base, entries.vocabulary).join('\n') : '');
+      const render = (label: string, url: URL) => portableCitation(label, sources.targets(url, settings.vaultPath, folder, zotero?.link));
+      const generated = vaultMarkdown(content, docId, render, false);
+      // Older exports can include a manually edited managed block. Its edits
+      // survive merging, and its existing reader citations become portable too.
+      writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(observed ?? '', generated, docId), docId, render, false));
       return { path: file, notes: entries.notes.length, words: entries.vocabulary.length };
     } catch (error) {
       if (error instanceof ServiceError) throw error;

@@ -5,7 +5,7 @@ import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
 import { hostAttachments } from './region-image.js';
-import { inputObject, mergeSettings, ServiceError, type Input, type ServiceResults } from './service-types.js';
+import { inputObject, mergeSettings, readQuestionModel, ServiceError, type Input, type ServiceResults } from './service-types.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
 
@@ -37,7 +37,14 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       const { settings, ...entries } = database.state();
       return { ...entries, settings: await model.publicSettings(settings) };
     },
-    'settings.save': async input => ({ settings: await model.publicSettings(database.configure(input)) }),
+    'ai.selectModel': async input => {
+      if (input.questionModel === undefined) throw new ServiceError(400, 'Choose a question model.');
+      const selection = readQuestionModel(input.questionModel);
+      if (selection) await model.selectedRoute(selection);
+      return { questionModel: database.configure({ questionModel: selection ?? null }).questionModel };
+    },
+    'settings.save': async input => ({ settings: await model.publicSettings(database.configure({ ...input, questionModel: undefined })) }),
+    'ai.models': async () => ({ ...await model.catalog(), selected: database.settings().questionModel }),
     'annotation.list': input => ({ annotations: database.listAnnotations(input) }),
     'annotation.save': input => ({ annotation: database.saveAnnotation(input) }),
     'annotation.delete': input => ({ deleted: database.deleteAnnotation(input) }),

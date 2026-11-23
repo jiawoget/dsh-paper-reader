@@ -92,11 +92,114 @@ button:disabled { cursor: default; opacity: .56; }
 .foot .primary, .editor-actions .primary { background: #7044c4; color: white; }
 .foot .primary:hover, .editor-actions .primary:hover { background: #6037ad; }
 .editor { display: grid; gap: 6px; }
+.model-picker summary { cursor: pointer; color: #5e408e; font-size: 12px; overflow-wrap: anywhere; }
+.question-model-form, .question-model-form label { display: grid; gap: 4px; }
+.question-model-form { gap: 8px; padding: 8px 0; }
+.question-model-form select { min-width: 0; width: 100%; font: inherit; }
+.question-model-form .hint { margin: 0; }
+.question-model-form .hint:empty { display: none; }
+.question-model-form button { justify-self: start; padding: 4px 8px; border-radius: 4px; color: #593194; background: #efe7fb; }
 .editor textarea { width: 100%; min-height: 55px; resize: vertical; padding: 6px 8px; border-radius: 5px; border: 1px solid #cbd0dd; background: #fbfcfe; }
 .editor-actions { justify-content: flex-end; }
 .status { color: #5d526f; font-size: 12px; margin: 0; overflow-wrap: anywhere; }
 .status:empty { display: none; }
 `;
+
+  // src/shared/question-model-form.ts
+  function questionModelForm({ label, defaultName, load, save }) {
+    const form = document.createElement("form");
+    form.className = "question-model-form";
+    const field = (caption) => {
+      const row = document.createElement("label"), title = document.createElement("span"), select2 = document.createElement("select");
+      row.className = "field";
+      title.textContent = caption;
+      row.append(title, select2);
+      form.append(row);
+      return { row, select: select2 };
+    };
+    const model = field(label("Model", "\u6A21\u578B")), effort = field(label("Reasoning effort", "\u63A8\u7406\u5F3A\u5EA6"));
+    const status = document.createElement("p");
+    status.className = "hint";
+    status.setAttribute("role", "status");
+    const apply = document.createElement("button"), retry = document.createElement("button");
+    apply.type = "submit";
+    apply.className = "btn primary";
+    apply.textContent = label("Use model", "\u4F7F\u7528\u6B64\u6A21\u578B");
+    retry.type = "button";
+    retry.className = "text-btn";
+    retry.textContent = label("Reload models", "\u91CD\u65B0\u52A0\u8F7D\u6A21\u578B");
+    form.append(status, retry, apply);
+    const options = /* @__PURE__ */ new Map();
+    const key = (provider, id) => JSON.stringify([provider, id]);
+    const fallback = label("Reader default", "\u9605\u8BFB\u5668\u9ED8\u8BA4\u6A21\u578B") + (defaultName ? " \xB7 " + defaultName : "");
+    function efforts(selected) {
+      const reasoning = options.get(model.select.value)?.model.reasoning;
+      effort.select.replaceChildren(new Option(label("Model default", "\u6A21\u578B\u9ED8\u8BA4") + (reasoning?.defaultEffort ? " \xB7 " + (reasoning.efforts.find((e) => e.id === reasoning.defaultEffort)?.name || reasoning.defaultEffort) : ""), ""));
+      for (const item of reasoning?.efforts ?? []) effort.select.add(new Option(item.name || item.id, item.id));
+      effort.row.hidden = !reasoning?.efforts.length;
+      if (selected && Array.from(effort.select.options).some((o) => o.value === selected)) effort.select.value = selected;
+      else if (selected && options.has(model.select.value)) {
+        status.textContent = label("The saved effort is unavailable. Choose a new effort or use the model default.", "\u5DF2\u4FDD\u5B58\u7684\u63A8\u7406\u5F3A\u5EA6\u4E0D\u53EF\u7528\uFF0C\u53EF\u91CD\u65B0\u9009\u62E9\u6216\u4F7F\u7528\u6A21\u578B\u9ED8\u8BA4\u503C\u3002");
+      }
+    }
+    model.select.onchange = () => {
+      apply.disabled = false;
+      efforts();
+    };
+    async function loadModels() {
+      model.select.disabled = apply.disabled = true;
+      retry.hidden = effort.row.hidden = true;
+      options.clear();
+      model.select.replaceChildren(new Option(fallback, ""));
+      status.textContent = label("Loading DSH models\u2026", "\u6B63\u5728\u52A0\u8F7D DSH \u6A21\u578B\u2026");
+      try {
+        const { groups, selected, failures } = await load();
+        for (const group of groups) {
+          const groupNode = document.createElement("optgroup");
+          groupNode.label = group.name || group.id;
+          for (const entry of group.models) {
+            const id = key(group.id, entry.id);
+            options.set(id, { model: entry, selection: { provider: group.id, model: entry.id } });
+            groupNode.append(new Option(entry.name || entry.id, id));
+          }
+          model.select.append(groupNode);
+        }
+        status.textContent = failures.length ? label("Unavailable providers", "\u6682\u4E0D\u53EF\u7528\u7684\u63D0\u4F9B\u5546") + " \xB7 " + failures.map((p) => p.name || p.id).join(", ") : !options.size ? label("DSH has no models available.", "DSH \u5F53\u524D\u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002") : "";
+        retry.hidden = Boolean(options.size && !failures.length);
+        if (selected) {
+          const saved = key(selected.provider, selected.model);
+          if (!options.has(saved)) {
+            const missing = new Option(selected.model + " \xB7 " + label("unavailable", "\u4E0D\u53EF\u7528"), saved);
+            missing.disabled = true;
+            model.select.add(missing);
+          }
+          model.select.value = saved;
+        }
+        efforts(selected?.reasoningEffort);
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : label("Could not load the DSH model catalog.", "\u65E0\u6CD5\u52A0\u8F7D DSH \u6A21\u578B\u5217\u8868\u3002");
+        retry.hidden = false;
+      }
+      model.select.disabled = false;
+      apply.disabled = Boolean(model.select.value && !options.has(model.select.value));
+    }
+    retry.onclick = () => void loadModels();
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      if (apply.disabled) return;
+      const choice = options.get(model.select.value)?.selection;
+      apply.disabled = model.select.disabled = effort.select.disabled = retry.disabled = true;
+      try {
+        await save(choice ? { ...choice, ...effort.select.value && { reasoningEffort: effort.select.value } } : null);
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : label("Could not save this model.", "\u65E0\u6CD5\u4FDD\u5B58\u6B64\u6A21\u578B\u3002");
+      } finally {
+        apply.disabled = model.select.disabled = effort.select.disabled = retry.disabled = false;
+      }
+    };
+    void loadModels();
+    return form;
+  }
 
   // src/shared/web-article.ts
   function articleUrl(value, base) {
@@ -401,6 +504,7 @@ button:disabled { cursor: default; opacity: .56; }
   <div class="modes"><button type="button" data-do="translate">Translate</button><button type="button" data-do="explain">Explain in context</button><button type="button" data-do="followup">Ask</button></div>
   <p class="question" hidden></p>
   <p class="answer hint" aria-live="polite">Choose a lookup to use your DSH model.</p>
+  <details class="model-picker" hidden><summary>Question model</summary></details>
   <form class="editor" hidden><label><span></span><textarea rows="2"></textarea></label>
     <div class="editor-actions"><button type="button" data-do="cancel">Cancel</button><button type="submit" class="primary" data-do="submit">Send</button></div>
   </form>
@@ -425,6 +529,7 @@ button:disabled { cursor: default; opacity: .56; }
     const submitted = shadow.querySelector(".question");
     const status = shadow.querySelector(".status");
     const editor = shadow.querySelector("form");
+    const modelPicker = shadow.querySelector(".model-picker");
     const textarea = shadow.querySelector("textarea");
     const button = (id) => shadow.querySelector('[data-do="' + id + '"]');
     const turns = restored?.turns.slice() ?? [];
@@ -436,6 +541,19 @@ button:disabled { cursor: default; opacity: .56; }
     let savedWord = false;
     let savedNote = false;
     shadow.querySelector("h2").textContent = pick.text;
+    modelPicker.ontoggle = () => {
+      modelPicker.querySelector("form")?.remove();
+      if (!modelPicker.open) return;
+      modelPicker.append(questionModelForm({
+        label: (english) => english,
+        load: () => action("ai.models", {}),
+        save: (questionModel) => run(async () => {
+          await action("ai.selectModel", { questionModel });
+          modelPicker.open = false;
+          modelPicker.querySelector("summary").textContent = ["Question model", questionModel?.model, questionModel?.reasoningEffort].filter(Boolean).join(" \xB7 ");
+        })
+      }));
+    };
     function position() {
       if (!pick.range.startContainer.isConnected) {
         close();
@@ -477,6 +595,8 @@ button:disabled { cursor: default; opacity: .56; }
       for (const item of shadow.querySelectorAll(".modes button")) item.setAttribute("aria-pressed", String(item.dataset.do === mode));
     }
     async function lookup(mode, question) {
+      modelPicker.hidden = true;
+      modelPicker.open = false;
       toggleMode(mode);
       submitted.hidden = !question;
       submitted.textContent = question || "";
@@ -490,6 +610,7 @@ button:disabled { cursor: default; opacity: .56; }
       } catch (error) {
         answer.className = "answer error";
         answer.textContent = errorText(error);
+        modelPicker.hidden = mode !== "followup";
         return;
       }
       answer.className = "answer";
@@ -507,6 +628,8 @@ button:disabled { cursor: default; opacity: .56; }
       }
     }
     function edit(mode) {
+      modelPicker.hidden = mode !== "followup";
+      modelPicker.open = false;
       formMode = mode;
       editor.hidden = false;
       editor.querySelector("label span").textContent = mode === "note" ? "Note" : "Ask about this passage";
@@ -538,7 +661,8 @@ button:disabled { cursor: default; opacity: .56; }
       } else if (id === "note" || id === "followup") edit(id);
       else if (id === "cancel") {
         fields[formMode] = "";
-        editor.hidden = true;
+        editor.hidden = modelPicker.hidden = true;
+        modelPicker.open = false;
       } else if (id === "open") void run(() => source.open());
       else if (id === "vocab") void run(async () => {
         const saved = await source.collect();

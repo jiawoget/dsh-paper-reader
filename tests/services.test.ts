@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createServices, type ServiceOptions } from '../src/server/services.js';
+import { Library } from '../src/server/library.js';
 
 const passage = {
   docId: 'attention', page: 6, anchor: 'p6:11', title: 'Attention',
@@ -95,7 +96,8 @@ test('Markdown export preserves journal edits and reconnects to each saved passa
   const exported = await act('obsidian.export', { ...passage, title: '../../Attention' });
   assert.equal(path.dirname(exported.path), path.join(vaultPath, 'Paper Reader'));
   const markdown = await readFile(exported.path, 'utf8');
-  assert.ok(markdown.includes(passage.sourceUrl));
+  assert.doesNotMatch(markdown, /127\.0\.0\.1|Open in Paper Reader/);
+  assert.match(markdown, /Page 6/);
   assert.match(markdown, /cached data/);
   await writeFile(exported.path, markdown.replace('Review this argument', 'Comparison with another paper'));
   await appendFile(exported.path, '\n### Journal\nA handwritten thought.\n');
@@ -108,34 +110,38 @@ test('Markdown export preserves journal edits and reconnects to each saved passa
   assert.equal(await readFile(saved.path, 'utf8'), merged);
   const published = await act('obsidian.export', { ...passage, sourceUrl: 'https://journal.example/paper' });
   const linked = await readFile(published.path, 'utf8');
-  assert.ok(linked.includes(passage.sourceUrl));
+  assert.ok(linked.includes('https://journal.example/paper'));
   assert.doesNotMatch(linked, /journal\.example\/api\/paper-reader/);
 });
 
-test('exported page-six backlinks preserve the exact selection on the active reader origin', async t => {
+test('exported web citations use a publisher text fragment and a portable copy while the stored quote keeps its full text', async t => {
   const { act, root } = await setup(t);
   const vaultPath = path.join(root, 'Vault');
   await mkdir(vaultPath);
   await act('settings.save', { vaultPath });
   const quote = 'block tables & "physical+blocks"';
-  await act('note.save', { ...passage, anchor: 'block-tables', quote, text: 'How the physical block references work.' });
-  const current = 'http://localhost:30617/api/paper-reader/app/index.html?doc=attention';
-  const file = await act('obsidian.export', { docId: 'attention', title: 'Attention', sourceUrl: current });
+  const doc = await new Library(root).importWeb({ url:'https://journal.example/paper', title:'Attention', paragraphs:[quote] });
+  const sourceUrl = 'http://localhost:30617/api/paper-reader/app/index.html?doc=' + doc.id;
+  const request = { docId: doc.id, title: 'Attention', sourceUrl };
+  await act('note.save', { ...request, page:6, anchor: 'p-1', quote, text: 'How the physical block references work.' });
+  const file = await act('obsidian.export', request);
   const md = await readFile(file.path, 'utf8');
   const destination = md.match(/\[Page 6\]\(<([^>]+)>\)/)?.[1];
   assert.ok(destination);
   assert.match(destination, /%26/);
   assert.match(destination, /%2B/i);
   const link = new URL(destination);
-  assert.equal(link.origin, 'http://localhost:30617');
-  assert.equal(link.pathname, '/api/paper-reader/app/index.html');
-  assert.deepEqual(Object.fromEntries(link.searchParams), { doc: 'attention', page: '6', anchor: 'block-tables', quote });
+  assert.equal(link.origin, 'https://journal.example');
+  assert.equal(link.pathname, '/paper');
+  assert.equal(decodeURIComponent(link.hash), '#:~:text=' + quote);
+  assert.match(md, /\[Library copy\]/);
   const longQuote = 'block tables '.repeat(1000);
-  await act('note.save', { ...passage, anchor: 'other', quote: longQuote, text: 'Another passage' });
-  await act('obsidian.export', { docId: 'attention', title: 'Attention', sourceUrl: current });
+  await act('note.save', { ...request, page:6, anchor: 'p-1', quote: longQuote, text: 'Another passage' });
+  await act('obsidian.export', request);
   const all = [...(await readFile(file.path, 'utf8')).matchAll(/\[Page 6\]\(<([^>]+)>\)/g)].map(match => new URL(match[1]));
-  const excerpt = all.find(url => url.searchParams.get('anchor') === 'other')?.searchParams.get('quote');
+  const excerpt = all.map(url => decodeURIComponent(url.hash).slice('#:~:text='.length)).find(value => value.startsWith('block tables block tables'));
   assert.ok(excerpt && excerpt.length <= 320 && longQuote.startsWith(excerpt));
+  assert.equal((await act('state')).notes.find(n=>n.text==='Another passage')?.quote,longQuote);
 });
 
 test('OpenAI-compatible requests include selection and prior conversation, exact block IDs are checked', async t => {

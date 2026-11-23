@@ -43,6 +43,20 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     await selectPassage(passage);
     await card.getByRole('heading', { name: 'Passage translation' }).waitFor();
     await card.getByText(/逻辑 KV 块/).first().waitFor();
+    await page.setViewportSize({ width: 2100, height: 900 });
+    await page.locator('#card:not([data-docked])').waitFor();
+    const floating = (await card.boundingBox())!;
+    const leftGutter = floating.x < (await original.boundingBox())!.x;
+    const cornerX = floating.x + (leftGutter ? 4 : floating.width - 4);
+    const cornerY = floating.y + floating.height - 4;
+    await page.mouse.move(cornerX, cornerY);
+    await page.mouse.down();
+    await page.mouse.move(cornerX + (leftGutter ? -40 : 40), cornerY + 48, { steps: 8 });
+    await page.mouse.up();
+    const resized = (await card.boundingBox())!;
+    assert.ok(resized.width > floating.width + 25 && resized.height > floating.height + 30,
+      'Dragging the outer corner should enlarge the floating preview in both dimensions.');
+    await page.setViewportSize({ width: 1440, height: 900 });
     await capture('C-Original.png');
     await card.getByRole('button', { name: 'Open bilingual view' }).click();
     assert.equal(await reader.getAttribute('data-reading-mode'), 'bilingual');
@@ -52,6 +66,19 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     await dock.waitFor();
     const comparison = (await dock.boundingBox())!, paper = (await reader.locator('#paperScroll').boundingBox())!;
     assert.ok(comparison.y >= paper.y + paper.height - 1, 'Comparison actions should sit below the document, outside both panes.');
+    const grip = dock.getByRole('separator', { name: 'Resize passage preview' });
+    assert.ok(await grip.isVisible(), 'The docked selection needs a visible resize handle.');
+    const handle = (await grip.boundingBox())!;
+    const x = handle.x + handle.width / 2, y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y - 80, { steps: 8 });
+    await page.mouse.up();
+    assert.ok((await dock.boundingBox())!.height > comparison.height + 65);
+    await grip.press('ArrowDown');
+    assert.ok((await dock.boundingBox())!.height < comparison.height + 70);
+    await grip.dblclick();
+    assert.ok(Math.abs((await dock.boundingBox())!.height - comparison.height) < 2);
     await capture('B-Compare.png');
 
     await card.getByRole('button', { name: 'Write note' }).click();

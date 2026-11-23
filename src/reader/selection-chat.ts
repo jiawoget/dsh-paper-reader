@@ -5,6 +5,7 @@ import { AnswerNotebookAction } from './answer-notebook.js';
 import { readQuestions, saveQuestions, type AnswerQuote, type MessageDraft } from './discussion-drafts.js';
 import { compactReader } from './reading-desk.js';
 import { settingsDialog, type ReaderPort } from './panels.js';
+import { questionConnected, questionModelButton } from './question-model.js';
 import { chatSource, isScreenshotAnchor, materialKey, notesForRecordedSource, notesForSelection, previousDiscussionSources, readerNoteTexts, selectionKey, type SelectionContext } from './selection-context.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import type { DiscussionRef } from './discussion-drafts.js';
@@ -59,12 +60,14 @@ export class SelectionChat {
   private pendingRow?: { request: Request; question: HTMLElement; wait: HTMLElement };
   private quoteVersion = '';
   private disconnected?: boolean;
+  private readonly modelPicker: ReturnType<typeof questionModelButton>;
   private draftEdited = false;
 
   constructor(private app: ReaderPort, private item: SelectionContext, private thread: string, private state: ChatState,
     private notes: SelectionNotes, private changed: () => void, closeChat: () => void, private engage: () => void,
     private previous?: DiscussionRef) {
     this.answerActions = state.answerActions ??= new Map();
+    this.modelPicker = questionModelButton(app);
     this.root.id = 'passage-chat';
     this.root.ariaLabel = 'Selection chat';
     this.root.hidden = true;
@@ -72,7 +75,7 @@ export class SelectionChat {
     const close = button('', () => { this.show(false); closeChat(); }, 'icon-btn');
     close.ariaLabel = label('Close chat', '收起讨论');
     close.append(icon('close', 14));
-    this.heading.append(el('h3', '', label('Reading discussion', '阅读讨论')), close);
+    this.heading.append(el('h3', '', label('Reading discussion', '阅读讨论')), this.modelPicker.button, close);
     this.log.setAttribute('role', 'log');
     this.log.ariaLabel = 'Selection conversation';
     this.log.tabIndex = 0;
@@ -254,11 +257,13 @@ export class SelectionChat {
   }
   refresh(): void {
     if (this.root.hidden) return;
-    if (this.disconnected !== (this.app.state.settings.aiMode === 'unconfigured')) this.render();
+    this.modelPicker.refresh();
+    if (this.disconnected !== !questionConnected(this.app.state.settings)) this.render();
   }
   render(): void {
     if (this.root.hidden) return;
-    this.disconnected = this.app.state.settings.aiMode === 'unconfigured';
+    this.disconnected = !questionConnected(this.app.state.settings);
+    this.modelPicker.refresh();
     const { pending, failure } = this.state;
     for (const starter of this.starters.querySelectorAll('button')) starter.disabled = Boolean(pending || this.disconnected);
     this.connection.replaceChildren();
@@ -429,7 +434,8 @@ export class SelectionChat {
   }
   private async ask(request: Request): Promise<void> {
     const { state } = this;
-    if (state.pending || this.app.state.settings.aiMode === 'unconfigured') return;
+    if (state.pending || !questionConnected(this.app.state.settings)) return;
+    const questionModel = this.app.state.settings.questionModel ?? null;
     const item = request.item ??= this.item;
     const draft = request.draftKey ? state.drafts.get(request.draftKey) : undefined;
     if (draft?.text.trim() === request.prompt) draft.text = '';
@@ -467,7 +473,7 @@ export class SelectionChat {
         targetLanguage: request.mode === 'translate' && item.hit.side === 'translation' ? 'English' : undefined,
         record: { docId: item.source.docId, requestId: request.requestId, thread: this.thread,
           question: request.prompt, source: chatSource(item), answerQuote: request.quote?.text, answerTurn: request.quote?.turn } };
-      const reply = await api('ai', request.payload);
+      const reply = await api('ai', { ...request.payload, questionModel });
       this.app.discussionChanged?.(item.source.docId);
       state.turns.push({ role: 'user', content: request.prompt, quote: request.quote, source: request.payload.record?.source },
         { role: 'assistant', content: reply.text, source: request.payload.record?.source, requestId: request.requestId });

@@ -104,12 +104,21 @@ export interface ChatExchange extends ChatRequest {
   thread: string; answer: string; createdAt: string; coverage?: { pageCount: number; pagesUsed: number; partial: boolean };
 }
 export interface PaperEvidence { title: string; pageCount: number; partial: boolean; excerpts: { page: number; text: string }[] }
+export interface QuestionModel { provider: string; model: string; reasoningEffort?: string }
+export interface QuestionCatalog {
+  selected?: QuestionModel;
+  groups: { id: string; name: string; models: {
+    id: string; name: string; reasoning?: { efforts: { id: string; name: string }[]; defaultEffort?: string }
+  }[] }[];
+  failures: { id: string; name: string }[];
+}
 export interface ZoteroStatus {
   connected: boolean; mode: 'web' | 'desktop'; access: 'none' | 'read' | 'confirm' | 'write' | 'unknown'; detail: string;
 }
 export interface Settings {
   baseUrl: string; model: string; hasApiKey: boolean; aiMode: 'api' | 'dsh' | 'unconfigured';
   localTranslationAvailable?: boolean;
+  questionModel?: QuestionModel;
   hostProvider?: string; hostModel?: string; vaultPath: string; zoteroLibraryType: 'user' | 'group';
   zoteroLibraryId: string; hasZoteroKey: boolean; zoteroMode?: 'web' | 'desktop';
 }
@@ -125,6 +134,8 @@ export type ZoteroOpenResult =
   | { kind: 'unavailable'; zoteroUrl: string };
 export const maxPreviousMaterials = 7;
 export interface Operations {
+  'ai.models': [Record<string, never>, QuestionCatalog];
+  'ai.selectModel': [{ questionModel: QuestionModel | null }, { questionModel?: QuestionModel }];
   'outline.get': [{ docId: string }, { entries: PdfOutlineEntry[] }];
   'outline.generate': [{ docId: string; pageCount: number; pages: PdfOutlinePage[] }, { entries: PdfOutlineEntry[] }];
   'book.progress.get': [{docId: string}, {place: BookPlace | null}];
@@ -141,11 +152,11 @@ export interface Operations {
   'translation.page': [{ docId: string; page: number; blocks: ReaderBlock[] }, { translations: Record<string,string> }];
   'ai': [{ mode: 'translate' | 'explain' | 'followup'; text: string; context: string; image?: string; regionText?: string;
     readerNotes?: string[]; previousMaterial?: { label: string; text: string; image?: string; readerNotes?: string[] }[];
-    targetLanguage?: string; question?: string; answerQuote?: string;
+    targetLanguage?: string; question?: string; answerQuote?: string; questionModel?: QuestionModel | null;
     history?: {role: 'assistant'|'user'; content: string}[]; record?: ChatRequest & { thread: string } }, { text: string }];
   'chat.history': [{ docId: string; thread?: string }, { exchanges: ChatExchange[] }];
-  'chat.ask': [ChatRequest & { paper: PaperEvidence }, { text: string }];
-  'chat.searchTerms': [{question: string}, { text: string }];
+  'chat.ask': [ChatRequest & { paper: PaperEvidence; questionModel?: QuestionModel | null }, { text: string }];
+  'chat.searchTerms': [{question: string; questionModel?: QuestionModel | null}, { text: string }];
   'annotation.list': [{ docId: string }, { annotations: PaperAnnotation[] }];
   'annotation.save': [AnnotationSaveInput, { annotation: PaperAnnotation }];
   'annotation.delete': [{ docId: string; id: string; expectedUpdatedAt: string }, { deleted: boolean }];

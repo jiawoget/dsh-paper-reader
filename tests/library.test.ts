@@ -26,6 +26,9 @@ test('identical PDFs keep one identity and corrupt uploads do not appear in the 
   const bytes = Buffer.from('%PDF-1.7\nsample bytes for the storage layer');
   const first = await library.importPdf('before.pdf', bytes);
   assert.equal((await library.importPdf('after.pdf', bytes)).id, first.id);
+  const published = 'https://example.org/paper.pdf';
+  assert.equal((await library.importPdf('published.pdf', bytes, published)).url, published);
+  assert.equal((await new Library(root).get(first.id)).url, published);
   assert.deepEqual(await new Library(root).bytes(first.id), bytes);
   await assert.rejects(library.importPdf('bad.pdf', Buffer.from('no PDF header')));
   await assert.rejects(library.get('../private'));

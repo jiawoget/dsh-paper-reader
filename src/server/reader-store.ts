@@ -108,7 +108,8 @@ function entryFor(kind: EntryKind, input: Input, prior?: Entry, allowEmpty = fal
   };
 }
 
-export interface NotebookInput { settings: PrivateSettings; entries: Entries; filename: string | undefined }
+interface ZoteroSource { link: string; original: string }
+export interface NotebookInput { settings: PrivateSettings; entries: Entries; filename: string | undefined; zotero?: ZoteroSource }
 export interface NotebookChapter {
   id: string;
   title: string;
@@ -201,6 +202,19 @@ function storeEntry(db: DatabaseSync, kind: EntryKind, input: Input, importedId?
 export class NotebookRecords {
   constructor(private readonly db: DatabaseSync) {}
   get vault(): string { return settingsFor(this.db).vaultPath; }
+  zoteroSource(docId: string): ZoteroSource | undefined {
+    const settings = settingsFor(this.db);
+    const namespace = settings.zoteroMode === 'desktop' || !settings.zoteroLibraryId ? 'desktop/%/users/0' :
+      '/' + (settings.zoteroLibraryType === 'group' ? 'groups' : 'users') + '/' + settings.zoteroLibraryId;
+    const rows = this.db.prepare(`SELECT c.library,c.itemKey,COALESCE(s.original,'') AS original,COALESCE(s.webUrl,'') AS webUrl FROM citations c
+      LEFT JOIN zotero_sources s ON c.library=s.library AND c.itemKey=s.itemKey WHERE c.identity=? AND c.library LIKE ?`).all('document/' + docId, namespace);
+    if (rows.length !== 1) return;
+    const { library, itemKey } = rows[0];
+    if (typeof library !== 'string' || typeof itemKey !== 'string' || !/^[A-Z0-9]{8}$/.test(itemKey)) return;
+    const link = library.startsWith('desktop/') ? 'zotero://select/library/items/' + itemKey :
+      readColumn(rows[0], 'webUrl') || 'https://www.zotero.org' + library + '/items/' + itemKey;
+    return { link, original: readColumn(rows[0], 'original') };
+  }
   importChanges(run: () => void): void {
     this.db.exec('SAVEPOINT native_notes');
     try { run(); this.db.exec('RELEASE native_notes'); }
@@ -266,8 +280,8 @@ export class ReaderStore {
       const version = db.prepare('PRAGMA user_version').get()?.user_version;
       // The added tables are independent of the v2 schema. Older open readers can keep using their notes and history.
       const hasExtensions = version === 2 && db.prepare(
-        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures')"
-      ).get()?.n === 6;
+        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources')"
+      ).get()?.n === 7;
       if (version === 0 || version === 1 || version === 2 && !hasExtensions) {
         db.exec('BEGIN IMMEDIATE');
         if (version === 0) for (const sql of setupSql) db.exec(sql);
@@ -276,6 +290,7 @@ export class ReaderStore {
         db.exec('CREATE TABLE IF NOT EXISTS chat_exchanges(requestId TEXT PRIMARY KEY, docId TEXT NOT NULL, thread TEXT NOT NULL, exchange TEXT NOT NULL) STRICT');
         db.exec('CREATE INDEX IF NOT EXISTS chat_document ON chat_exchanges(docId,thread)');
         db.exec('CREATE TABLE IF NOT EXISTS zotero_authorizations(serverId TEXT PRIMARY KEY, apiKey TEXT NOT NULL) STRICT');
+        db.exec('CREATE TABLE IF NOT EXISTS zotero_sources(library TEXT NOT NULL,itemKey TEXT NOT NULL,original TEXT NOT NULL,webUrl TEXT NOT NULL,PRIMARY KEY(library,itemKey)) STRICT');
         db.exec(annotationSchema);
         db.exec('CREATE TABLE IF NOT EXISTS book_positions(docId TEXT PRIMARY KEY, updated INTEGER NOT NULL, place TEXT NOT NULL) STRICT');
         db.exec('CREATE TABLE IF NOT EXISTS pdf_outlines(docId TEXT PRIMARY KEY, contents TEXT NOT NULL) STRICT');
@@ -418,7 +433,7 @@ export class ReaderStore {
       if (!settings.vaultPath) throw new ServiceError(503, 'Set your Obsidian vault directory in Settings.');
       const row = db.prepare('SELECT filename FROM notebooks WHERE vault=? AND docId=?').get(settings.vaultPath, docId);
       const entries = collect(db.prepare('SELECT * FROM entries WHERE docId=? ORDER BY page,createdAt,rowid').iterate(docId));
-      const result = write({ settings, entries, filename: row && readColumn(row, 'filename') });
+      const result = write({ settings, entries, filename: row && readColumn(row, 'filename'), zotero: new NotebookRecords(db).zoteroSource(docId) });
       db.prepare('INSERT OR REPLACE INTO notebooks VALUES(?,?,?)').run(settings.vaultPath, docId, path.basename(result.path));
       return result;
     });
@@ -434,10 +449,11 @@ export class ReaderStore {
       return key;
     });
   }
-  linkDocument(library: string, docId: string, itemKey: string): void {
+  linkDocument(library: string, docId: string, itemKey: string, source?: { original: string; webUrl?: string }): void {
     this.#transaction(true, db => {
       db.prepare('INSERT INTO citations VALUES(?,?,?) ON CONFLICT(library,identity) DO UPDATE SET itemKey=excluded.itemKey')
         .run(library, 'document/' + docId, itemKey);
+      if (source) db.prepare('INSERT OR REPLACE INTO zotero_sources VALUES(?,?,?,?)').run(library, itemKey, source.original, source.webUrl || '');
     });
   }
   documentsForItem(library: string, itemKey: string): string[] {

@@ -141,8 +141,40 @@ await withHost(async host => {
       const reopened = chat.locator('.paper-answer:focus');
       await reopened.waitFor();
       assert.equal(await reopened.getAttribute('data-exchange-id'), replyId);
+      if (!live) {
+        await reader.goto(address);
+        if (!await field.isVisible()) await toggle.click();
+        const chooser = reader.getByRole('dialog', { name: 'Question model' });
+        const picker = chooser.getByRole('combobox', { name: 'Model', exact: true });
+        await chat.getByRole('button', { name: /^Question model/ }).click();
+        await picker.selectOption({ label: 'Reasoning model' });
+        await chooser.getByLabel('Reasoning effort').selectOption('high');
+        await chooser.getByRole('button', { name: 'Use model' }).click();
+        await chooser.waitFor({ state: 'hidden' });
+        await chat.getByRole('button', { name: /^Question model.*reasoner.*high/ }).waitFor();
+        await field.fill('Which model answers this whole-paper question?');
+        const response = reader.waitForResponse(response => response.url().endsWith('/action') &&
+          response.request().postDataJSON()?.op === 'chat.ask');
+        await field.press('Enter');
+        const reply = await response;
+        assert.ok(reply.ok(), await reply.text());
+        assert.equal((await reply.json()).text, 'reader-test / reasoner / high');
+        await answers.filter({ hasText: 'reader-test / reasoner / high' }).waitFor();
+        await reader.reload();
+        await selectedWord(reader);
+        await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
+        await card.getByRole('button', { name: /^Question model.*reasoner.*high/ }).click();
+        await picker.selectOption({ label: 'Plain model' });
+        assert.ok(await chooser.getByLabel('Reasoning effort').isHidden());
+        await chooser.getByRole('button', { name: 'Use model' }).click();
+        await chooser.waitFor({ state: 'hidden' });
+        await localInput.fill('Which model answers this passage question?');
+        await localInput.press('Enter');
+        await card.locator('.selection-answer').filter({ hasText: 'reader-test / plain / default' }).waitFor();
+        console.log('Verified DSH catalog selection, reasoning effort, reload, and switching to a model without reasoning controls.');
+      }
       console.log('Verified page-12 table grounding from imported page 2, opt-in attachment, whole-paper follow-up, passage history, resize and per-paper restoration (' +
         (live ? 'live DSH model' : 'grounding-checked model fixture') + ').');
     }
   } finally { await browser.close(); }
-}, {}, { installedModelProfile: live });
+}, {}, { installedModelProfile: live, modelFixture: !live });

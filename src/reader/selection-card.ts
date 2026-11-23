@@ -180,6 +180,7 @@ export class SelectionCard {
     card.replaceChildren();
     card.removeAttribute('style');
     delete card.dataset.docked;
+    delete card.dataset.gutter;
     delete card.dataset.workspace;
     delete card.dataset.preview;
     byId('selectionDock').hidden = true;
@@ -195,6 +196,7 @@ export class SelectionCard {
     card.removeAttribute('style');
     if (docked) {
       card.dataset.docked = 'true';
+      delete card.dataset.gutter;
       container.hidden = false;
       container.append(card);
       const pane = byId(byId('reader').dataset.compactLanguage === 'translation' ? 'translated' : 'original');
@@ -486,7 +488,7 @@ export class SelectionCard {
       if (card.dataset.docked && entries.some(entry => entry.target === paper)) this.revealIn(visiblePane());
       else this.fit?.();
     });
-    resize.observe(main); resize.observe(paper);
+    resize.observe(card); resize.observe(main); resize.observe(paper);
     paper.addEventListener('scroll', () => this.fit?.(), { signal, passive: true });
     window.addEventListener('resize', () => this.fit?.(), { signal });
     window.visualViewport?.addEventListener('resize', () => this.fit?.(), { signal });

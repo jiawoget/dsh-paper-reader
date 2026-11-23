@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,7 @@ function ready(child: ChildProcessWithoutNullStreams): Promise<string> {
 }
 
 export async function withHost<T>(callback: (host: HostFixture) => Promise<T>, environment: NodeJS.ProcessEnv = {},
-  options: { installedModelProfile?: boolean } = {}): Promise<T> {
+  options: { installedModelProfile?: boolean; modelFixture?: boolean } = {}): Promise<T> {
   const native = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'node-v26.13.1-win-x64');
   const dsh = installed('Set DSH_ENTRY to the installed DSH lib/bin.js.', [process.env.DSH_ENTRY,
     path.join(path.dirname(process.execPath), 'node_modules/@deepseek-ai/dsh/lib/bin.js'),
@@ -54,7 +54,14 @@ export async function withHost<T>(callback: (host: HostFixture) => Promise<T>, e
   await mkdir(artifacts, { recursive: true });
   const processEnv: NodeJS.ProcessEnv = { ...process.env, ...environment, PAPER_READER_HOME: path.join(scratch, 'reader') };
   if (!options.installedModelProfile) processEnv.DSH_HOME = path.join(scratch, 'dsh');
-  const child = spawn(process.execPath, [dsh, 'web', '--patch', path.join(project, 'paper-reader.patch.yml'),
+  const overlays = ['--patch', path.join(project, 'paper-reader.patch.yml')];
+  if (options.modelFixture) {
+    const patch = path.join(scratch, 'model-fixture.yml');
+    const plugin = path.join(project, 'tests/e2e/question-model-fixture.mjs');
+    await writeFile(patch, JSON.stringify([{ insert: [{ id: 'reader-model-fixture', name: plugin }] }]));
+    overlays.push('--patch', patch);
+  }
+  const child = spawn(process.execPath, [dsh, 'web', ...overlays,
     '--host', '127.0.0.1', '--port', '0', '--no-open'], { cwd: project, env: processEnv, windowsHide: true });
   try {
     const authenticatedUrl = await ready(child);

@@ -29,6 +29,7 @@ export function positionPassageCard(card: HTMLElement, selection: DOMRect): void
   const w = card.offsetWidth, h = card.offsetHeight;
   const leading = selection.left < original.left + original.width / 2;
   const useLeft = gutterLeft >= w && (leading || gutterRight < w);
+  card.dataset.gutter = useLeft ? 'left' : 'right';
   card.style.left = (useLeft ? original.left - w - inset : original.right + inset) + 'px';
   card.style.top = clamp(selection.top, top, bottom - h) + 'px';
 }

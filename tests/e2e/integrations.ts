@@ -4,6 +4,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { NotebookSnapshot } from '../../src/shared/types.js';
 import { withNativeNotebook } from './native-notebook.js';
+import { markdownLinks, vaultSource, visibleMarkdown } from './vault-links.js';
 import { chromium, type BrowserContext, type FrameLocator, type Locator, type Page, type Route } from 'playwright-core';
 import { openReader, withHost, type HostFixture } from './host.js';
 import { modelFixture, zoteroFixture } from './integration-fixtures.js';
@@ -69,8 +70,11 @@ async function connections(session: ReaderSession, fixture: Awaited<ReturnType<t
 
 async function zotero(session: ReaderSession, fixture: Awaited<ReturnType<typeof zoteroFixture>>): Promise<void> {
   const { host, page, pane } = session;
+  const vault = path.join(host.scratch, 'Zotero-linked reading');
+  await mkdir(vault);
   await pane.getByRole('tab', { name: 'Reference' }).click();
   await pane.getByRole('button', { name: 'Connection settings' }).click();
+  await pane.getByLabel('Obsidian vault folder').fill(vault);
   await pane.getByRole('dialog').getByRole('combobox', { name: /Zotero connection/ }).selectOption('web');
   await pane.getByLabel('Library type').selectOption('group');
   await pane.getByLabel('Zotero library ID').fill(fixture.libraryId);
@@ -100,6 +104,25 @@ async function zotero(session: ReaderSession, fixture: Awaited<ReturnType<typeof
   assert.ok(await pane.getByLabel('Attention mechanisms').isChecked());
   assert.equal(fixture.counts().updates, 1);
   assert.equal(fixture.counts().creates, 0);
+  const notebook = { docId: 'pagedattention', title: 'PagedAttention.pdf', page: 6,
+    sourceUrl: host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6' };
+  const endpoint = host.origin + '/api/paper-reader/action';
+  const note = await session.context.request.post(endpoint, { data: { op: 'note.save', payload: { ...notebook,
+    anchor: 'block-tables', label: 'Block tables', quote: 'block tables', text: 'Compare the allocation scheme.', insert: true } } });
+  assert.ok(note.ok());
+  const exported = await session.context.request.post(endpoint, { data: { op: 'obsidian.export', payload: notebook } });
+  assert.ok(exported.ok());
+  const file: string = (await exported.json()).path;
+  assert.equal(path.dirname(file), path.join(vault, 'Paper Reader'));
+  const markdown = visibleMarkdown(await readFile(file, 'utf8'));
+  const links = markdownLinks(markdown);
+  const citation = links.findIndex(link => link.label === 'Page 6 · Block tables');
+  assert.ok(citation >= 0 && markdown.includes('Compare the allocation scheme.'));
+  assert.equal(links[citation].target, 'https://arxiv.org/abs/2309.06180');
+  const copy = vaultSource(vault, file, links[citation + 1].target);
+  assert.equal(copy.fragment, 'page=6');
+  assert.ok((await readFile(copy.file)).subarray(0, 5).equals(Buffer.from('%PDF-')));
+  assert.deepEqual(links[citation + 2], { label: 'Zotero', target: fixture.alternate });
   await page.mouse.move(4, 4);
   await page.screenshot({ path: path.join(host.artifacts, '07-zotero.png') });
   const seed = await session.context.request.post(host.origin + '/api/paper-reader/action', { data: {
@@ -192,8 +215,20 @@ async function obsidian({host, page, pane, context}: ReaderSession): Promise<voi
   const file = connected.path;
   assert.ok(file && path.dirname(file) === path.join(vault, 'Paper Reader'));
   const initialDisk = await readFile(file, 'utf8');
-  assert.equal(initialDisk, local.markdown);
-  const link = [...initialDisk.matchAll(/\]\(<(https?:\/\/[^>]+)>\)/g)].map(match => new URL(match[1]))
+  assert.equal(connected.markdown, local.markdown);
+  const rendered = visibleMarkdown(initialDisk);
+  for (const line of [annotation, 'Compare paging with contiguous allocation.', 'Track block reuse between requests.', '## Reading journal']) {
+    assert.ok(rendered.includes(line));
+  }
+  const citations = markdownLinks(rendered);
+  const cited = citations.findIndex(link => link.label === 'Page 6 · Left column');
+  assert.ok(cited >= 0);
+  assert.equal(citations[cited].target, 'https://arxiv.org/abs/2309.06180');
+  assert.equal(citations[cited + 1].label, 'Library copy');
+  const copy = vaultSource(vault, file, citations[cited + 1].target);
+  assert.equal(copy.fragment, 'page=6');
+  assert.deepEqual(await readFile(copy.file), await readFile(new URL('../../public/assets/pagedattention.pdf', import.meta.url)));
+  const link = markdownLinks(connected.markdown).map(cite => new URL(cite.target))
     .find(url => url.searchParams.get('anchor') === 'block-tables');
   assert.ok(link);
   assert.equal(link.searchParams.get('page'), '6');
@@ -256,6 +291,7 @@ async function obsidian({host, page, pane, context}: ReaderSession): Promise<voi
     await pane.getByText('Saved to vault', {exact: true}).waitFor();
     disk = await waitForTextOnDisk(file, '**Retained evidence**');
     assert.ok(disk.includes('<!-- paper-reader:source ' + ids[1] + ' -->'));
+    assert.deepEqual(markdownLinks(visibleMarkdown(disk)), citations);
     assert.deepEqual((await notebook()).notes.map(note => note.id), ids.slice(0, 2));
     await writeFile(path.join(reviews, 'vault-roundtrip.md'), disk);
     if (native) console.log('PASS actual Obsidian: the isolated installed app read Chrome edits, wrote a competing edit and received the resolved notebook.');

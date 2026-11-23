@@ -7,6 +7,7 @@ type SidebarPosition = 'left' | 'right' | 'float';
 type HighlightDisplay = 'inline' | 'separate';
 interface DeskSettings {
   proportion?: number;
+  previewHeight?: number;
   notebookWidth?: number;
   notebookDock?: SidebarPosition;
   highlightDisplay?: HighlightDisplay;
@@ -128,6 +129,10 @@ export class ReadingDesk {
     byId('originalMode').setAttribute('aria-pressed', String(!bilingual));
     byId('parallel').setAttribute('aria-pressed', String(bilingual));
     this.applyNotebook();
+    const previewHeight = this.settings.previewHeight;
+    if (typeof previewHeight === 'number' && Number.isFinite(previewHeight)) {
+      this.root.style.setProperty('--preview-height', previewHeight + 'px');
+    } else this.root.style.removeProperty('--preview-height');
     const proportion = clamp(this.settings.proportion ?? (focus === 'page' ? .5 : .62), .25, .76);
     this.root.style.setProperty('--source-track', proportion + 'fr');
     this.root.style.setProperty('--target-track', (1 - proportion) + 'fr');
@@ -214,7 +219,18 @@ export class ReadingDesk {
     const paper = byId('paperScroll');
     const resize = new ResizeObserver(() => this.root.style.setProperty('--paper-height', paper.clientHeight + 'px'));
     resize.observe(paper);
-    new ResizeObserver(() => this.placeFloat()).observe(byId('selectionDock'));
+    const dock = byId('selectionDock'), previewGrip = byId('passageSplit');
+    previewGrip.ariaLabel = previewGrip.title = label('Resize passage preview', '调整选段窗口高度');
+    const maxPreviewHeight = () => Math.max(64, Math.floor(innerHeight * .65));
+    new ResizeObserver(() => {
+      this.placeFloat();
+      previewGrip.setAttribute('aria-valuemin', '64');
+      previewGrip.setAttribute('aria-valuemax', String(maxPreviewHeight()));
+      previewGrip.setAttribute('aria-valuenow', String(dock.offsetHeight));
+    }).observe(dock);
+    this.split(previewGrip, (change, reset) => {
+      this.settings.previewHeight = reset ? undefined : clamp(dock.offsetHeight - change, 64, maxPreviewHeight());
+    });
     window.addEventListener('resize', () => this.apply());
     const viewport = window.visualViewport;
     if (viewport) {
@@ -332,8 +348,8 @@ export class ReadingDesk {
       const [decrease, increase] = horizontal() ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
       if (![decrease, increase, 'Home', 'End'].includes(event.key)) return;
       event.preventDefault(); event.stopPropagation();
-      const distance = event.key === 'Home' || event.key === 'End' ? window.innerWidth : event.shiftKey ? 60 : 20;
-      const reversed = grip.id === 'notesSplit' && this.pose === 'right';
+      const distance = event.key === 'Home' || event.key === 'End' ? (horizontal() ? innerHeight : innerWidth) : event.shiftKey ? 60 : 20;
+      const reversed = grip.id === 'passageSplit' || (grip.id === 'notesSplit' && this.pose === 'right');
       adjust(event.key === decrease || event.key === (reversed ? 'End' : 'Home') ? -distance : distance, false);
       this.applyKeepingPage(); this.save();
     });

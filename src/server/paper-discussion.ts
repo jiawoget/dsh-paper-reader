@@ -43,7 +43,7 @@ export class PaperDiscussions {
         question: turn.question.slice(0, 4000), answer: turn.answer.slice(0, 6000), passage: turn.source?.selected.slice(0, 1500), page: turn.source?.page
       }));
       const paper = evidence(input.paper);
-      const reply = await this.model.paper(this.store.settings(), paper, history, request);
+      const reply = await this.model.paper(this.store.settings(), paper, history, request, input.questionModel);
       return { ...reply, coverage: { pageCount: paper.pageCount, pagesUsed: new Set(paper.excerpts.map(e => e.page)).size, partial: paper.partial } };
     });
   }

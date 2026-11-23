@@ -540,6 +540,48 @@
   border-top: 1px solid var(--line);
   background: var(--paper);
 }
+#passageSplit { display: none; }
+#selectionDock:has(> #card:not([data-workspace])) {
+  display: flex;
+  flex-direction: column;
+  height: var(--preview-height, auto);
+  max-height: 65dvh;
+  overflow: hidden;
+}
+#selectionDock:has(> #card:not([data-workspace])) > #passageSplit {
+  display: grid;
+  place-items: center;
+  flex: 0 0 12px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+#passageSplit::after {
+  content: "";
+  width: 42px;
+  height: 3px;
+  border-radius: 2px;
+  background: #c6c1ce;
+}
+#passageSplit:is(:hover, :focus-visible)::after { background: var(--purple); }
+#selectionDock > #card:not([data-workspace]) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: var(--preview-height, min(32dvh, 235px));
+  overflow: auto;
+}
+#selectionDock > #card:not([data-workspace]) > .selection-main {
+  max-height: none;
+  overflow: visible;
+}
+#selectionDock > #card:not([data-workspace]) .word-head { position: static; }
+#card[data-selection]:not([data-docked]) {
+  resize: both;
+  min-width: min(200px, var(--window-max-width));
+  min-height: min(80px, var(--window-max-height));
+}
+#card[data-gutter="left"] { direction: rtl; }
+#card[data-gutter="left"] > .selection-main { direction: ltr; }
 #card[data-docked="true"] {
   position: static;
   display: grid;
@@ -707,8 +749,11 @@
   }
   #card[data-docked="true"] > .selection-main { max-height: min(24dvh, 172px); }
   #card[data-docked="true"]:not([data-workspace]) > .selection-main { max-height: min(35dvh, 280px); }
+  #selectionDock > #card:not([data-workspace]) {
+    max-height: var(--preview-height, min(35dvh, 280px));
+  }
   #card[data-preview="translation"]:not([data-workspace]) .passage-counterpart :is(.meaning, .selection-context) {
-    max-height: min(13dvh, 104px);
+    max-height: var(--preview-height, min(13dvh, 104px));
     overflow: auto;
     overscroll-behavior: contain;
     font-size: 14px;

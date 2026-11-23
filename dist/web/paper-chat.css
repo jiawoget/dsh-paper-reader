@@ -55,6 +55,15 @@
 .paper-chat-attachment span { flex:none; font-weight:600; color:#654c83; }
 .paper-chat-attachment q { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:#4c596a; }
 .paper-chat-attachment .icon-btn { min-width:20px; height:20px; }
+.paper-chat-attachment .question-model-trigger, #card .chat-heading .question-model-trigger {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0;
+  max-width: 48%; padding: 4px; font-size: 11px; color: var(--purple);
+}
+.question-model-trigger svg { flex: none; }
+.paper-chat-attachment .question-model-trigger span, #card .question-model-trigger span {
+  flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500;
+}
+.question-model-form .hint:empty { display: none; }
 .paper-chat-notice { flex:none; flex-wrap:wrap; gap:2px 8px; padding:3px 12px; background:#f5f0fb; font-size:11px; }
 .paper-chat-notice .text-btn { padding:0; }
 .zotero-connection { border:1px solid var(--line); background:#f8f9fc; border-radius:7px; padding:9px 10px; margin:7px 0 12px; }

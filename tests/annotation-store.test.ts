@@ -38,6 +38,7 @@ test('paper-scoped highlights and margin pins survive reopening without touching
   await act('settings.save', { vaultPath });
   const initial = await act('notebook.get', paper);
   assert.ok(initial.path);
+  const initialFile = await readFile(initial.path, 'utf8');
   const mark = { ...highlight, id: randomUUID() };
   const pin = { ...mark, id: randomUUID(), kind: 'pin', color: 'purple', point: { x: 0, y: 1 }, quote: '', text: 'Where is block 7?' };
   const saved = (await act('annotation.save', mark)).annotation;
@@ -51,7 +52,7 @@ test('paper-scoped highlights and margin pins survive reopening without touching
   await assert.rejects(reopen('annotation.save', { ...pin, docId: 'other' }), { status: 409 });
   assert.deepEqual(await reopen('annotation.delete', { id: pin.id, docId: 'other', expectedUpdatedAt: savedPin.updatedAt }), { deleted: false });
   await reopen('annotation.delete', { id: pin.id, docId: pin.docId, expectedUpdatedAt: savedPin.updatedAt });
-  assert.equal(await readFile(initial.path, 'utf8'), initial.markdown);
+  assert.equal(await readFile(initial.path, 'utf8'), initialFile);
   assert.deepEqual((await reopen('state')).notes, []);
   assert.equal((await reopen('notebook.get', paper)).revision, initial.revision);
 });

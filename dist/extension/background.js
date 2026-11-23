@@ -26,7 +26,7 @@
     if (anchor) url.searchParams.set("anchor", anchor);
     return url.href;
   }
-  var extensionActions = ["ai", "history.add", "web.import", "web.open", "vocab.save", "note.save"];
+  var extensionActions = ["ai", "ai.models", "ai.selectModel", "history.add", "web.import", "web.open", "vocab.save", "note.save"];
   function errorText(error) {
     return error instanceof Error ? error.message : String(error);
   }

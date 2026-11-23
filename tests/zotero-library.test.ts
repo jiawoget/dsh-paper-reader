@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -84,6 +84,14 @@ test('open uses the PDF Zotero actually attached and restores a previous reading
   assert.equal(reopened.doc.id, opened.doc.id);
   assert.equal(fileReads, 1);
   assert.equal((await act('state')).notes.find(note => note.docId === reopened.doc.id)?.text, 'Read this again.');
+  const vaultPath = path.join(root, 'Vault');
+  await mkdir(vaultPath);
+  await act('settings.save', { vaultPath });
+  const file = await act('obsidian.export', { docId: opened.doc.id, title: opened.doc.title });
+  const exported = await readFile(file.path, 'utf8');
+  assert.match(exported, /https:\/\/example\.org\/article/);
+  assert.ok(exported.includes('zotero://select/library/items/' + parent));
+  assert.doesNotMatch(exported, /127\.0\.0\.1|localhost/);
   instanceId = 'desktopB';
   await assert.rejects(act('zotero.open', { key: parent, library }), { status: 409 });
   await assert.rejects(act('zotero.collections', { library }), { status: 409 });

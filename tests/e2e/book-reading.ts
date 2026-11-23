@@ -10,6 +10,7 @@ import { bookRoot, bookTitle, chapters, cmsDetailPath, cmsPath, fixtureBlog, fix
 import { openToolbar, until } from './extension-controls.js';
 import { withHost, type HostFixture } from './host.js';
 import { withNativeNotebook } from './native-notebook.js';
+import { markdownLinks, vaultSource, visibleMarkdown } from './vault-links.js';
 
 const live = process.argv.includes('--live');
 const evidence = process.argv.includes('--evidence');
@@ -216,7 +217,7 @@ async function captureExtension(context: BrowserContext, host: HostFixture, url:
   return page;
 }
 
-async function verifyVault(vault: string, doc: string, pages: number[], passages: typeof fixturePassages) {
+async function verifyVault(vault: string, passages: typeof fixturePassages) {
   const root = path.join(vault, 'Paper Reader');
   const files = (await readdir(root, { recursive: true })).filter(file => file.endsWith('.md'));
   const notebooks = await Promise.all(files.map(async relative => ({ relative, file: path.join(root, relative),
@@ -232,18 +233,26 @@ async function verifyVault(vault: string, doc: string, pages: number[], passages
   assert.ok(path.basename(second.file).includes('Corporate Structure and Governance'));
   assert.ok(first.markdown.includes(bookNotes[1]));
   assert.ok(!second.markdown.includes(bookNotes[0]) && !second.markdown.includes(bookNotes[1]));
-  const links = [first, first, second].map((item, index) => {
+  const links = await Promise.all([first, first, second].map(async (item, index) => {
     const quote = [passages.first, passages.second, passages.otherChapter][index];
     const section = [sections.first, sections.second, sections.otherChapter][index];
-    const link = [...item.markdown.matchAll(/\[([^\]\n]+)\]\(<(https?:\/\/[^>]+)>\)/g)].map(match => ({ label: match[1], url: new URL(match[2]) }))
-      .find(link => link.url.searchParams.get('quote') === quote);
-    assert.ok(link && link.url.searchParams.get('anchor'), 'Each chapter note must link to its actual section paragraph.');
-    assert.equal(link.url.searchParams.get('doc'), doc);
-    assert.equal(link.url.searchParams.get('page'), String(pages[index]));
-    assert.equal(link.label.split(section.title).length, 2, 'The backlink label must name the actual section once.');
-    assert.ok(link.label.startsWith(section.title), 'A book backlink should begin with the publisher section title.');
-    return link.url;
-  });
+    const destinations = markdownLinks(visibleMarkdown(item.markdown));
+    const i = destinations.findIndex(link => link.label.startsWith(section.title));
+    assert.ok(i >= 0, 'A citation must name the publisher section where the note was made.');
+    const publisher = new URL(destinations[i].target);
+    assert.equal(publisher.origin + publisher.pathname, bookRoot + section.slug);
+    assert.ok(publisher.hash, 'The publisher link must locate the cited passage.');
+    if (!live) assert.equal(publisher.hash, ['#example-6', '#example-8', '#example-6'][index]);
+    const copy = destinations[i + 1];
+    assert.equal(copy?.label, 'Library copy');
+    const { file, fragment } = vaultSource(vault, item.file, copy.target);
+    assert.match(fragment, /^\^p-\d+$/u);
+    const text = await readFile(file, 'utf8');
+    assert.ok(text.split('\n').some(line => line.endsWith(' ' + fragment) && line.includes(quote)),
+      'The vault copy must locate the quoted paragraph without loading the reader or publisher.');
+    return { publisher, copy: copy.target, file };
+  }));
+  assert.equal(new Set(links.map(link => link.file)).size, 3, 'Each section has its own captured source.');
   return { first, second, links };
 }
 
@@ -264,7 +273,7 @@ async function savedProgress(page: Page, host: HostFixture, docId: string) {
   return response.json();
 }
 
-async function bookJourney(host: HostFixture, vault: string, trace: ReturnType<typeof traceBook>) {
+async function bookJourney(host: HostFixture, vault: string, trace: ReturnType<typeof traceBook>, fixtureOrigin?: string) {
   const passages = live ? livePassages : fixturePassages;
   const context = await launch(host, 'book-chrome');
   let saved: Awaited<ReturnType<typeof verifyVault>>;
@@ -326,7 +335,8 @@ async function bookJourney(host: HostFixture, vault: string, trace: ReturnType<t
     await saveNote(page, passages.otherChapter, bookNotes[2]);
     assert.match(await chapterTitle(page).innerText(), /Corporate Structure and Governance/);
     assert.equal(await noteLine(page, bookNotes[0]).count(), 0);
-    saved = await verifyVault(vault, bookId, [first.number, second.number, chapterTwo.number], passages);
+    assert.equal(chapterTwo.doc, bookId);
+    saved = await verifyVault(vault, passages);
     const chapterUri = await page.getByRole('link', { name: 'Open in Obsidian', exact: true }).getAttribute('href');
     assert.ok(chapterUri);
     assert.equal(new URL(chapterUri).searchParams.get('path'), saved.second.file);
@@ -421,9 +431,9 @@ async function bookJourney(host: HostFixture, vault: string, trace: ReturnType<t
     await original(page).locator('.is-located').filter({ hasText: passages.second }).waitFor();
     await trace.expect('Click cross-section notebook source chip', []);
 
-    let activated = saved.links[0].href;
+    let activated = saved.links[0].publisher.href;
     let nativeVerified = false;
-    if (live) await withNativeNotebook(host.scratch, vault, saved.second.file, async native => {
+    await withNativeNotebook(host.scratch, vault, saved.second.file, async native => {
       if (!native) return;
       const tree = native.locator('.nav-files-container');
       for (const folder of ['Paper Reader', 'principles-finance']) {
@@ -441,26 +451,40 @@ async function bookJourney(host: HostFixture, vault: string, trace: ReturnType<t
       await link.waitFor();
       // Observe native link activation without opening the machine's default browser or profile.
       await link.evaluate(element => element.addEventListener('click', event => {
-        event.preventDefault(); event.stopImmediatePropagation(); document.documentElement.dataset.activatedReaderLink = (element as HTMLAnchorElement).href;
+        event.preventDefault(); event.stopImmediatePropagation(); document.documentElement.dataset.activatedPublisherLink = (element as HTMLAnchorElement).href;
       }, { capture: true, once: true }));
       await link.click();
-      activated = await native.locator('html').getAttribute('data-activated-reader-link') ?? '';
-      assert.equal(activated, saved.links[0].href);
-      nativeVerified = true;
+      activated = await native.locator('html').getAttribute('data-activated-publisher-link') ?? '';
+      assert.equal(activated, saved.links[0].publisher.href);
       await screenshot(host, native, 'obsidian-chapter');
+      await link.locator('xpath=ancestor::p[1]').getByRole('link', { name: 'Library copy', exact: true }).click();
+      const active = native.locator('.workspace-leaf.mod-active');
+      await active.locator('.view-header-title').getByText(path.basename(saved.links[0].file, '.md'), { exact: true }).waitFor();
+      await active.getByText(passages.first, { exact: false }).filter({ visible: true }).first().waitFor();
+      nativeVerified = true;
     });
     const reopened = await fresh.newPage();
+    if (fixtureOrigin) await reopened.route(bookRoot + '**', async route => {
+      const response = await fresh.request.get(fixtureOrigin + new URL(route.request().url()).pathname,
+        { headers: { 'x-reader-e2e-original-url': route.request().url() } });
+      await route.fulfill({ response });
+    });
     await reopened.goto(activated, { waitUntil: 'domcontentloaded' });
-    await activeSection(reopened, sections.first);
-    await original(reopened).locator('.is-located').filter({ hasText: passages.first }).waitFor();
-    await trace.expect('Follow actual vault file backlink to exact source', []);
+    const fragment = decodeURIComponent(saved.links[0].publisher.hash.slice(1));
+    if (fragment.startsWith(':~:text=')) {
+      assert.ok(fragment.includes(passages.first));
+      await reopened.getByText(passages.first, {exact: false}).first().waitFor();
+    } else {
+      assert.ok((await reopened.locator('[id=' + JSON.stringify(fragment) + ']').innerText()).includes(passages.first));
+    }
+    await trace.expect('Follow vault citation directly to the original publisher paragraph', []);
     if (evidence) await writeFile(path.join(evidenceDir(host), runName + '-vault-and-resume.json'), JSON.stringify({
       tocSections, farPage, chapters: [saved.first.relative, saved.second.relative], nativeVerified,
       resumeAnchor: bookAnchor, resumeParagraph: passages.resume, originalPosition: beforeTop, restoredPosition: restoredTop,
-      backlinks: saved.links.map(link => Object.fromEntries(link.searchParams))
+      backlinks: saved.links.map(link => ({ original: link.publisher.href, copy: link.copy }))
     }, null, 2) + '\n');
     console.log('PASS ' + runName + ' book: stable identity, per-section loading, fresh-profile paragraph resume, chapter files, and source backlinks.' +
-      (nativeVerified ? ' The installed Obsidian app activated the first chapter link.' : ''));
+      (nativeVerified ? ' Obsidian opened the vault copy and exposed the matching publisher passage link.' : ''));
   } finally { await fresh.close(); }
 }
 
@@ -562,7 +586,7 @@ try {
       if (evidence) await mkdir(evidenceDir(host), { recursive: true });
       const trace = traceBook(filename);
       try {
-        if (!process.argv.includes('--blog-only')) await bookJourney(host, vault, trace);
+        if (!process.argv.includes('--blog-only')) await bookJourney(host, vault, trace, fixture?.origin);
         if (!process.argv.includes('--book-only')) await blogJourney(host);
       } finally {
         if (evidence) await writeFile(path.join(evidenceDir(host), runName + '-publisher-requests.json'), JSON.stringify({

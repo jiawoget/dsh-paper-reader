@@ -46911,6 +46911,7 @@ function positionPassageCard(card, selection) {
   const w2 = card.offsetWidth, h3 = card.offsetHeight;
   const leading = selection.left < original.left + original.width / 2;
   const useLeft = gutterLeft >= w2 && (leading || gutterRight < w2);
+  card.dataset.gutter = useLeft ? "left" : "right";
   card.style.left = (useLeft ? original.left - w2 - inset : original.right + inset) + "px";
   card.style.top = clamp2(selection.top, top2, bottom - h3) + "px";
 }
@@ -50769,6 +50770,10 @@ var ReadingDesk = class {
     byId("originalMode").setAttribute("aria-pressed", String(!bilingual));
     byId("parallel").setAttribute("aria-pressed", String(bilingual));
     this.applyNotebook();
+    const previewHeight = this.settings.previewHeight;
+    if (typeof previewHeight === "number" && Number.isFinite(previewHeight)) {
+      this.root.style.setProperty("--preview-height", previewHeight + "px");
+    } else this.root.style.removeProperty("--preview-height");
     const proportion = clamp3(this.settings.proportion ?? (focus === "page" ? 0.5 : 0.62), 0.25, 0.76);
     this.root.style.setProperty("--source-track", proportion + "fr");
     this.root.style.setProperty("--target-track", 1 - proportion + "fr");
@@ -50862,7 +50867,18 @@ var ReadingDesk = class {
     const paper = byId("paperScroll");
     const resize = new ResizeObserver(() => this.root.style.setProperty("--paper-height", paper.clientHeight + "px"));
     resize.observe(paper);
-    new ResizeObserver(() => this.placeFloat()).observe(byId("selectionDock"));
+    const dock = byId("selectionDock"), previewGrip = byId("passageSplit");
+    previewGrip.ariaLabel = previewGrip.title = readerLabel("Resize passage preview", "\u8C03\u6574\u9009\u6BB5\u7A97\u53E3\u9AD8\u5EA6");
+    const maxPreviewHeight = () => Math.max(64, Math.floor(innerHeight * 0.65));
+    new ResizeObserver(() => {
+      this.placeFloat();
+      previewGrip.setAttribute("aria-valuemin", "64");
+      previewGrip.setAttribute("aria-valuemax", String(maxPreviewHeight()));
+      previewGrip.setAttribute("aria-valuenow", String(dock.offsetHeight));
+    }).observe(dock);
+    this.split(previewGrip, (change, reset) => {
+      this.settings.previewHeight = reset ? void 0 : clamp3(dock.offsetHeight - change, 64, maxPreviewHeight());
+    });
     window.addEventListener("resize", () => this.apply());
     const viewport = window.visualViewport;
     if (viewport) {
@@ -50991,8 +51007,8 @@ var ReadingDesk = class {
       if (![decrease, increase, "Home", "End"].includes(event.key)) return;
       event.preventDefault();
       event.stopPropagation();
-      const distance = event.key === "Home" || event.key === "End" ? window.innerWidth : event.shiftKey ? 60 : 20;
-      const reversed = grip.id === "notesSplit" && this.pose === "right";
+      const distance = event.key === "Home" || event.key === "End" ? horizontal() ? innerHeight : innerWidth : event.shiftKey ? 60 : 20;
+      const reversed = grip.id === "passageSplit" || grip.id === "notesSplit" && this.pose === "right";
       adjust(event.key === decrease || event.key === (reversed ? "End" : "Home") ? -distance : distance, false);
       this.applyKeepingPage();
       this.save();
@@ -51004,6 +51020,135 @@ var ReadingDesk = class {
     });
   }
 };
+
+// src/shared/question-model-form.ts
+function questionModelForm({ label: label2, defaultName, load, save }) {
+  const form = document.createElement("form");
+  form.className = "question-model-form";
+  const field = (caption) => {
+    const row = document.createElement("label"), title = document.createElement("span"), select = document.createElement("select");
+    row.className = "field";
+    title.textContent = caption;
+    row.append(title, select);
+    form.append(row);
+    return { row, select };
+  };
+  const model = field(label2("Model", "\u6A21\u578B")), effort = field(label2("Reasoning effort", "\u63A8\u7406\u5F3A\u5EA6"));
+  const status = document.createElement("p");
+  status.className = "hint";
+  status.setAttribute("role", "status");
+  const apply = document.createElement("button"), retry = document.createElement("button");
+  apply.type = "submit";
+  apply.className = "btn primary";
+  apply.textContent = label2("Use model", "\u4F7F\u7528\u6B64\u6A21\u578B");
+  retry.type = "button";
+  retry.className = "text-btn";
+  retry.textContent = label2("Reload models", "\u91CD\u65B0\u52A0\u8F7D\u6A21\u578B");
+  form.append(status, retry, apply);
+  const options = /* @__PURE__ */ new Map();
+  const key2 = (provider, id2) => JSON.stringify([provider, id2]);
+  const fallback = label2("Reader default", "\u9605\u8BFB\u5668\u9ED8\u8BA4\u6A21\u578B") + (defaultName ? " \xB7 " + defaultName : "");
+  function efforts(selected) {
+    const reasoning = options.get(model.select.value)?.model.reasoning;
+    effort.select.replaceChildren(new Option(label2("Model default", "\u6A21\u578B\u9ED8\u8BA4") + (reasoning?.defaultEffort ? " \xB7 " + (reasoning.efforts.find((e2) => e2.id === reasoning.defaultEffort)?.name || reasoning.defaultEffort) : ""), ""));
+    for (const item of reasoning?.efforts ?? []) effort.select.add(new Option(item.name || item.id, item.id));
+    effort.row.hidden = !reasoning?.efforts.length;
+    if (selected && Array.from(effort.select.options).some((o5) => o5.value === selected)) effort.select.value = selected;
+    else if (selected && options.has(model.select.value)) {
+      status.textContent = label2("The saved effort is unavailable. Choose a new effort or use the model default.", "\u5DF2\u4FDD\u5B58\u7684\u63A8\u7406\u5F3A\u5EA6\u4E0D\u53EF\u7528\uFF0C\u53EF\u91CD\u65B0\u9009\u62E9\u6216\u4F7F\u7528\u6A21\u578B\u9ED8\u8BA4\u503C\u3002");
+    }
+  }
+  model.select.onchange = () => {
+    apply.disabled = false;
+    efforts();
+  };
+  async function loadModels() {
+    model.select.disabled = apply.disabled = true;
+    retry.hidden = effort.row.hidden = true;
+    options.clear();
+    model.select.replaceChildren(new Option(fallback, ""));
+    status.textContent = label2("Loading DSH models\u2026", "\u6B63\u5728\u52A0\u8F7D DSH \u6A21\u578B\u2026");
+    try {
+      const { groups, selected, failures } = await load();
+      for (const group of groups) {
+        const groupNode = document.createElement("optgroup");
+        groupNode.label = group.name || group.id;
+        for (const entry of group.models) {
+          const id2 = key2(group.id, entry.id);
+          options.set(id2, { model: entry, selection: { provider: group.id, model: entry.id } });
+          groupNode.append(new Option(entry.name || entry.id, id2));
+        }
+        model.select.append(groupNode);
+      }
+      status.textContent = failures.length ? label2("Unavailable providers", "\u6682\u4E0D\u53EF\u7528\u7684\u63D0\u4F9B\u5546") + " \xB7 " + failures.map((p4) => p4.name || p4.id).join(", ") : !options.size ? label2("DSH has no models available.", "DSH \u5F53\u524D\u6CA1\u6709\u53EF\u7528\u6A21\u578B\u3002") : "";
+      retry.hidden = Boolean(options.size && !failures.length);
+      if (selected) {
+        const saved = key2(selected.provider, selected.model);
+        if (!options.has(saved)) {
+          const missing = new Option(selected.model + " \xB7 " + label2("unavailable", "\u4E0D\u53EF\u7528"), saved);
+          missing.disabled = true;
+          model.select.add(missing);
+        }
+        model.select.value = saved;
+      }
+      efforts(selected?.reasoningEffort);
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : label2("Could not load the DSH model catalog.", "\u65E0\u6CD5\u52A0\u8F7D DSH \u6A21\u578B\u5217\u8868\u3002");
+      retry.hidden = false;
+    }
+    model.select.disabled = false;
+    apply.disabled = Boolean(model.select.value && !options.has(model.select.value));
+  }
+  retry.onclick = () => void loadModels();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (apply.disabled) return;
+    const choice = options.get(model.select.value)?.selection;
+    apply.disabled = model.select.disabled = effort.select.disabled = retry.disabled = true;
+    try {
+      await save(choice ? { ...choice, ...effort.select.value && { reasoningEffort: effort.select.value } } : null);
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : label2("Could not save this model.", "\u65E0\u6CD5\u4FDD\u5B58\u6B64\u6A21\u578B\u3002");
+    } finally {
+      apply.disabled = model.select.disabled = effort.select.disabled = retry.disabled = false;
+    }
+  };
+  void loadModels();
+  return form;
+}
+
+// src/reader/question-model.ts
+var questionConnected = (settings) => Boolean(settings.questionModel) || settings.aiMode !== "unconfigured";
+function questionModelButton(app) {
+  const button2 = el("button", "text-btn question-model-trigger"), caption = el("span");
+  button2.type = "button";
+  button2.setAttribute("aria-haspopup", "dialog");
+  button2.append(icon("settings", 13), caption);
+  const defaultName = () => app.state.settings.aiMode === "dsh" ? app.state.settings.hostModel : app.state.settings.aiMode === "api" ? app.state.settings.model : void 0;
+  function refresh() {
+    const choice = app.state.settings.questionModel;
+    caption.textContent = [choice?.model || defaultName() || readerLabel("Choose model", "\u9009\u62E9\u6A21\u578B"), choice?.reasoningEffort].filter(Boolean).join(" \xB7 ");
+    button2.ariaLabel = button2.title = [readerLabel("Question model", "\u95EE\u7B54\u6A21\u578B"), choice?.provider, caption.textContent].filter(Boolean).join(" \xB7 ");
+  }
+  button2.onclick = () => {
+    const panel = modal(readerLabel("Question model", "\u95EE\u7B54\u6A21\u578B"));
+    const form = questionModelForm({
+      label: readerLabel,
+      defaultName: defaultName(),
+      load: () => api("ai.models", {}),
+      save: async (questionModel) => {
+        const saved = await api("ai.selectModel", { questionModel });
+        app.state.settings.questionModel = saved.questionModel;
+        refresh();
+        if (form.isConnected) byId("dialog").close();
+        await app.refresh();
+      }
+    });
+    panel.append(form);
+  };
+  refresh();
+  return { button: button2, refresh };
+}
 
 // src/reader/selection-chat.ts
 var quoteKey = (quote) => JSON.stringify([quote.turn, quote.text]);
@@ -51022,6 +51167,7 @@ var SelectionChat = class {
     this.engage = engage;
     this.previous = previous;
     this.answerActions = state.answerActions ??= /* @__PURE__ */ new Map();
+    this.modelPicker = questionModelButton(app);
     this.root.id = "passage-chat";
     this.root.ariaLabel = "Selection chat";
     this.root.hidden = true;
@@ -51032,7 +51178,7 @@ var SelectionChat = class {
     }, "icon-btn");
     close3.ariaLabel = readerLabel("Close chat", "\u6536\u8D77\u8BA8\u8BBA");
     close3.append(icon("close", 14));
-    this.heading.append(el("h3", "", readerLabel("Reading discussion", "\u9605\u8BFB\u8BA8\u8BBA")), close3);
+    this.heading.append(el("h3", "", readerLabel("Reading discussion", "\u9605\u8BFB\u8BA8\u8BBA")), this.modelPicker.button, close3);
     this.log.setAttribute("role", "log");
     this.log.ariaLabel = "Selection conversation";
     this.log.tabIndex = 0;
@@ -51106,6 +51252,7 @@ var SelectionChat = class {
   pendingRow;
   quoteVersion = "";
   disconnected;
+  modelPicker;
   draftEdited = false;
   sourcePreview() {
     const { hit, source, selection } = this.item;
@@ -51255,11 +51402,13 @@ var SelectionChat = class {
   }
   refresh() {
     if (this.root.hidden) return;
-    if (this.disconnected !== (this.app.state.settings.aiMode === "unconfigured")) this.render();
+    this.modelPicker.refresh();
+    if (this.disconnected !== !questionConnected(this.app.state.settings)) this.render();
   }
   render() {
     if (this.root.hidden) return;
-    this.disconnected = this.app.state.settings.aiMode === "unconfigured";
+    this.disconnected = !questionConnected(this.app.state.settings);
+    this.modelPicker.refresh();
     const { pending, failure } = this.state;
     for (const starter of this.starters.querySelectorAll("button")) starter.disabled = Boolean(pending || this.disconnected);
     this.connection.replaceChildren();
@@ -51442,7 +51591,8 @@ var SelectionChat = class {
   }
   async ask(request) {
     const { state } = this;
-    if (state.pending || this.app.state.settings.aiMode === "unconfigured") return;
+    if (state.pending || !questionConnected(this.app.state.settings)) return;
+    const questionModel = this.app.state.settings.questionModel ?? null;
     const item = request.item ??= this.item;
     const draft = request.draftKey ? state.drafts.get(request.draftKey) : void 0;
     if (draft?.text.trim() === request.prompt) draft.text = "";
@@ -51495,7 +51645,7 @@ var SelectionChat = class {
           answerTurn: request.quote?.turn
         }
       };
-      const reply = await api("ai", request.payload);
+      const reply = await api("ai", { ...request.payload, questionModel });
       this.app.discussionChanged?.(item.source.docId);
       state.turns.push(
         { role: "user", content: request.prompt, quote: request.quote, source: request.payload.record?.source },
@@ -52039,6 +52189,7 @@ var SelectionCard = class {
     card.replaceChildren();
     card.removeAttribute("style");
     delete card.dataset.docked;
+    delete card.dataset.gutter;
     delete card.dataset.workspace;
     delete card.dataset.preview;
     byId("selectionDock").hidden = true;
@@ -52053,6 +52204,7 @@ var SelectionCard = class {
     card.removeAttribute("style");
     if (docked) {
       card.dataset.docked = "true";
+      delete card.dataset.gutter;
       container.hidden = false;
       container.append(card);
       const pane = byId(byId("reader").dataset.compactLanguage === "translation" ? "translated" : "original");
@@ -52348,6 +52500,7 @@ var SelectionCard = class {
       if (card.dataset.docked && entries.some((entry) => entry.target === paper)) this.revealIn(visiblePane());
       else this.fit?.();
     });
+    resize.observe(card);
     resize.observe(main2);
     resize.observe(paper);
     paper.addEventListener("scroll", () => this.fit?.(), { signal, passive: true });
@@ -52426,6 +52579,7 @@ function paperEvidence(title, pages, query) {
 var PaperChat = class {
   constructor(app) {
     this.app = app;
+    this.modelPicker = questionModelButton(app);
     this.root.ariaLabel = "Paper conversation";
     this.toggle.type = "button";
     this.toggle.ariaLabel = readerLabel("Paper chat", "\u5168\u6587\u95EE\u7B54");
@@ -52458,7 +52612,7 @@ var PaperChat = class {
     this.sourceQuote.dir = "auto";
     this.removeSelection.ariaLabel = this.removeSelection.title = readerLabel("Remove selected passage", "\u79FB\u9664\u9009\u6BB5");
     this.removeSelection.append(icon("close", 12));
-    this.attachment.append(this.scope, this.sourceLocation, this.sourceQuote, this.removeSelection, this.useSelection);
+    this.attachment.append(this.scope, this.sourceLocation, this.sourceQuote, this.removeSelection, this.useSelection, this.modelPicker.button);
     this.input.ariaLabel = "Message about this paper";
     this.input.setAttribute("aria-describedby", this.scope.id);
     this.input.placeholder = readerLabel("Ask about this paper\u2026", "\u5BF9\u8FD9\u7BC7\u6587\u7AE0\u63D0\u95EE\u2026");
@@ -52505,6 +52659,7 @@ var PaperChat = class {
   notice = el("div", "paper-chat-notice");
   drafts = el("details", "paper-chat-drafts");
   attachment = el("div", "paper-chat-attachment");
+  modelPicker;
   scope = el("span");
   sourceLocation = el("span");
   sourceQuote = el("q");
@@ -52619,7 +52774,7 @@ var PaperChat = class {
     answer.focus({ preventScroll: true });
   }
   controls(state) {
-    this.submit.disabled = Boolean(state.pending || !state.draft.trim() || this.app.state.settings.aiMode === "unconfigured");
+    this.submit.disabled = Boolean(state.pending || !state.draft.trim() || !questionConnected(this.app.state.settings));
   }
   render() {
     const state = this.current();
@@ -52630,6 +52785,7 @@ var PaperChat = class {
     this.grip.hidden = !this.expanded;
     this.detail.textContent = state?.source ? readerLabel("Selection \xB7 ", "\u9009\u6BB5 \xB7 ") + this.location(state.source) : state?.exchanges.length ? state.exchanges.length + readerLabel(state.exchanges.length === 1 ? " exchange" : " exchanges", " \u8F6E\u95EE\u7B54") : "";
     if (!this.expanded || !state) return;
+    this.modelPicker.refresh();
     this.renderDrafts();
     if (this.input.value !== state.draft) this.input.value = state.draft;
     this.controls(state);
@@ -52646,7 +52802,7 @@ var PaperChat = class {
     this.sourceLocation.textContent = source ? this.location(source) : "";
     this.sourceQuote.textContent = this.sourceQuote.title = source?.selected ?? "";
     this.notice.replaceChildren();
-    const disconnected = this.app.state.settings.aiMode === "unconfigured";
+    const disconnected = !questionConnected(this.app.state.settings);
     this.notice.hidden = !state.issue && !disconnected;
     if (!this.notice.hidden) {
       this.notice.setAttribute("role", state.issue ? "alert" : "status");
@@ -52748,7 +52904,8 @@ var PaperChat = class {
   }
   async send(retry) {
     const state = this.current(), doc2 = this.doc;
-    if (!doc2 || !state || state.pending || this.app.state.settings.aiMode === "unconfigured") return;
+    if (!doc2 || !state || state.pending || !questionConnected(this.app.state.settings)) return;
+    const questionModel = this.app.state.settings.questionModel ?? null;
     const question3 = state.draft.trim();
     const same = state.retry?.question === question3 && state.retry.source === state.source;
     const request = retry ?? (same ? state.retry : void 0) ?? { docId: doc2.id, requestId: crypto.randomUUID(), question: question3, source: state.source };
@@ -52762,7 +52919,7 @@ var PaperChat = class {
         if (doc2 === this.doc) this.pages = void 0;
         throw error;
       }));
-      const expansion = needsEnglishSearch(pages, request.question) ? await api("chat.searchTerms", { question: request.question }).then((reply) => reply.text, () => "") : "";
+      const expansion = needsEnglishSearch(pages, request.question) ? await api("chat.searchTerms", { question: request.question, questionModel }).then((reply) => reply.text, () => "") : "";
       const query = [request.question, expansion, request.source?.selected, request.source?.original, ...state.exchanges.slice(-2).map((turn) => turn.question)].join(" ");
       const section = doc2.sectionPage && doc2.book?.sections[doc2.sectionPage - 1];
       const paper = paperEvidence(section ? doc2.title + " \xB7 " + section.title : doc2.paperTitle || doc2.title, pages, query);
@@ -52770,7 +52927,7 @@ var PaperChat = class {
         paper.partial = true;
         paper.pageCount = doc2.book.sections.length;
       }
-      const { text: text2 } = await api("chat.ask", { ...request, paper });
+      const { text: text2 } = await api("chat.ask", { ...request, paper, questionModel });
       if (!state.exchanges.some((turn) => turn.requestId === request.requestId)) {
         state.exchanges.push({ ...request, thread: "paper", answer: text2, createdAt: (/* @__PURE__ */ new Date()).toISOString() });
       }
@@ -53763,7 +53920,7 @@ var Reader = class {
     document.addEventListener("pointerdown", (e2) => {
       if (!(e2.target instanceof Element)) return;
       if (!e2.target.closest("#menu,#more")) this.closeMenu();
-      if (!this.card.hasOpenTool && !e2.target.closest("#card,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,dialog")) this.card.dismiss();
+      if (!this.card.hasOpenTool && !e2.target.closest("#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,dialog")) this.card.dismiss();
     });
     document.addEventListener("keydown", (e2) => {
       if (jump.matches(":popover-open")) return;
@@ -53784,7 +53941,7 @@ var Reader = class {
         }
       }
       if (e2.defaultPrevented || e2.shiftKey || e2.altKey || e2.ctrlKey || e2.metaKey || byId("dialog").open) return;
-      if (e2.target instanceof Element && e2.target.closest("#card,input,textarea,select,button,dialog,.desk-split,[contenteditable]")) return;
+      if (e2.target instanceof Element && e2.target.closest("#card,#selectionDock,input,textarea,select,button,dialog,.desk-split,[contenteditable]")) return;
       const caret = document.getSelection()?.focusNode;
       if (caret?.parentElement?.closest(".pdf-native-text,.pdf-reading-text")) return;
       if (e2.key === "ArrowRight" && this.pdf && this.page < this.pdf.pages) {

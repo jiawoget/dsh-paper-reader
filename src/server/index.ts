@@ -15,6 +15,8 @@ interface WebListener { getOrigin(): string }
 interface ReaderHost {
   connection:{ fetch:{register(route:HostRoute):unknown} };
   inject(services: ['llm'], setup: (child: { llm: unknown }) => () => void): unknown;
+  inject(services: ['sessionController'], setup: (child: { sessionController: unknown }) => () => void): unknown;
+  inject(services: ['agentDefaultModel'], setup: (child: { agentDefaultModel: unknown }) => () => void): unknown;
   inject(services: ['attachments'], setup: (child: { attachments: unknown }) => () => void): unknown;
   inject(services: ['webServer'], setup: (child: { webServer: WebListener }) => () => void): unknown;
 }
@@ -59,7 +61,7 @@ async function boundedBody(request:Request, limit:number):Promise<Buffer> {
 export function apply(ctx:ReaderHost):void {
   const root = process.env.PAPER_READER_HOME || path.join(process.env.DSH_HOME || path.join(os.homedir(),'.dsh'),'paper-reader');
   const library = new Library(root);
-  const models: {llm?: unknown; attachments?: unknown} = {};
+  const models: {llm?: unknown; attachments?: unknown; sessionController?: unknown; agentDefaultModel?: unknown} = {};
   let listener:WebListener|undefined;
   ctx.inject(['webServer'],child=>{
     const current=child.webServer;listener=current;
@@ -69,6 +71,14 @@ export function apply(ctx:ReaderHost):void {
     const provider = child.llm;
     models.llm = provider;
     return () => { if (models.llm === provider) delete models.llm; };
+  });
+  ctx.inject(['sessionController'], child => {
+    const controller = models.sessionController = child.sessionController;
+    return () => { if (models.sessionController === controller) delete models.sessionController; };
+  });
+  ctx.inject(['agentDefaultModel'], child => {
+    const defaults = models.agentDefaultModel = child.agentDefaultModel;
+    return () => { if (models.agentDefaultModel === defaults) delete models.agentDefaultModel; };
   });
   ctx.inject(['attachments'], child => {
     const store = child.attachments;

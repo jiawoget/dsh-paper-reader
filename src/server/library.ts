@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, link, readFile, readdir, rm, writeFile, rename } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { bookSlug, openStaxLocation, openStaxUrl, type OpenStaxLocation } from '../shared/openstax.js';
 import type { DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
@@ -66,6 +68,10 @@ export class Library {
       }
       if (value.kind === 'web' && (!Array.isArray(value.paragraphs) || !value.paragraphs.every((p:unknown) => typeof p === 'string'))) fail('The saved article is damaged.', 500);
       const doc = value as unknown as DocumentInfo;
+      if (doc.kind === 'pdf' && !doc.url) {
+        try { doc.url = await readFile(path.join(this.directory, id + '.source-url'), 'utf8'); }
+        catch (error) { if (!isFsError(error, 'ENOENT')) throw error; }
+      }
       if (doc.kind === 'web') {
         try { doc.articleLayout = JSON.parse(await readFile(path.join(this.directory, id + '.layout.json'), 'utf8')); }
         catch (error) { if (!isFsError(error, 'ENOENT')) throw error; }
@@ -91,6 +97,19 @@ export class Library {
   }
   private sectionFile(id: string, slug: string): string {
     return path.join(this.directory, 'book-sections', id, hash(slug) + '.json');
+  }
+  /** Export uses only already-imported material, even when the publisher is offline. */
+  cachedSection(doc: DocumentInfo, page: number): Pick<DocumentInfo, 'paragraphs' | 'articleLayout'> | undefined {
+    const section = doc.book?.sections[page - 1];
+    if (!section) return;
+    try { return JSON.parse(readFileSync(this.sectionFile(doc.id, section.slug), 'utf8')); }
+    catch (error) { if (!isFsError(error, 'ENOENT')) throw error; }
+  }
+  pdfFile(doc: DocumentInfo): string {
+    if (doc.kind !== 'pdf' || !validDocId(doc.id)) fail('This document has no saved PDF.');
+    if (doc.id !== sample.id) return path.join(this.directory, doc.id + '.pdf');
+    const bundled = fileURLToPath(new URL('../web/assets/pagedattention.pdf', import.meta.url));
+    return existsSync(bundled) ? bundled : fileURLToPath(new URL('../../public/assets/pagedattention.pdf', import.meta.url));
   }
   private async saveSection(file: string, article: WebArticle): Promise<void> {
     await mkdir(path.dirname(file), { recursive: true });
@@ -175,13 +194,19 @@ export class Library {
     const id = 'pdf-' + digest;
     await mkdir(this.directory, { recursive: true });
     await writeOnce(path.join(this.directory, id + '.pdf'), bytes);
-    return this.store({ id, kind:'pdf', title:title.trim().slice(0,250) || 'Document.pdf', url, createdAt:new Date().toISOString(), defaultPage:1 });
+    const doc = await this.store({ id, kind:'pdf', title:title.trim().slice(0,250) || 'Document.pdf', url, createdAt:new Date().toISOString(), defaultPage:1 });
+    if (!doc.url && url) {
+      // A local upload and its published PDF share one byte identity. Keep
+      // the first subsequently discovered address without replacing metadata.
+      await writeOnce(path.join(this.directory, id + '.source-url'), url);
+      return this.get(id);
+    }
+    return doc;
   }
   async bytes(id: unknown): Promise<Buffer> {
     const doc = await this.get(id);
     if (doc.kind !== 'pdf') fail('This document is a web article.');
-    if (doc.id === sample.id) return readFile(new URL('../web/assets/pagedattention.pdf', import.meta.url));
-    return readFile(path.join(this.directory, doc.id + '.pdf'));
+    return readFile(this.pdfFile(doc));
   }
   async articleImage(id: unknown, anchor: unknown, download: (url: string) => Promise<ArticleImage>, page?: number): Promise<ArticleImage> {
     if (!validDocId(id) || !/^(?:web|book)-/.test(id) || typeof anchor !== 'string' || !/^p-[1-9]\d{0,3}$/.test(anchor)) fail('Unknown article illustration.', 404);

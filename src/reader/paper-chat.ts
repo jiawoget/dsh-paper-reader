@@ -6,6 +6,7 @@ import { isScreenshotAnchor, materialKey } from './selection-context.js';
 import { paperQuestions, type DiscussionRef } from './discussion-drafts.js';
 import { needsEnglishSearch, paperEvidence, readPaper } from './paper-evidence.js';
 import { settingsDialog, sourceChip, type ReaderPort } from './panels.js';
+import { questionConnected, questionModelButton } from './question-model.js';
 import type { PdfDocument } from './pdf-view.js';
 import { api, button, el, icon, message, readerLabel as label } from './ui.js';
 
@@ -23,6 +24,7 @@ export class PaperChat {
   private readonly notice = el('div', 'paper-chat-notice');
   private readonly drafts = el('details', 'paper-chat-drafts');
   private readonly attachment = el('div', 'paper-chat-attachment');
+  private readonly modelPicker: ReturnType<typeof questionModelButton>;
   private readonly scope = el('span');
   private readonly sourceLocation = el('span');
   private readonly sourceQuote = el('q');
@@ -44,6 +46,7 @@ export class PaperChat {
   private ratio = Number(localStorage.getItem('reader.paper-chat.ratio')) || 0.36;
 
   constructor(private app: ReaderPort) {
+    this.modelPicker = questionModelButton(app);
     this.root.ariaLabel = 'Paper conversation';
     this.toggle.type = 'button';
     this.toggle.ariaLabel = label('Paper chat','全文问答');
@@ -73,7 +76,7 @@ export class PaperChat {
     this.sourceQuote.dir = 'auto';
     this.removeSelection.ariaLabel = this.removeSelection.title = label('Remove selected passage','移除选段');
     this.removeSelection.append(icon('close', 12));
-    this.attachment.append(this.scope, this.sourceLocation, this.sourceQuote, this.removeSelection, this.useSelection);
+    this.attachment.append(this.scope, this.sourceLocation, this.sourceQuote, this.removeSelection, this.useSelection, this.modelPicker.button);
     this.input.ariaLabel = 'Message about this paper';
     this.input.setAttribute('aria-describedby', this.scope.id);
     this.input.placeholder = label('Ask about this paper…','对这篇文章提问…');
@@ -195,7 +198,7 @@ export class PaperChat {
     answer.focus({ preventScroll: true });
   }
   private controls(state: Conversation): void {
-    this.submit.disabled = Boolean(state.pending || !state.draft.trim() || this.app.state.settings.aiMode === 'unconfigured');
+    this.submit.disabled = Boolean(state.pending || !state.draft.trim() || !questionConnected(this.app.state.settings));
   }
   render(): void {
     const state = this.current();
@@ -207,6 +210,7 @@ export class PaperChat {
     this.detail.textContent = state?.source ? label('Selection · ','选段 · ') + this.location(state.source) : state?.exchanges.length
       ? state.exchanges.length + label(state.exchanges.length === 1 ? ' exchange' : ' exchanges',' 轮问答') : '';
     if (!this.expanded || !state) return;
+    this.modelPicker.refresh();
     this.renderDrafts();
     if (this.input.value !== state.draft) this.input.value = state.draft;
     this.controls(state);
@@ -223,7 +227,7 @@ export class PaperChat {
     this.sourceLocation.textContent = source ? this.location(source) : '';
     this.sourceQuote.textContent = this.sourceQuote.title = source?.selected ?? '';
     this.notice.replaceChildren();
-    const disconnected = this.app.state.settings.aiMode === 'unconfigured';
+    const disconnected = !questionConnected(this.app.state.settings);
     this.notice.hidden = !state.issue && !disconnected;
     if (!this.notice.hidden) {
       this.notice.setAttribute('role', state.issue ? 'alert' : 'status');
@@ -322,7 +326,8 @@ export class PaperChat {
   }
   private async send(retry?: ChatRequest): Promise<void> {
     const state = this.current(), doc = this.doc;
-    if (!doc || !state || state.pending || this.app.state.settings.aiMode === 'unconfigured') return;
+    if (!doc || !state || state.pending || !questionConnected(this.app.state.settings)) return;
+    const questionModel = this.app.state.settings.questionModel ?? null;
     const question = state.draft.trim();
     const same = state.retry?.question === question && state.retry.source === state.source;
     const request = retry ?? (same ? state.retry : undefined) ?? { docId: doc.id, requestId: crypto.randomUUID(), question, source: state.source };
@@ -335,12 +340,12 @@ export class PaperChat {
         throw error;
       }));
       const expansion = needsEnglishSearch(pages, request.question)
-        ? await api('chat.searchTerms', { question: request.question }).then(reply => reply.text, () => '') : '';
+        ? await api('chat.searchTerms', { question: request.question, questionModel }).then(reply => reply.text, () => '') : '';
       const query = [request.question, expansion, request.source?.selected, request.source?.original, ...state.exchanges.slice(-2).map(turn => turn.question)].join(' ');
       const section = doc.sectionPage && doc.book?.sections[doc.sectionPage-1];
       const paper = paperEvidence(section ? doc.title + ' · ' + section.title : doc.paperTitle || doc.title, pages, query);
       if (doc.book) { paper.partial = true; paper.pageCount = doc.book.sections.length; }
-      const { text } = await api('chat.ask', { ...request, paper });
+      const { text } = await api('chat.ask', { ...request, paper, questionModel });
       if (!state.exchanges.some(turn => turn.requestId === request.requestId)) {
         state.exchanges.push({ ...request, thread: 'paper', answer: text, createdAt: new Date().toISOString() });
       }

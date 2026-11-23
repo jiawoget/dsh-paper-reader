@@ -26,6 +26,13 @@ button:disabled { cursor: default; opacity: .56; }
 .foot .primary, .editor-actions .primary { background: #7044c4; color: white; }
 .foot .primary:hover, .editor-actions .primary:hover { background: #6037ad; }
 .editor { display: grid; gap: 6px; }
+.model-picker summary { cursor: pointer; color: #5e408e; font-size: 12px; overflow-wrap: anywhere; }
+.question-model-form, .question-model-form label { display: grid; gap: 4px; }
+.question-model-form { gap: 8px; padding: 8px 0; }
+.question-model-form select { min-width: 0; width: 100%; font: inherit; }
+.question-model-form .hint { margin: 0; }
+.question-model-form .hint:empty { display: none; }
+.question-model-form button { justify-self: start; padding: 4px 8px; border-radius: 4px; color: #593194; background: #efe7fb; }
 .editor textarea { width: 100%; min-height: 55px; resize: vertical; padding: 6px 8px; border-radius: 5px; border: 1px solid #cbd0dd; background: #fbfcfe; }
 .editor-actions { justify-content: flex-end; }
 .status { color: #5d526f; font-size: 12px; margin: 0; overflow-wrap: anywhere; }

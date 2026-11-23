@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { ChatExchange, Collection, JournalNote, NotebookSnapshot, Operations, Settings, ZoteroStatus, ZoteroItem as ReaderZoteroItem } from '../shared/types.js';
+import type { ChatExchange, Collection, JournalNote, NotebookSnapshot, Operations, QuestionModel, Settings, ZoteroStatus, ZoteroItem as ReaderZoteroItem } from '../shared/types.js';
 
 export class ServiceError extends Error {
   readonly status: number;
@@ -56,6 +56,7 @@ export function pageNumber(value: unknown): number {
 }
 
 export interface PrivateSettings {
+  questionModel?: QuestionModel;
   model: string;
   baseUrl: string;
   apiKey: string;
@@ -99,10 +100,21 @@ export function mergeSettings(current: PrivateSettings, input: Input): PrivateSe
   if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, 'The Zotero library ID must be a positive integer.');
   const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
   return {
+    questionModel: input.questionModel === undefined ? current.questionModel : readQuestionModel(input.questionModel),
     model, baseUrl, apiKey: updatedSecret(sameOrigin ? current.apiKey : '', input.apiKey, input.clearApiKey),
     vaultPath: vault ? path.resolve(vault) : '', zoteroLibraryType: type, zoteroLibraryId: id, zoteroMode,
     zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
   };
+}
+
+export function readQuestionModel(value: unknown): QuestionModel | undefined {
+  if (value === undefined || value === null) return;
+  const data = inputObject(value);
+  const provider = single(data.provider, 'DSH provider', 1024, true);
+  const model = single(data.model, 'DSH model', 1024, true);
+  return { provider, model, ...(data.reasoningEffort !== undefined && {
+    reasoningEffort: single(data.reasoningEffort, 'reasoning effort', 1024, true)
+  }) };
 }
 
 export type EntryKind = 'note' | 'word' | 'history';
@@ -113,6 +125,8 @@ export interface ZoteroItem extends ReaderZoteroItem {
   doi: string; url: string; type: string; creator: string; date: string;
 }
 export interface ServiceResults {
+  'ai.models': Operations['ai.models'][1];
+  'ai.selectModel': Operations['ai.selectModel'][1];
   'article.capture.save': Operations['article.capture.save'][1];
   'article.capture.get': Operations['article.capture.get'][1];
   'outline.get': Operations['outline.get'][1];

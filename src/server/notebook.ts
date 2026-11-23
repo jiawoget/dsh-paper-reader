@@ -8,9 +8,12 @@ import { blocks, contentFor, initialMarkdown, putNote, reconcileNotes, withoutNo
 import { exportChapterVocabulary, exportNotebook, fileContent, filenameFor, filenameStem, vaultFolder, writeMarkdown } from './obsidian.js';
 import { notebookKey, ReaderStore, type NotebookChapter, type NotebookRecords, type StoredNotebook } from './reader-store.js';
 import { address, pageNumber, ServiceError, single, stringValue, type Entry, type Input } from './service-types.js';
+import { readerMarkdown, vaultMarkdown } from './vault-markdown.js';
+import { portableCitation, VaultSources } from './vault-sources.js';
 
 interface OpenNotebook {
   local: StoredNotebook;
+  sources: VaultSources;
   markdown: string;
   vault: string;
   stored: boolean;
@@ -29,9 +32,9 @@ function vaultAccess<T>(action: () => T): T {
   }
 }
 
-function load(records: NotebookRecords, local: StoredNotebook, stored = true): OpenNotebook {
+function load(records: NotebookRecords, local: StoredNotebook, sources: VaultSources, stored = true): OpenNotebook {
   const vault = records.vault;
-  const book: OpenNotebook = { local, markdown: local.markdown, stored, vault, conflict: false };
+  const book: OpenNotebook = { local, sources, markdown: local.markdown, stored, vault, conflict: false };
   if (!vault) return book;
   return vaultAccess(() => {
     const folder = vaultFolder(vault, local.chapter?.bookSlug);
@@ -57,8 +60,10 @@ function load(records: NotebookRecords, local: StoredNotebook, stored = true): O
       throw new ServiceError(409, 'The notebook file was moved or deleted. Restore it at ' + book.file + ', or disconnect this vault to use the local copy.');
     }
     if (binding && book.observed !== undefined && book.observed !== binding.baseline) {
-      book.markdown = book.observed;
-      book.conflict = local.markdown !== binding.baseline && local.markdown !== book.observed;
+      const imported = readerMarkdown(book.observed, binding.baseline, local.docId);
+      if (imported === binding.baseline) return book;
+      book.markdown = imported;
+      book.conflict = local.markdown !== binding.baseline && local.markdown !== imported;
       if (!book.conflict) {
         try { records.importChanges(() => reconcileNotes(records, local, local.markdown, book.markdown)); }
         catch (error) {
@@ -94,12 +99,17 @@ function persist(records: NotebookRecords, book: OpenNotebook): void {
   const doc = { ...book.local, markdown: book.markdown };
   if (book.file) {
     const file = book.file;
-    vaultAccess(() => {
+    const projected = vaultAccess(() => {
       if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path.dirname(file)) throw new ServiceError(409, 'The notebook location changed. Refresh before saving.');
-      writeMarkdown(file, book.observed, book.markdown);
+      const zotero = records.zoteroSource(doc.docId);
+      if (!book.sources.doc?.url) book.sources.useSavedSources([zotero?.original ?? '', ...records.entries('note', doc.docId, doc.chapter).map(note => note.sourceUrl)]);
+      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) =>
+        portableCitation(label, book.sources.targets(url, book.vault, path.dirname(file), zotero?.link)));
+      writeMarkdown(file, book.observed, portable);
+      return portable;
     });
     if (book.baseline !== book.markdown) records.bind(book.vault, doc, path.basename(book.file));
-    book.observed = book.markdown;
+    book.observed = projected;
   }
   if (book.local.markdown !== book.markdown || !book.stored) records.store(doc);
 }
@@ -118,39 +128,42 @@ function chapterFor(metadata: DocumentInfo | undefined, input: Input): NotebookC
   return { id: section.chapterId, title: section.chapterTitle, bookSlug: book.slug, firstPage: sections.keys().next().value!, sections };
 }
 
-function requestDocument(records: NotebookRecords, input: Input, metadata?: DocumentInfo): OpenNotebook {
+function requestDocument(records: NotebookRecords, input: Input, sources: VaultSources): OpenNotebook {
+  const metadata = sources.doc;
   const docId = single(input.docId, 'document ID', 512, true);
   const chapter = chapterFor(metadata, input);
   const stored = records.document(docId, chapter);
-  if (stored) return load(records, stored);
+  if (stored) return load(records, stored, sources);
   const title = metadata?.title ?? stringValue(input.title, 'document title', 2048, true);
   const sourceUrl = address(input.sourceUrl, true);
   if (!/^\/api\/paper-reader\/app\/(?:index\.html)?$/.test(new URL(sourceUrl).pathname)) {
     throw new ServiceError(400, 'Open the paper in Paper Reader to create a notebook with working source links.');
   }
   const doc = { docId, title, sourceUrl, chapter };
-  return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries('note', docId, chapter)) }, false);
+  return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries('note', docId, chapter)) }, sources, false);
 }
 
 export class PaperNotebooks {
   constructor(private readonly database: ReaderStore, private readonly library: Library, private readonly launch?: ObsidianLauncher) {}
 
-  private async metadata(id: unknown): Promise<DocumentInfo | undefined> {
-    if (typeof id !== 'string' || !/^book-[a-f0-9]{64}$/.test(id)) return;
-    const doc = await this.library.get(id);
-    if (!doc.book) throw new ServiceError(500, 'The saved book has no chapter list.');
-    return doc;
+  private async sources(id: unknown, fallback?: unknown): Promise<VaultSources> {
+    let metadata: DocumentInfo | undefined;
+    if (typeof id === 'string' && (id === 'pagedattention' || /^(?:pdf|web|book)-[a-f0-9]{64}$/.test(id))) {
+      try { metadata = await this.library.get(id); }
+      catch (error) { if ((error as {status?: number})?.status !== 404) throw error; }
+    }
+    return new VaultSources(this.library, metadata, typeof fallback === 'string' ? fallback : undefined);
   }
 
-  private noteMetadata(input: Input): Promise<DocumentInfo | undefined> {
+  private noteSources(input: Input): Promise<VaultSources> {
     const docId = input.docId ?? (input.id && this.database.withNotebook(records => records.note(single(input.id, 'note ID', 128, true))?.docId));
-    return this.metadata(docId);
+    return this.sources(docId, input.sourceUrl);
   }
 
   async read(input: Input): Promise<NotebookSnapshot> {
-    const metadata = await this.metadata(input.docId);
+    const sources = await this.sources(input.docId, input.sourceUrl);
     return this.database.withNotebook(records => {
-      const book = requestDocument(records, input, metadata);
+      const book = requestDocument(records, input, sources);
       const { docId, chapter } = book.local;
       if (!book.conflict && (!chapter || book.stored || records.entries('note', docId, chapter).length)) persist(records, book);
       return snapshot(records, book, Boolean(this.launch));
@@ -160,9 +173,9 @@ export class PaperNotebooks {
   async write(input: Input): Promise<NotebookSnapshot> {
     const markdown = stringValue(input.markdown, 'notebook Markdown', 4_000_000, false, true);
     if (typeof input.markdown !== 'string') throw new ServiceError(400, 'The full Markdown text is required.');
-    const metadata = await this.metadata(input.docId);
+    const sources = await this.sources(input.docId, input.sourceUrl);
     return this.database.withNotebook(records => {
-      const book = requestDocument(records, input, metadata);
+      const book = requestDocument(records, input, sources);
       if (input.expectedRevision !== revision(book)) throw new ServiceError(409, 'The notebook changed. Compare the latest Markdown with your draft before saving.');
       blocks(markdown);
       reconcileNotes(records, book.local, book.conflict ? book.local.markdown : book.markdown, markdown);
@@ -177,11 +190,12 @@ export class PaperNotebooks {
   async openOnDesktop(input: Input): Promise<{uri:string}> {
     const docId=single(input.docId,'document ID',512,true);
     if(!this.launch)throw new ServiceError(503,'Open this link in the Obsidian desktop app.');
-    const chapter = chapterFor(await this.metadata(docId), input);
+    const sources = await this.sources(docId);
+    const chapter = chapterFor(sources.doc, input);
     const uri=this.database.withNotebook(records=>{
       const doc=records.document(docId,chapter);
       if(!doc || !records.vault || !records.binding(records.vault,docId,chapter))throw new ServiceError(409,'Save this notebook to a vault before opening it.');
-      const book=load(records,doc);
+      const book=load(records,doc,sources);
       if(!book.file || nativeUri(book.file)!==input.expectedUri)throw new ServiceError(409,'The notebook location changed. Refresh the notebook before opening it.');
       if(!book.conflict)persist(records,book);
       return nativeUri(book.file);
@@ -191,10 +205,20 @@ export class PaperNotebooks {
   }
 
   async export(input: Input): Promise<{path: string; notes: number; words: number}> {
-    const metadata = await this.metadata(input.docId);
-    if (!metadata) return exportNotebook(this.database, input);
+    const sources = await this.sources(input.docId, input.sourceUrl);
+    if (!sources.doc?.book) {
+      const docId = single(input.docId, 'document ID', 512, true);
+      const notebook = this.database.withNotebook(records => {
+        const doc = records.document(docId);
+        if (!doc) return;
+        const book = load(records, doc, sources);
+        persist(records, book);
+        return book.markdown;
+      });
+      return exportNotebook(this.database, input, sources, notebook);
+    }
     return this.database.withNotebook(records => {
-      const book = requestDocument(records, input, metadata);
+      const book = requestDocument(records, input, sources);
       if (!book.file) throw new ServiceError(503, 'Set your Obsidian vault directory in Settings.');
       const { chapter, docId, sourceUrl } = book.local;
       const words = records.entries('word', docId, chapter);
@@ -205,7 +229,7 @@ export class PaperNotebooks {
   }
 
   async saveNote(input: Input): Promise<{ note: Entry }> {
-    const metadata = await this.noteMetadata(input);
+    const sources = await this.noteSources(input), metadata = sources.doc;
     return this.database.withNotebook(records => {
       const previous = input.id === undefined ? undefined : records.note(single(input.id, 'record ID', 128, true));
       if (previous && input.docId !== undefined && input.docId !== previous.docId) throw new ServiceError(400, 'A note belongs to its original document.');
@@ -214,7 +238,7 @@ export class PaperNotebooks {
       if (chapter && previous && input.page !== undefined && input.page !== previous.page) throw new ServiceError(409, 'Edit this note in its original section.');
       const local = records.document(docId, chapter);
       if (!local && !chapter) return {note:records.save(input)};
-      const book = local ? load(records, local) : requestDocument(records, { ...previous, ...input, docId }, metadata);
+      const book = local ? load(records, local, sources) : requestDocument(records, { ...previous, ...input, docId }, sources);
       if (book.conflict) throw new ServiceError(409, book.warning || 'Choose Compare latest in Notes to merge the local and vault versions.');
       // Older clients omit a version. Even then, a freshly imported native edit
       // must be surfaced before the client can replace or remove that note.
@@ -227,13 +251,13 @@ export class PaperNotebooks {
   }
 
   async deleteNote(input: Input): Promise<{ id: string; deleted: boolean }> {
-    const metadata = await this.noteMetadata(input);
+    const sources = await this.noteSources(input), metadata = sources.doc;
     return this.database.withNotebook(records => {
       const previous = records.note(single(input.id, 'note ID', 128, true));
       if (previous && input.docId !== undefined && input.docId !== previous.docId) throw new ServiceError(400, 'A note belongs to its original document.');
       const local = previous && records.document(previous.docId, chapterFor(metadata, { page: previous.page }));
       if (!local) return records.remove(input);
-      const book = load(records, local);
+      const book = load(records, local, sources);
       if (book.conflict) throw new ServiceError(409, book.warning || 'Choose Compare latest in Notes to merge the local and vault versions.');
       const result = records.remove({...input,expectedUpdatedAt:input.expectedUpdatedAt ?? previous.updatedAt});
       book.markdown = withoutNote(book.markdown, result.id);

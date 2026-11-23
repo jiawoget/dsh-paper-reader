@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createServices } from '../src/server/services.js';
+import { Library } from '../src/server/library.js';
 
 const paper = { docId: 'paper', title: 'Cache allocation.pdf',
   sourceUrl: 'http://localhost:29812/api/paper-reader/app/index.html?doc=paper&page=6' };
@@ -43,7 +44,8 @@ test('two editors share one vault Markdown file, free text, source links and not
   assert.equal(new URL(initial.uri).hostname, 'open');
   const markdown = await readFile(initial.path, 'utf8');
   assert.ok(markdown.includes('Draft from reader'));
-  const href = markdown.match(/\[Page 6 · Left column\]\(<([^>]+)>\)/)?.[1];
+  assert.doesNotMatch(markdown, /localhost/);
+  const href = initial.markdown.match(/\[Page 6 · Left column\]\(<([^>]+)>\)/)?.[1];
   assert.ok(href);
   assert.deepEqual(Object.fromEntries(new URL(href).searchParams), { doc: 'paper', page: '6', anchor: 'cache-map', quote: 'cache & blocks' });
   const external = markdown.replace('Draft from reader', 'Edited in Obsidian') + '\n## Comparisons\n\n- An external thought\n';
@@ -55,14 +57,14 @@ test('two editors share one vault Markdown file, free text, source links and not
   assert.equal(await readFile(initial.path, 'utf8'), external);
   const refreshed = await act('notebook.get', paper);
   assert.equal(refreshed.notes[0]?.text, 'Edited in Obsidian');
-  assert.equal(refreshed.markdown, external);
+  assert.ok(refreshed.markdown.includes('An external thought') && refreshed.markdown.includes(href));
   const edited = await act('note.save', {id:note.id, text:'A merged observation', expectedUpdatedAt:refreshed.notes[0]?.updatedAt});
   const file = await readFile(initial.path, 'utf8');
   assert.ok(file.includes('A merged observation') && file.includes('An external thought'));
   const latest = await act('notebook.get', paper);
-  const changed = file.replace('An external thought', 'A comparison from the reader');
+  const changed = latest.markdown.replace('An external thought', 'A comparison from the reader');
   await act('notebook.write', {...paper, expectedRevision:latest.revision, markdown:changed});
-  assert.equal(await readFile(initial.path, 'utf8'), changed);
+  assert.equal(await readFile(initial.path, 'utf8'), file.replace('An external thought', 'A comparison from the reader'));
   await act('note.delete', {id:note.id, expectedUpdatedAt:edited.note.updatedAt});
   const afterDeletion = await readFile(initial.path, 'utf8');
   assert.ok(afterDeletion.includes('A comparison from the reader'));
@@ -79,12 +81,13 @@ test('an incomplete native edit can be recovered in the reader without replacing
   await act('settings.save',{vaultPath});
   const book = await act('notebook.get',paper);
   assert.ok(book.path);
-  const repaired = book.markdown.replace('Original research note','Revised in the native editor') + '\nOther writing.\n';
-  const broken = repaired.replace(/^<!-- paper-reader:end [^\n]+$/m,'');
+  const edit = (text: string) => text.replace('Original research note','Revised in the native editor') + '\nOther writing.\n';
+  const repaired = edit(book.markdown), onDisk = edit(await readFile(book.path,'utf8'));
+  const broken = onDisk.replace(/^<!-- paper-reader:end [^\n]+$/m,'');
   await writeFile(book.path,broken);
   const recovery = await act('notebook.get',paper);
   assert.equal(recovery.uri,book.uri);
-  assert.equal(recovery.markdown,broken);
+  assert.equal(recovery.markdown,repaired.replace(/^<!-- paper-reader:end [^\n]+$/m,''));
   assert.equal(recovery.localConflict,book.markdown);
   assert.ok(recovery.warning);
   assert.deepEqual(recovery.notes.map(n=>n.id),[note.id]);
@@ -93,7 +96,7 @@ test('an incomplete native edit can be recovered in the reader without replacing
   const resolved=await act('notebook.write',{...paper,expectedRevision:recovery.revision,markdown:repaired});
   assert.equal(resolved.warning,undefined);
   assert.equal(resolved.notes[0]?.text,'Revised in the native editor');
-  assert.equal(await readFile(book.path,'utf8'),repaired);
+  assert.equal(await readFile(book.path,'utf8'),onDisk);
 });
 
 test('native reordering and native deletion are respected while unrelated paragraphs stay exactly in place', async t => {
@@ -104,9 +107,10 @@ test('native reordering and native deletion are respected while unrelated paragr
   const {note:second}=await act('note.save',{...passage,text:'Second'});
   const book=await act('notebook.get',paper);
   assert.ok(book.path);
-  const [one,two]=[...book.markdown.matchAll(/<!-- paper-reader:note ([\da-f-]+) -->[\s\S]*?<!-- paper-reader:end \1 -->/g)].map(match=>match[0]);
+  const disk=await readFile(book.path,'utf8');
+  const [one,two]=[...disk.matchAll(/<!-- paper-reader:note ([\da-f-]+) -->[\s\S]*?<!-- paper-reader:end \1 -->/g)].map(match=>match[0]);
   assert.ok(one && two);
-  const reordered=book.markdown.slice(0,book.markdown.indexOf(one))+two+'\n\n## Margin\n\n'+one+'\n';
+  const reordered=disk.slice(0,disk.indexOf(one))+two+'\n\n## Margin\n\n'+one+'\n';
   await writeFile(book.path,reordered);
   const refreshed=await act('notebook.get',paper);
   assert.deepEqual(refreshed.notes.map(n=>n.id),[second.id,first.id]);
@@ -180,7 +184,8 @@ test('a paired-language source keeps both the selected phrase and the exact orig
   const disk=await readFile(book.path,'utf8');
   assert.ok(disk.includes('块表'));
   assert.ok(disk.includes('cache & blocks'));
-  const backlink = new URL(disk.match(/\[Page 6 · Left column\]\(<([^>]+)>\)/)![1]);
+  assert.doesNotMatch(disk, /targetQuote|targetOffset|localhost/);
+  const backlink = new URL(book.markdown.match(/\[Page 6 · Left column\]\(<([^>]+)>\)/)![1]);
   assert.equal(backlink.searchParams.get('quote'),'cache & blocks');
   assert.equal(backlink.searchParams.get('targetQuote'),'块表');
   assert.equal(backlink.searchParams.get('targetOffset'),'12');
@@ -248,11 +253,12 @@ test('sections share one lazy vault notebook per publisher chapter with exact pa
   assert.match(disk, /\[1\.1 Finance · Paragraph 3\]\(</);
   assert.match(disk, /\[1\.2 Markets · Local markets\]\(</);
   assert.doesNotMatch(disk, /\[Page \d|1\.2 Markets · 1\.2 Markets/);
-  const urls = [...disk.matchAll(/\]\(<([^>]+)>\)/g)].map(m => new URL(m[1]));
+  assert.doesNotMatch(disk,/localhost|Open in Paper Reader/);
+  const urls = [...a.markdown.matchAll(/\]\(<([^>]+)>\)/g)].map(m => new URL(m[1]));
   assert.deepEqual(urls.filter(u => u.searchParams.has('anchor')).map(u => [u.searchParams.get('doc'), u.searchParams.get('page'), u.searchParams.get('anchor')]),
     [[at(2).docId, '2', 'p-3'], [at(2).docId, '3', 'p-3']]);
   assert.equal(urls[0].searchParams.get('page'), '2');
-  assert.ok(urls.some(u => u.href === sections[1].url) && urls.some(u => u.href === sections[2].url));
+  assert.ok(disk.includes(sections[1].url) && disk.includes(sections[2].url));
   assert.deepEqual(a.notes.map(n => n.id), [first.note.id, second.note.id]);
   assert.equal((await act('notebook.get', at(2))).path, a.path);
 
@@ -273,7 +279,7 @@ test('chapter exports keep user Markdown, scoped vocabulary, and native conflict
   const { note } = await act('note.save', entry(3, 'Saved before visiting Notes'));
   const a = await act('notebook.get', at(2));
   assert.ok(a.path);
-  const handwritten = a.markdown.replace(note.text, 'Edited in Obsidian') + '\n## 私人想法\n\nKeep this text exactly.\n';
+  const handwritten = (await readFile(a.path,'utf8')).replace(note.text, 'Edited in Obsidian') + '\n## 私人想法\n\nKeep this text exactly.\n';
   await writeFile(a.path, handwritten);
   await assert.rejects(act('notebook.write', { ...at(3), markdown: a.markdown, expectedRevision: a.revision }), {status: 409});
   await assert.rejects(act('note.save', { id: note.id, text: 'Old record', expectedUpdatedAt: note.updatedAt }), {status: 409});
@@ -343,4 +349,75 @@ test('a new chapter leaves handwritten files and the reserved name of a moved ch
   await assert.rejects(act('notebook.get', at(2)), { status: 409 });
   assert.equal(await readFile(manual, 'utf8'), 'My independent handwritten file.');
   assert.match(await readFile(a.path + '.moved', 'utf8'), /First chapter/);
+});
+
+test('a vault copy resolves an old inline book citation to the publisher and the saved section, while reader edits keep its exact locator', async t => {
+  const { root, at, act, sections } = await textbook(t);
+  const { docId, sourceUrl } = at(3);
+  const folder = path.join(root, 'documents', 'book-sections', docId);
+  await mkdir(folder, { recursive: true });
+  await writeFile(path.join(folder, createHash('sha256').update(sections[2].slug).digest('hex') + '.json'),
+    JSON.stringify({ paragraphs: ['Opening', 'Capital markets'], articleLayout: { 'p-2': { kind: 'p', ids: ['market-capital'] } } }));
+  const book = await act('notebook.get', at(3));
+  const exact = sourceUrl + '&anchor=p-2&quote=Capital&rangeStart=0&endAnchor=p-2&rangeEnd=7&rangeTail=Capital';
+  const old = book.markdown + '\nHere is [my quotation][p3-dc7fc55d].\n\n[p3-dc7fc55d]: <' + exact + '>\n\nKeep this paragraph.\n';
+  const saved = await act('notebook.write', { ...at(3), markdown: old, expectedRevision: book.revision });
+  const disk = await readFile(saved.path!, 'utf8');
+  assert.doesNotMatch(disk, /127\.0\.0\.1|localhost|Open in Paper Reader|p3-dc7fc55d|rangeStart/);
+  assert.ok(disk.includes('[my quotation](<' + sections[2].url + '#market-capital>)'));
+  const relative = disk.match(/\[Library copy\]\(<([^>]+\.md)#\^p-2>\)/)?.[1];
+  assert.ok(relative);
+  assert.match(await readFile(path.resolve(path.dirname(saved.path!), decodeURIComponent(relative)), 'utf8'), /Capital markets \^p-2/);
+  await writeFile(saved.path!, disk.replace('Keep this paragraph.', 'My native edit.'));
+  const reopened = await createServices({root})('notebook.get', at(3));
+  assert.ok(reopened.markdown.includes(exact) && reopened.markdown.includes('My native edit.'));
+  assert.equal(await readFile(saved.path!, 'utf8'), disk.replace('Keep this paragraph.', 'My native edit.'));
+});
+
+test('PDF exports include free writing and an independently openable vault PDF at the cited page', async t => {
+  const { root, act, vaultPath } = await setup(t);
+  const bytes = Buffer.from('%PDF-1.7 test paper');
+  const doc = await new Library(root).importPdf('Collected papers.pdf', bytes);
+  const request = { docId: doc.id, title: doc.title, sourceUrl: paper.sourceUrl.replace('doc=paper', 'doc=' + doc.id) };
+  await act('settings.save', { vaultPath });
+  const book = await act('notebook.get', request);
+  const exact = request.sourceUrl + '&anchor=p6-b1&quote=proof';
+  await act('notebook.write', { ...request, expectedRevision: book.revision, markdown: book.markdown + '\nProof: [p. 6 · proof](<' + exact + '>)\n' });
+  const exported = await act('obsidian.export', request);
+  const disk = await readFile(exported.path, 'utf8');
+  assert.match(disk, /Proof:/);
+  assert.doesNotMatch(disk, /localhost|Open in Paper Reader/);
+  const relative = disk.match(/\[p\. 6 · proof\]\(<([^>]+\.pdf)#page=6>\)/)?.[1];
+  assert.ok(relative);
+  assert.deepEqual(await readFile(path.resolve(path.dirname(exported.path), decodeURIComponent(relative))), bytes);
+});
+
+test('a standalone legacy reference amid free writing retains a usable citation even after its inline label was deleted', async t => {
+  const { root, act, vaultPath } = await setup(t);
+  const doc = await new Library(root).importWeb({ url:'https://example.org/read', title:'An article', paragraphs:['Read this.'] });
+  const request = { docId:doc.id, title:doc.title, sourceUrl:paper.sourceUrl.replace('doc=paper','doc=' + doc.id) };
+  await act('settings.save', { vaultPath });
+  const book = await act('notebook.get', request);
+  const definition = '[p1-0123abcd]: <' + request.sourceUrl + '&anchor=p-1&quote=Read+this.>';
+  const markdown = 'A thought\n' + definition + '\nAnother thought.\n';
+  const saved = await act('notebook.write', {...request,expectedRevision:book.revision,markdown});
+  const disk = await readFile(saved.path!, 'utf8');
+  assert.match(disk,/https:\/\/example\.org\/read#:~:text=Read%20this\./);
+  assert.match(disk,/\.md#\^p-1/);
+  assert.doesNotMatch(disk,/p1-0123abcd|localhost/);
+  assert.equal((await act('notebook.get',request)).markdown, markdown);
+});
+
+test('edits to a publisher URL in the vault retain the author’s link and note without a false conflict', async t => {
+  const { at, act, entry, sections } = await textbook(t);
+  const { note } = await act('note.save', entry(3, 'My observation'));
+  const book = await act('notebook.get', at(3));
+  const disk = await readFile(book.path!, 'utf8');
+  const edited = disk.replace(sections[2].url + '#:~:text=A%20quoted%20phrase', 'https://example.org/updated');
+  assert.notEqual(edited,disk);
+  await writeFile(book.path!, edited);
+  const latest = await act('notebook.get', at(3));
+  assert.equal(latest.warning, undefined);
+  assert.equal(latest.notes[0].id,note.id);
+  assert.match(await readFile(book.path!, 'utf8'), /https:\/\/example\.org\/updated/);
 });

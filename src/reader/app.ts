@@ -782,7 +782,7 @@ class Reader implements ReaderPort {
     document.addEventListener('pointerdown',e=>{
       if(!(e.target instanceof Element))return;
       if(!e.target.closest('#menu,#more'))this.closeMenu();
-      if(!this.card.hasOpenTool && !e.target.closest('#card,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,dialog'))this.card.dismiss();
+      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,dialog'))this.card.dismiss();
     });
     document.addEventListener('keydown',e=>{
       if(jump.matches(':popover-open'))return;
@@ -793,7 +793,7 @@ class Reader implements ReaderPort {
         if(!byId('card').hidden){this.card.dismiss(true);return;}
       }
       if(e.defaultPrevented || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || byId<HTMLDialogElement>('dialog').open)return;
-      if(e.target instanceof Element && e.target.closest('#card,input,textarea,select,button,dialog,.desk-split,[contenteditable]'))return;
+      if(e.target instanceof Element && e.target.closest('#card,#selectionDock,input,textarea,select,button,dialog,.desk-split,[contenteditable]'))return;
       const caret=document.getSelection()?.focusNode;
       if(caret?.parentElement?.closest('.pdf-native-text,.pdf-reading-text'))return;
       if(e.key==='ArrowRight'&&this.pdf&&this.page<this.pdf.pages){e.preventDefault();byId('next').click();}

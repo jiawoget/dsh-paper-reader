@@ -45,6 +45,9 @@ function articleFor(item: RemoteItem): string | undefined {
 function pdfItem(item: RemoteItem): boolean {
   return item.type === 'attachment' && (item.contentType.split(';')[0].trim().toLowerCase() === 'application/pdf' || /\.pdf$/i.test(item.filename));
 }
+function notebookSource(item: RemoteItem) {
+  return { original: sourceUrl(item.url) || articleFor(item) || '', webUrl: item.webUrl };
+}
 function itemFor(raw: unknown): RemoteItem {
   if (!isObject(raw) || typeof raw.key !== 'string' || !validKey.test(raw.key) || !isObject(raw.data)) itemTypeError();
   const data = raw.data;
@@ -174,7 +177,11 @@ export class ZoteroLibrary {
     const key = keyOf(input.key), item = await this.#getItem(key);
     if (!item) throw new ServiceError(404, 'This item was removed from Zotero. Refresh the library.');
     for (const docId of this.#store.documentsForItem(library, key)) {
-      try { return { kind: 'document', doc: await documents.get(docId) }; }
+      try {
+        const doc = await documents.get(docId);
+        this.#store.linkDocument(library, docId, key, notebookSource(item));
+        return { kind: 'document', doc };
+      }
       catch (error) { if (!isObject(error) || error.status !== 404) throw error; }
     }
     const attachments = await this.#attachments(item);
@@ -190,7 +197,7 @@ export class ZoteroLibrary {
       }
       if (bytes) {
         const doc = await documents.importPdf(item.title || file.filename, bytes);
-        this.#store.linkDocument(library, doc.id, key);
+        this.#store.linkDocument(library, doc.id, key, notebookSource(item));
         return { kind: 'document', doc };
       }
     }
@@ -209,7 +216,7 @@ export class ZoteroLibrary {
     if (!key) return { item: null };
     const item = await this.#getItem(key);
     if (!item) throw new ServiceError(404, 'The linked item was removed from Zotero. Find an item to link again.');
-    if (!saved) this.#store.linkDocument(namespace, docId, key);
+    this.#store.linkDocument(namespace, docId, key, notebookSource(item));
     return { item };
   }
   async link(input: Input): Promise<ServiceResults['zotero.link']> {
@@ -217,7 +224,7 @@ export class ZoteroLibrary {
     const library = await this.#namespace(input.library);
     const item = await this.#getItem(key);
     if (!item) throw new ServiceError(404, 'This item is no longer in the selected Zotero library.');
-    this.#store.linkDocument(library, docId, key);
+    this.#store.linkDocument(library, docId, key, notebookSource(item));
     return { item };
   }
   async #add(key: string, chosen: string[]): Promise<Save | null> {

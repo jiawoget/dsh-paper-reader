@@ -6,6 +6,7 @@ import type { DocumentInfo, NotebookSnapshot } from '../../src/shared/types.js';
 import { withHost } from './host.js';
 import { modelFixture } from './integration-fixtures.js';
 import { dragAnswer } from './selection-gestures.js';
+import { markdownLinks, vaultSource, visibleMarkdown } from './vault-links.js';
 
 const actualPaper = process.argv[2];
 const referenceTitles = ['Pattern recognition and neural networks', 'Modern applied statistics with s-plus'];
@@ -249,12 +250,22 @@ await withHost(async host => {
     })).json() as NotebookSnapshot;
     assert.ok(snapshot.path && snapshot.path.startsWith(vault));
     const raw = await readFile(snapshot.path, 'utf8');
-    const rows = raw.split(/\r?\n/u);
-    assert.match(rows.find(row => row.startsWith('| Training'))!, /^\| Training \| Compare \[p\. 1 · more difficult to train\]\[p1-[a-f\d]{8}\] with the baseline\. \|$/u);
-    const shortcutRow = rows.find(row => row.startsWith('| Shortcut'))!;
-    assert.ok(shortcutRow.startsWith('| Shortcut | See [p. 2 · input to the output \\[34, 49\\]][p2-'));
-    assert.match(shortcutRow, /\[p2-[a-f\d]{8}\] for the earlier method\. \|$/u);
-    assert.equal(rows.filter(row => /^\[p\d+-[a-f\d]{8}\]: <http/u.test(row)).length, 2);
+    const rows = visibleMarkdown(raw).split(/\r?\n/u);
+    const copied = new Set<string>();
+    for (const [i, [topic, quote, suffix]] of [['Training', training, ' with the baseline. |'],
+      ['Shortcut', shortcut, ' for the earlier method. |']].entries()) {
+      const row = rows.find(line => line.startsWith('| ' + topic + ' |'));
+      assert.ok(row && row.endsWith(suffix), 'A passage link must stay inside the original table cell.');
+      const destinations = markdownLinks(row);
+      assert.equal(destinations.length, 1);
+      assert.equal(destinations[0].label, 'p. ' + (i + 1) + ' · ' + quote);
+      const copy = vaultSource(vault, snapshot.path, destinations[0].target);
+      assert.equal(copy.fragment, 'page=' + (i + 1));
+      copied.add(copy.file);
+    }
+    assert.equal(copied.size, 1, 'Both page links must refer to the same PDF.');
+    assert.deepEqual(await readFile([...copied][0]), bytes);
+    assert.equal(snapshot.markdown.split(/\r?\n/u).filter(row => /^\[p\d+-[a-f\d]{8}\]: <http/u.test(row)).length, 2);
     await appendFile(snapshot.path, '\nRevisit the shortcut connections in Figure 2.\n');
     await page.reload();
     await rail.getByText('Revisit the shortcut connections in Figure 2.', { exact: true }).waitFor();

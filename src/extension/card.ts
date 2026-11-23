@@ -2,6 +2,7 @@ import type { Operations, SourceRecord } from '../shared/types.js';
 import { action, askWorker, errorText, getOrigin, readerAddress } from './protocol.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { cardStyle } from './card-style.js';
+import { questionModelForm } from '../shared/question-model-form.js';
 import { snapshot } from './web-page.js';
 import type { PickedText, Snapshot } from './web-page.js';
 
@@ -74,6 +75,7 @@ const layout = `
   <div class="modes"><button type="button" data-do="translate">Translate</button><button type="button" data-do="explain">Explain in context</button><button type="button" data-do="followup">Ask</button></div>
   <p class="question" hidden></p>
   <p class="answer hint" aria-live="polite">Choose a lookup to use your DSH model.</p>
+  <details class="model-picker" hidden><summary>Question model</summary></details>
   <form class="editor" hidden><label><span></span><textarea rows="2"></textarea></label>
     <div class="editor-actions"><button type="button" data-do="cancel">Cancel</button><button type="submit" class="primary" data-do="submit">Send</button></div>
   </form>
@@ -110,6 +112,7 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
   const submitted = shadow.querySelector<HTMLParagraphElement>('.question')!;
   const status = shadow.querySelector<HTMLParagraphElement>('.status')!;
   const editor = shadow.querySelector<HTMLFormElement>('form')!;
+  const modelPicker = shadow.querySelector<HTMLDetailsElement>('.model-picker')!;
   const textarea = shadow.querySelector<HTMLTextAreaElement>('textarea')!;
   const button = (id: string) => shadow.querySelector<HTMLButtonElement>('[data-do="' + id + '"]')!;
   const turns: Conversation = restored?.turns.slice() ?? [];
@@ -121,6 +124,17 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
   let savedWord = false;
   let savedNote = false;
   shadow.querySelector('h2')!.textContent = pick.text;
+  modelPicker.ontoggle = () => {
+    modelPicker.querySelector('form')?.remove();
+    if (!modelPicker.open) return;
+    modelPicker.append(questionModelForm({ label: english => english, load: () => action('ai.models', {}),
+      save: questionModel => run(async () => {
+        await action('ai.selectModel', { questionModel });
+        modelPicker.open = false;
+        modelPicker.querySelector('summary')!.textContent = ['Question model', questionModel?.model, questionModel?.reasoningEffort].filter(Boolean).join(' · ');
+      })
+    }));
+  };
 
   function position(): void {
     if (!pick.range.startContainer.isConnected) { close(); return; }
@@ -159,6 +173,8 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
   }
 
   async function lookup(mode: Mode, question?: string): Promise<void> {
+    modelPicker.hidden = true;
+    modelPicker.open = false;
     toggleMode(mode);
     submitted.hidden = !question;
     submitted.textContent = question || '';
@@ -172,6 +188,7 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
     } catch (error) {
       answer.className = 'answer error';
       answer.textContent = errorText(error);
+      modelPicker.hidden = mode !== 'followup';
       return;
     }
     answer.className = 'answer';
@@ -187,6 +204,8 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
   }
 
   function edit(mode: EditorMode): void {
+    modelPicker.hidden = mode !== 'followup';
+    modelPicker.open = false;
     formMode = mode;
     editor.hidden = false;
     editor.querySelector('label span')!.textContent = mode === 'note' ? 'Note' : 'Ask about this passage';
@@ -212,7 +231,7 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
       editor.hidden = true;
       void run(() => lookup(id));
     } else if (id === 'note' || id === 'followup') edit(id);
-    else if (id === 'cancel') { fields[formMode] = ''; editor.hidden = true; }
+    else if (id === 'cancel') { fields[formMode] = ''; editor.hidden = modelPicker.hidden = true; modelPicker.open = false; }
     else if (id === 'open') void run(() => source.open());
     else if (id === 'vocab') void run(async () => {
       const saved = await source.collect();

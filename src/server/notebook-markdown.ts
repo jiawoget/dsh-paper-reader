@@ -12,7 +12,6 @@ export function blocks(markdown: string): Block[] {
 function formatNote(note: Entry, doc: Omit<StoredNotebook, 'markdown'>): string {
   const section = doc.chapter?.sections.get(note.page);
   const reference = [sourceText(note, doc.sourceUrl, note.quote, section?.title)];
-  if (section) reference.push('[OpenStax · ' + heading(section.title) + '](<' + section.url + '>)');
   const quoted = (text: string) => text.split(/\r?\n/).map(line => '> ' + line).join('\n');
   if (note.quote) reference.push(quoted(note.quote));
   if (note.context && note.context !== note.quote) reference.push('**Selected text**', quoted(note.context));
@@ -49,11 +48,21 @@ function sourceFields(doc: StoredNotebook, block: Block, previous?: Entry): Inpu
   const match = block.reference.match(/^\[((?:\\.|[^\]\\\r\n])+)\]\(<([^>\r\n]+)>\)/m);
   const caption = match?.[1].replace(/\\(.)/g, '$1') ?? '';
   const legacy = /^Page \d+(?: · (.*))?$/.exec(caption);
+  const [original, selected] = block.reference.split(/\r?\n\r?\n\*\*Selected text\*\*\r?\n\r?\n/);
+  const unquote = (text: string) => text.split(/\r?\n/).filter(line => line.startsWith('>')).map(line => line.replace(/^> ?/, '')).join('\n');
+  const quote = unquote(original);
+  const quoted = {quote, context:selected ? unquote(selected) : quote};
   if (!match || !legacy && (!doc.chapter || caption.startsWith('OpenStax · '))) {
     return previous ? { ...previous } : { docId: doc.docId, title: doc.title, page: doc.chapter?.firstPage ?? 1, sourceUrl: doc.sourceUrl };
   }
+  const destination = URL.parse(match[2]);
+  if (!destination || destination.pathname !== '/api/paper-reader/app/index.html') {
+    // Native editors may replace the public citation or its vault-relative
+    // target. The author controls that Markdown; keep the saved reader range.
+    return { ...(previous ?? { docId:doc.docId, title:doc.title, page:doc.chapter?.firstPage ?? 1, sourceUrl:doc.sourceUrl }), ...quoted };
+  }
   const link = new URL(address(match[2], true));
-  if (link.searchParams.get('doc') !== doc.docId || link.pathname !== '/api/paper-reader/app/index.html') {
+  if (link.searchParams.get('doc') !== doc.docId) {
     throw new ServiceError(409, 'A source link belongs to a different document. Check the link in the Markdown file.');
   }
   const page = Number(link.searchParams.get('page'));
@@ -65,11 +74,8 @@ function sourceFields(doc: StoredNotebook, block: Block, previous?: Entry): Inpu
     if (previous && chapterPassageLabel(section.title, previous.label) === caption) label = previous.label;
     else if (caption !== section.title) label = caption.startsWith(prefix) ? caption.slice(prefix.length) : caption;
   }
-  const [original, selected] = block.reference.split(/\r?\n\r?\n\*\*Selected text\*\*\r?\n\r?\n/);
-  const unquote = (text: string) => text.split(/\r?\n/).filter(line => line.startsWith('>')).map(line => line.replace(/^> ?/, '')).join('\n');
-  const quote = unquote(original);
   return { docId: doc.docId, title: doc.title, page, anchor: link.searchParams.get('anchor') || '',
-    sourceUrl: link.href, label, quote, context: selected ? unquote(selected) : quote };
+    sourceUrl: link.href, label, ...quoted };
 }
 
 export function reconcileNotes(records: NotebookRecords, doc: StoredNotebook, previous: string, next: string): void {

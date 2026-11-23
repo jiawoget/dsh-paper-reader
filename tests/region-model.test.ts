@@ -206,6 +206,7 @@ test('DSH text-only catalog entries skip attachment storage and use only in-crop
 test('DSH vision uses the host image attachment containing the crop and never embeds base64 in text', async () => {
   let savedBytes: Uint8Array | undefined;
   let streamed = '';
+  const selection = { provider: 'dsh', model: 'vision', reasoningEffort: 'detailed' };
   const ref = { attachmentId: 'sha256:' + 'e'.repeat(64), mediaType: 'image/png', bytes: 93, width: 2, height: 1 };
   const model = new ReaderModel({ attachments: { async saveImage(input: { data: Uint8Array; mediaType: string }) {
     assert.equal(input.mediaType, 'image/png');
@@ -215,18 +216,24 @@ test('DSH vision uses the host image attachment containing the crop and never em
     listProviders: () => [{ id: 'first' }, { id: 'dsh' }],
     listModels: (provider: string) => provider === 'first' ? [{ id: 'text', inputModalities: ['text'] }]
       : [{ id: 'vision', inputModalities: ['text', 'image'] }],
-    async *stream(input: unknown) {
-      streamed = JSON.stringify(input);
-      yield { type: 'text-delta', text: 'Blue.' };
-      yield { type: 'finish', reason: { kind: 'stop' } };
-    }
+    resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'detailed' }] } }),
+    async prepareCall(config: unknown) {
+      assert.deepEqual(config, selection);
+      return { config, inputModalities: ['text', 'image'], async *stream(input: unknown) {
+        streamed = JSON.stringify(input);
+        yield { type: 'text-delta', text: 'Blue.' };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      } };
+    },
+    async *stream() { assert.fail('Images must use the prepared host call.'); }
   } }, fetch);
-  assert.deepEqual(await model.passage({ ...initialSettings, model: 'vision' }, { ...request, regionText: '' }), { text: 'Blue.' });
+  assert.deepEqual(await model.passage(initialSettings, { ...request, questionModel: selection, regionText: '' }), { text: 'Blue.' });
   assert.ok(savedBytes);
   assert.deepEqual(Buffer.from(savedBytes), Buffer.from(png, 'base64'));
   const packet = JSON.parse(streamed);
   assert.equal(packet.provider, 'dsh');
   assert.equal(packet.model, 'vision');
+  assert.equal(packet.reasoningEffort, 'detailed');
   assert.deepEqual(packet.messages[0].content.find((part: { type: string }) => part.type === 'image'), { type: 'image', attachment: ref });
   assert.doesNotMatch(streamed, /iVBORw0|Unrelated text/);
 });
