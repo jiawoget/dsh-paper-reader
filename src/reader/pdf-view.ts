@@ -38,6 +38,8 @@ export interface PdfRenderOptions {
   onTranslationState?: () => void;
   /** A scale of one fits the available pane width. */
   zoom?: number;
+  /** Minimum rendered visual pixel size for translated prose when a sheet scales below 1:1. */
+  minReadableFontSize?: number;
   translationVisible?: boolean;
   targetLanguage?: string;
   targetLanguageLabel?: string;
@@ -197,16 +199,20 @@ function mount(input: MountedPage): PdfPageView {
   const regions = pdfRegionPicker(source, raster, nativeLayer.textDivs, options.page,
     { x: 0, y: 0, width: pageWidth, height: pageHeight }, signal, options.onRegion,
     area => figureAtRegion(area, layout.passages), options.canContinueRegion);
+  const minReadableFontSize = options.minReadableFontSize ?? 0;
+  let fittedScale = target.scale;
+  function syncSheetScale(): void {
+    source.resize(); target.resize();
+    const scaleChanged = target.outer.dataset.focus !== 'passage' && Math.abs(target.scale - fittedScale) > 0.015;
+    if (scaleChanged) fittedScale = target.scale;
+    repaint(scaleChanged);
+  }
   function sizeSheets(): void {
     if (sharedGrid) sharedGrid.style.width = (reading.root.hidden ? zoom * 100 : 100) + '%';
     else for (const sheet of [source, target]) sheet.outer.style.width = zoom * 100 + '%';
-    source.resize(); target.resize();
-    repaint(false);
+    syncSheetScale();
   }
-  const resize = new ResizeObserver(() => {
-    source.resize(); target.resize();
-    repaint(false);
-  });
+  const resize = new ResizeObserver(syncSheetScale);
   resize.observe(source.outer);
   resize.observe(target.outer);
   raster.watchDensity(source.outer, target.outer);
@@ -232,7 +238,7 @@ function mount(input: MountedPage): PdfPageView {
       entry.translated.hidden = !value;
       if (changed) {
         entry.translated.textContent = value;
-        fitText(entry.translated, entry.passage);
+        fitText(entry.translated, entry.passage, target.scale, minReadableFontSize);
         if (entry.active) {
           const active = entry.active;
           entry.active = undefined;
@@ -441,8 +447,11 @@ function mount(input: MountedPage): PdfPageView {
       figureImage, signal, deliver: options.onSelect, reflow: true });
   }
   function repaint(refit: boolean): void {
+    if (refit) fittedScale = target.scale;
     for (const entry of placed.values()) {
-      if ((refit || !entry.translated.style.fontSize) && !entry.translated.hidden) fitText(entry.translated, entry.passage);
+      if ((refit || !entry.translated.style.fontSize) && !entry.translated.hidden) {
+        fitText(entry.translated, entry.passage, target.scale, minReadableFontSize);
+      }
       if (!entry.active) continue;
       const active = entry.active;
       entry.active = undefined;

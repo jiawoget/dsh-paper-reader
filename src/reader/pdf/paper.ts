@@ -15,6 +15,7 @@ export function place(node: HTMLElement, r: Box): void {
 export interface Sheet {
   outer: HTMLElement;
   plane: HTMLDivElement;
+  readonly scale: number;
   attach(host: HTMLElement, zoom: number): void;
   setWindow(bounds: Box): void;
   resize(): void;
@@ -30,7 +31,9 @@ export function makeSheet(side: ReadingSide, page: number, window: Box, width: n
   place(plane, { x: -window.x, y: -window.y, width, height });
   scale.append(plane);
   outer.append(scale);
+  let ratio = 1;
   return { outer, plane,
+    get scale() { return ratio; },
     attach(host, zoom) {
       outer.style.width = zoom * 100 + '%';
       host.replaceChildren(outer);
@@ -45,7 +48,10 @@ export function makeSheet(side: ReadingSide, page: number, window: Box, width: n
     resize() {
       outer.style.aspectRatio = window.width + ' / ' + window.height;
       const pixels = outer.getBoundingClientRect().width;
-      if (pixels) scale.style.transform = 'scale(' + pixels / window.width + ')';
+      if (pixels) {
+        ratio = pixels / window.width;
+        scale.style.transform = 'scale(' + ratio + ')';
+      }
     }
   };
 }
@@ -73,11 +79,22 @@ export function translatedText(passage: Passage, lang: string | null = 'zh-CN'):
   return node;
 }
 
-export function fitText(node: HTMLElement, passage: Passage): void {
+export function fitText(node: HTMLElement, passage: Passage, sheetScale = 1, minVisualPx = 0): void {
   if (node.hidden || !node.isConnected || node.clientHeight === 0) return;
   node.classList.remove('needs-scroll');
-  const maximum = Math.max(6, Math.min(58, passage.fontSize * (passage.role === 'heading' ? 1.08 : 1)));
-  let lower = Math.min(maximum, Math.max(5, maximum * 0.65)), upper = maximum;
+  const baseMax = Math.max(6, Math.min(58, passage.fontSize * (passage.role === 'heading' ? 1.08 : 1)));
+  let floor = Math.min(baseMax, Math.max(5, baseMax * 0.65));
+  let maximum = baseMax;
+  // When a bilingual sheet scales below 1:1 (e.g. 1440px with an open or widened sidebar),
+  // keep translated prose at a readable visual size and let overflowing boxes scroll vertically.
+  if (minVisualPx > 0 && sheetScale > 0 && sheetScale < 1.05) {
+    const isSmallNote = passage.role === 'caption' || passage.fontSize < 8.5 || passage.id.startsWith('ref-');
+    const targetVisualPx = isSmallNote ? Math.min(minVisualPx, 10) : minVisualPx;
+    const scaledFloor = Math.min(24, targetVisualPx / sheetScale);
+    floor = Math.max(floor, scaledFloor);
+    maximum = Math.max(maximum, floor);
+  }
+  let lower = floor, upper = maximum;
   node.style.fontSize = maximum + 'px';
   const fits = () => node.scrollHeight <= node.clientHeight && node.scrollWidth <= node.clientWidth;
   if (fits()) return;

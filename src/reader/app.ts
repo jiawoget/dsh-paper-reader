@@ -42,11 +42,12 @@ function syncTheme(): void {
     let dark: boolean | undefined;
     try {
       const parentDoc = window.parent !== window ? window.parent.document : undefined;
-      if (parentDoc?.body) dark = parentDoc.body.hasAttribute('data-ds-dark-theme');
+      if (parentDoc?.body) {
+        const attr = parentDoc.body.getAttribute('data-ds-dark-theme');
+        dark = attr !== null && attr !== 'false' && attr !== '0';
+      }
     } catch { /* Standalone or cross-origin: fall back to system preference. */ }
-    const scheme = (dark ?? media.matches) ? 'dark' : 'light';
-    document.documentElement.dataset.theme = scheme;
-    document.documentElement.style.colorScheme = scheme;
+    document.documentElement.dataset.theme = (dark ?? media.matches) ? 'dark' : 'light';
   };
   apply();
   media.addEventListener('change', apply);
@@ -491,6 +492,7 @@ class Reader implements ReaderPort {
         if(intent==='reopen')this.keepSourceReply(sourceAddress);
       },
       onTranslationState:()=>{if(version===this.epoch)this.card.refresh();},zoom:this.zoom,translationVisible:this.parallel,
+      minReadableFontSize:12,
       focusMode:this.desk.focus,focusId:localStorage.getItem(focusKey)||undefined,onFocus:(id:string,label:string)=>{
         if(version!==this.epoch)return;
         if(id)localStorage.setItem(focusKey,id);

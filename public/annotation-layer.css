@@ -1,6 +1,6 @@
-::highlight(paper-annotation-yellow) { background-color: rgb(246 205 64 / 48%); }
-::highlight(paper-annotation-green) { background-color: rgb(123 198 143 / 49%); }
-::highlight(paper-annotation-purple) { background-color: rgb(182 142 222 / 49%); }
+::highlight(paper-annotation-yellow) { background-color: var(--hl-yellow, rgb(246 205 64 / 48%)); }
+::highlight(paper-annotation-green) { background-color: var(--hl-green, rgb(123 198 143 / 49%)); }
+::highlight(paper-annotation-purple) { background-color: var(--hl-purple, rgb(182 142 222 / 49%)); }
 
 .web-reading-sheet, .pdf-reading-text { position: relative; }
 .annotation-layer {
@@ -29,17 +29,17 @@
   min-width: 28px;
   height: 27px;
   border-radius: 6px;
-  border: 1px solid #9d85b4;
-  color: #492a68;
-  background: #f1e6fa;
-  box-shadow: 0 1px 3px #2b183426;
+  border: 1px solid var(--pin-border, #9d85b4);
+  color: var(--pin-ink, #492a68);
+  background: var(--pin-bg, #f1e6fa);
+  box-shadow: var(--shadow-subtle, 0 1px 3px rgb(43 24 52 / 15%));
   font: 650 12px/1 system-ui, sans-serif;
   pointer-events: auto;
 }
-.annotation-pin:hover { background: #e5d3f3; }
+.annotation-pin:hover { background: var(--pin-hover, #e5d3f3); }
 .annotation-location { z-index: 6; }
 .annotation-highlight:focus, .annotation-pin:focus-visible, .annotation-location:focus {
-  outline: 2px solid #72459b;
+  outline: 2px solid var(--focus-ring, #6d42b3);
   outline-offset: 2px;
 }
 .annotation-chooser {
@@ -52,11 +52,11 @@
   overflow: auto;
   box-sizing: border-box;
   padding: 9px;
-  border: 1px solid #cbbbd6;
+  border: 1px solid var(--line, #d4d9e4);
   border-radius: 8px;
-  color: #392e43;
-  background: #fff;
-  box-shadow: 0 5px 16px #36244328;
+  color: var(--desk-ink, #242738);
+  background: var(--paper, #fff);
+  box-shadow: var(--shadow-popover, 0 6px 22px rgb(48 51 70 / 22%));
   font: 13px/1.4 "Segoe UI", sans-serif;
 }
 .annotation-chooser strong { display: block; margin: 2px 5px 6px; }
@@ -73,7 +73,7 @@
   text-align: start;
   overflow-wrap: anywhere;
 }
-.annotation-chooser button:hover, .annotation-chooser button:focus-visible { background: #f0e9f6; }
+.annotation-chooser button:hover, .annotation-chooser button:focus-visible { background: var(--lavender, #ece4fa); }
 .annotation-placement {
   position: absolute;
   inset: 0;
@@ -90,17 +90,17 @@
   position: absolute;
   width: 20px;
   height: 20px;
-  border: 2px solid #693a93;
+  border: 2px solid var(--purple, #59358e);
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  background: #f1e7f966;
-  box-shadow: 0 0 0 1px #fff;
+  background: rgb(148 109 213 / 28%);
+  box-shadow: 0 0 0 1px var(--paper, #fff);
   pointer-events: none;
 }
 .annotation-crosshair::before, .annotation-crosshair::after {
   content: "";
   position: absolute;
   inset: 7px -4px;
-  background: #693a93;
+  background: var(--purple, #59358e);
 }
 .annotation-crosshair::after { inset: -4px 7px; }
