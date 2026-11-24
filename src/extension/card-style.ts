@@ -22,7 +22,7 @@ export const cardStyle = `
   --question-border: #9b79d3;
   --border: #e8eaf0;
   --input-bg: #fbfcfe;
-  --input-border: #cbd0dd;
+  --input-border: #82899c;
   --error: #923c38;
   --status: #5d526f;
   --scrollbar: #c1b8ce;
@@ -51,7 +51,7 @@ export const cardStyle = `
     --question-border: #9d7fe0;
     --border: #313649;
     --input-bg: #151822;
-    --input-border: #434a63;
+    --input-border: #6f7791;
     --error: #f28b85;
     --status: #b8accf;
     --scrollbar: #505772;

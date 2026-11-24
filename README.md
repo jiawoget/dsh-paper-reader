@@ -92,7 +92,7 @@ Press `?` or open **More actions → Keyboard shortcuts** inside the reader to v
 | Reading | `Esc` | Cancel screenshot, close menu, card, or dialog |
 | Panels | `n` / `c` | Toggle Notes or Contents sidebar |
 | Panels | `←` / `→` / `Home` / `End` | Switch tabs in sidebar, Library, or Vocabulary and history |
-| Notes editor | `Ctrl/Cmd+S`, `B`, `I` | Save notes, bold text, italic text |
+| Notes editor | `Ctrl/Cmd+S`, `Ctrl/Cmd+B`, `Ctrl/Cmd+I` | Save notes, bold text, italic text |
 | Notes editor | `Ctrl/Cmd+Z` / `Ctrl/Cmd+Y` | Undo or redo |
 | Composers | `Enter` / `Shift+Enter` | Send Paper chat or selection message / new line |
 | Composers | `Ctrl/Cmd+Enter` | Save selection note or mark |
@@ -126,7 +126,7 @@ npm run test:e2e
 
 To run a single default E2E suite, invoke scripts from `package.json` such as `npm run test:browser`, `npm run test:extension`, `npm run test:integrations`, `npm run test:target-language`, `npm run test:citation-export`, `npm run test:dark-theme-a11y`, or `npm run test:shortcuts-i18n`.
 
-Several default `npm run test:e2e` suites (`npm run test:reader-selection`, `npm run test:passage-links`, `npm run test:reading-layout`, `npm run test:paper-chat`, and `npm run test:zotero-desktop`) also accept optional local-PDF or live-service environment variables.
+Three default `npm run test:e2e` suites (`npm run test:reader-selection`, `npm run test:paper-chat`, and `npm run test:zotero-desktop`) also accept optional local-PDF or live-service environment variables, while `npm run test:passage-links` and `npm run test:reading-layout` accept an optional local PDF path as a CLI argument.
 
 Four opt-in suites stay outside `npm run test:e2e` because they require an external PDF, live internet access, or a live model: `npm run test:pdf-artwork`, `npm run test:floating-selection`, `npm run test:zotero-public`, and `npm run test:sidebar-model`.
 

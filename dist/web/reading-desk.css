@@ -232,7 +232,7 @@ input::placeholder, textarea::placeholder {
   width: 4.2em;
   min-height: 36px;
   padding: 4px 6px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-strong);
   border-radius: 5px;
   background: var(--paper);
   font-size: 16px;
@@ -351,7 +351,7 @@ input::placeholder, textarea::placeholder {
   max-width: 135px;
   min-height: 27px;
   padding: 3px 5px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-strong);
   border-radius: 5px;
   color: var(--purple);
   background: var(--paper);
@@ -494,7 +494,7 @@ input::placeholder, textarea::placeholder {
 .sidebar-position, #highlightDisplay {
   max-width: 100%;
   padding: 4px 5px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-strong);
   border-radius: 5px;
   background: var(--paper);
   color: var(--desk-ink);
@@ -516,7 +516,7 @@ input::placeholder, textarea::placeholder {
 }
 #rail:has(.notebook-source-mode[aria-pressed="true"]) .highlight-preference { display: none; }
 @media (max-width: 700px) { #highlightDisplay { min-height: 36px; } }
-#notebookPose:hover, #closeRail:hover { background: var(--lavender); color: var(--purple); }
+#notebookPose:hover, #closeRail:hover { background: var(--lavender); color: var(--purple); border-color: var(--purple); }
 .rail-head {
   height: 37px;
   min-width: 0;
@@ -1098,8 +1098,11 @@ input::placeholder, textarea::placeholder {
   line-height: 1.5;
 }
 
+@media (pointer: coarse) {
+  #closeDialog, #closeShortcuts { min-width: 44px; min-height: 44px; }
+}
 @media (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
-  #closeShortcuts { min-width: 44px; min-height: 44px; }
+  #closeDialog, #closeShortcuts { min-width: 44px; min-height: 44px; }
   #shortcutsBody { padding: 12px 14px 18px; gap: 12px; }
   .shortcuts-table td:first-child { width: 44%; }
   #selectionDock:has(#card[data-workspace="chat"]) {

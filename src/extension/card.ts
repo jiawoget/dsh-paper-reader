@@ -79,7 +79,7 @@ const layout = `
   <form class="editor" hidden><label><span></span><textarea rows="2"></textarea></label>
     <div class="editor-actions"><button type="button" data-do="cancel">Cancel</button><button type="submit" class="primary" data-do="submit">Send</button></div>
   </form>
-  <div class="foot"><button type="button" data-do="open">Read ↗</button><button type="button" data-do="vocab">☆ Save word</button><button type="button" class="primary" data-do="note">Add to notes</button></div>
+  <div class="foot"><button type="button" data-do="open">Read ↗</button><button type="button" data-do="vocab">☆ Save word</button><button type="button" class="primary" data-do="note">Add to Notes</button></div>
   <p class="status" role="status"></p>
 </section>`;
 
