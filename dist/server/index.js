@@ -613,6 +613,39 @@ var Library = class {
     const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
     return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, ...meta }) => meta)];
   }
+  async rename(id, title) {
+    if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
+    const nextTitle = typeof title === "string" ? title.trim().slice(0, 250) : "";
+    if (!nextTitle) fail("A document title is required.");
+    const doc = await this.get(id);
+    const file = path.join(this.directory, doc.id + ".json");
+    const saved = JSON.parse(await readFile(file, "utf8"));
+    saved.title = nextTitle;
+    const tmp = file + "." + randomUUID() + ".tmp";
+    try {
+      await writeFile(tmp, JSON.stringify(saved));
+      await rename(tmp, file);
+    } finally {
+      await rm(tmp, { force: true });
+    }
+    return this.get(doc.id);
+  }
+  async delete(id) {
+    if (id === sample.id) fail("The bundled sample paper cannot be deleted.");
+    if (!validDocId(id)) fail("Invalid document ID.", 404);
+    const file = path.join(this.directory, id + ".json");
+    const existed = existsSync(file);
+    await Promise.all([
+      rm(file, { force: true }),
+      rm(path.join(this.directory, id + ".pdf"), { force: true }),
+      rm(path.join(this.directory, id + ".source-url"), { force: true }),
+      rm(path.join(this.directory, id + ".layout.json"), { force: true }),
+      rm(path.join(this.directory, "book-sections", id), { recursive: true, force: true }),
+      rm(path.join(this.translationDir, id), { recursive: true, force: true }),
+      rm(path.join(this.imageDir, id), { recursive: true, force: true })
+    ]);
+    return { id, deleted: existed };
+  }
   bookJob(key2, start) {
     const pending = this.bookJobs.get(key2);
     if (pending) return pending;
@@ -3927,6 +3960,10 @@ function apply(ctx) {
         return json({ docs: await library.list() });
       case "library.get":
         return json({ doc: await library.get(input.id) });
+      case "library.rename":
+        return json({ doc: await library.rename(input.id, input.title) });
+      case "library.delete":
+        return json(await library.delete(input.id));
       case "web.import":
         return json(await library.importWebDocument(input));
       case "web.open":

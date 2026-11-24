@@ -35,8 +35,14 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .library-results:empty { display: none; }
 .library-source:has(.library-results:empty) { min-height: 180px; display: flex; flex-direction: column; }
 .library-source:has(.library-results:empty) .library-footer { margin-top: auto; }
-.zotero-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.zotero-item + .zotero-item, .library-results > .doc-row + .doc-row { border-top: 1px solid #e5e7ed; }
+.zotero-item, .library-device-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.zotero-item + .zotero-item, .library-results > :is(.doc-row, .library-device-item, .library-rename) + :is(.doc-row, .library-device-item, .library-rename) { border-top: 1px solid var(--line, #e5e7ed); }
+.library-item-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.library-item-actions .icon-btn { min-width: 32px; height: 32px; color: var(--ink-muted); }
+.library-item-actions .icon-btn:hover { color: var(--accent); background: var(--lavender, #f5f1fa); }
+.library-delete-confirm { color: #9c2b2b; border-color: #d89b9b; }
+.library-rename { display: flex; align-items: center; gap: 6px; padding: 8px 4px; }
+.library-rename .search { flex: 1; }
 .reader-library .library-document {
   display: flex; align-items: center; gap: 12px;
   width: 100%; min-height: 54px; padding: 9px 6px; text-align: left; color: inherit; border-radius: 4px;

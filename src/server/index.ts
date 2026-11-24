@@ -141,6 +141,8 @@ export function apply(ctx:ReaderHost):void {
       }
       case 'library.list': return json({docs:await library.list()});
       case 'library.get': return json({doc:await library.get(input.id)});
+      case 'library.rename': return json({doc:await library.rename(input.id,input.title)});
+      case 'library.delete': return json(await library.delete(input.id));
       case 'web.import': return json(await library.importWebDocument(input));
       case 'web.open': return json(await openWebArticle(library, input.url));
       case 'book.section': return json({doc:await library.bookSection(input.docId,input.page)});

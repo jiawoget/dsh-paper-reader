@@ -34,13 +34,15 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
       if (group) group.push(doc);
       else editions.set(key, [doc]);
     }
+    let editingId = '';
+    let confirmingId = '';
     function render() {
       const query = search.value.trim().toLocaleLowerCase();
       const shown = docs.filter(doc => [doc.title, doc.authors, doc.url].some(field => field?.toLocaleLowerCase().includes(query)));
       list.replaceChildren();
       status.textContent = shown.length ? '' : t('No matching documents.', '没有找到符合条件的文档。');
       for (const doc of shown) {
-        const group = editions.get(doc.title.toLocaleLowerCase())!;
+        const group = editions.get(doc.title.toLocaleLowerCase()) ?? [doc];
         const details: string[] = [];
         if (doc.book) {
           const place = localBookPlace(doc.id);
@@ -55,6 +57,31 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
           const number = group.indexOf(doc) + 1;
           details.push(t('Copy ' + number, '第 ' + number + ' 份'));
         }
+        if (editingId === doc.id) {
+          const form = el('form', 'library-rename');
+          const input = el('input', 'search');
+          input.value = doc.title; input.maxLength = 250; input.required = true;
+          input.ariaLabel = t('Document title', '文档标题');
+          const save = el('button', 'btn primary', t('Save', '保存')); save.type = 'submit';
+          const cancel = button(t('Cancel', '取消'), () => { editingId = ''; render(); });
+          form.onsubmit = async event => {
+            event.preventDefault();
+            const title = input.value.trim();
+            if (!title) return;
+            save.disabled = true;
+            try {
+              const { doc: updated } = await api('library.rename', { id: doc.id, title });
+              doc.title = updated.title;
+              if (app.doc.id === doc.id) { app.doc.title = updated.title; byId('docTitle').textContent = updated.title; }
+              editingId = '';
+              render();
+            } catch (error) { toast(message(error)); save.disabled = false; }
+          };
+          form.append(input, save, cancel);
+          list.append(form);
+          input.focus(); input.select();
+          continue;
+        }
         const row = button('', () => read(doc), 'doc-row library-document');
         const text = el('span', 'library-row-text');
         text.append(el('strong', '', doc.title), el('small', '', details.join(' · ')));
@@ -63,7 +90,28 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
           row.setAttribute('aria-current', 'true');
           row.append(el('small', 'library-current', t('Open', '正在阅读')));
         }
-        list.append(row);
+        if (doc.id === 'pagedattention') { list.append(row); continue; }
+        const wrap = el('div', 'library-device-item');
+        const actions = el('div', 'library-item-actions');
+        const renameBtn = button('', () => { confirmingId = ''; editingId = doc.id; render(); }, 'icon-btn', 'edit');
+        renameBtn.ariaLabel = renameBtn.title = t('Rename ' + doc.title, '重命名 ' + doc.title);
+        const delBtn = button(confirmingId === doc.id ? t('Delete', '确认删除') : '', async () => {
+          if (confirmingId !== doc.id) { confirmingId = doc.id; render(); return; }
+          await api('library.delete', { id: doc.id });
+          const index = docs.indexOf(doc);
+          if (index >= 0) docs.splice(index, 1);
+          localStorage.removeItem('reader.pdf-pages.' + doc.id);
+          confirmingId = '';
+          if (app.doc.id === doc.id) await app.navigate('pagedattention');
+          render();
+          toast(t('Document removed from this device.', '已从本机删除文档。'));
+        }, confirmingId === doc.id ? 'btn library-delete-confirm' : 'icon-btn', confirmingId === doc.id ? undefined : 'close');
+        delBtn.ariaLabel = delBtn.title = confirmingId === doc.id
+          ? t('Confirm delete ' + doc.title, '确认删除 ' + doc.title)
+          : t('Delete ' + doc.title, '删除 ' + doc.title);
+        actions.append(renameBtn, delBtn);
+        wrap.append(row, actions);
+        list.append(wrap);
       }
     }
     search.addEventListener('input', render);
