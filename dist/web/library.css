@@ -27,7 +27,7 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .library-source { padding-top: 16px; min-width: 0; }
 .library-filters { display: grid; grid-template-columns: minmax(0, 3fr) minmax(9em, 2fr); gap: 8px; }
 .reader-library :is(.search, select) {
-  min-width: 0; min-height: 38px; padding: 7px 10px; border: 1px solid var(--line);
+  min-width: 0; min-height: 38px; padding: 7px 10px; border: 1px solid var(--border-strong);
   border-radius: 6px; background-color: var(--paper); color: inherit; font: inherit;
 }
 .reader-library .search::placeholder { color: var(--ink-muted); }

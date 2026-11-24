@@ -49,7 +49,7 @@
 .paper-chat-form { flex:none; padding:6px 12px 8px; border-top:1px solid var(--line); }
 .paper-chat-input { display:flex; align-items:flex-end; gap:7px; }
 .paper-chat-input textarea { flex:1; min-width:0; width:100%; min-height:32px; max-height:11dvh; resize:vertical;
-  border:1px solid var(--line); border-radius:6px; background:var(--paper); color:var(--desk-ink); padding:5px 8px; font-size:13px; }
+  border:1px solid var(--border-strong); border-radius:6px; background:var(--paper); color:var(--desk-ink); padding:5px 8px; font-size:13px; }
 .paper-chat-input button { padding:5px 13px; min-height:32px; }
 .paper-chat-attachment { margin-bottom:4px; min-width:0; font-size:12px; }
 .paper-chat-attachment span { flex:none; font-weight:600; color:var(--purple); }

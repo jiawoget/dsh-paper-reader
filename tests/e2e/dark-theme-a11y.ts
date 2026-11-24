@@ -86,6 +86,26 @@ function measureElement(el, fgProp, pseudo) {
     colorScheme: style.colorScheme
   };
 }
+function measureBorder(el) {
+  const style = getComputedStyle(el);
+  const bg = effectiveBg(el);
+  const parentBg = el.parentElement ? effectiveBg(el.parentElement) : bg;
+  const borderRaw = parseCssColor(style.borderTopColor);
+  const borderOnBg = borderRaw[3] < 1 ? composite(borderRaw, bg) : borderRaw;
+  const borderOnParent = borderRaw[3] < 1 ? composite(borderRaw, parentBg) : borderRaw;
+  const ratioBg = contrastRatio(relLum(borderOnBg), relLum(bg));
+  const ratioParent = contrastRatio(relLum(borderOnParent), relLum(parentBg));
+  return {
+    fg: style.borderTopColor,
+    bg: 'rgb(' + Math.round(bg[0]) + ', ' + Math.round(bg[1]) + ', ' + Math.round(bg[2]) + ')',
+    fgLum: relLum(borderOnBg),
+    bgLum: relLum(bg),
+    ratio: Math.min(ratioBg, ratioParent),
+    borderWidth: parseFloat(style.borderTopWidth) || 0,
+    fontSize: parseFloat(style.fontSize) || 0,
+    colorScheme: style.colorScheme
+  };
+}
 `;
 
 async function measureLocator(locator: Locator, fgProp = 'color', pseudo?: string): Promise<ColorMetrics> {
@@ -101,6 +121,28 @@ async function assertContrast(locator: Locator, name: string, minRatio = 4.5, fg
   assert.ok(m.ratio >= minRatio,
     `${name}: expected contrast >= ${minRatio}:1, got ${m.ratio.toFixed(2)}:1 (fg=${m.fg} lum=${m.fgLum.toFixed(3)}, bg=${m.bg} lum=${m.bgLum.toFixed(3)})`);
   return m;
+}
+
+async function assertBorderContrast(locator: Locator, name: string, minRatio = 3.0): Promise<ColorMetrics & { borderWidth: number }> {
+  const m = await locator.evaluate((el, helper) => {
+    const fn = new Function('el', helper + '\nreturn measureBorder(el);') as
+      (node: Element) => ColorMetrics & { borderWidth: number };
+    return fn(el);
+  }, CONTRAST_HELPER_SOURCE);
+  assert.ok(m.borderWidth >= 1, `${name}: expected visible >= 1px border, got ${m.borderWidth}px`);
+  assert.ok(m.ratio >= minRatio,
+    `${name}: expected border contrast >= ${minRatio}:1 (WCAG SC 1.4.11), got ${m.ratio.toFixed(2)}:1 (border=${m.fg}, bg=${m.bg})`);
+  return m;
+}
+
+async function assertBorderContrastBothThemes(page: Page, locator: Locator, name: string, minRatio = 3.0): Promise<void> {
+  await assertBorderContrast(locator, `${name} (dark)`, minRatio);
+  await page.emulateMedia({ colorScheme: 'light' });
+  try {
+    await assertBorderContrast(locator, `${name} (light)`, minRatio);
+  } finally {
+    await page.emulateMedia({ colorScheme: 'dark' });
+  }
 }
 
 async function assertDarkSurface(locator: Locator, name: string, maxBgLum = 0.08): Promise<ColorMetrics> {
@@ -193,7 +235,7 @@ async function startExtensionPagesFixture() {
   };
 }
 
-async function cardStyleMetrics(page: Page, selector: string): Promise<(ColorMetrics & { borderTopWidth: number; boxShadow: string }) | null> {
+async function cardStyleMetrics(page: Page, selector: string): Promise<(ColorMetrics & { borderTopWidth: number; borderColor: string; borderRatio: number; boxShadow: string }) | null> {
   const cdp = await page.context().newCDPSession(page);
   try {
     const { root } = await cdp.send('DOM.getDocument');
@@ -212,21 +254,33 @@ async function cardStyleMetrics(page: Page, selector: string): Promise<(ColorMet
         if (!el) return null;
         const fn = new Function('root', 'el', helper + `
           const style = getComputedStyle(el);
-          const layers = [];
-          let cur = el;
-          while (cur && cur.nodeType === 1) {
-            layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
-            cur = cur.parentElement;
-          }
           const cardEl = root.querySelector('.card');
           const darkCard = cardEl ? getComputedStyle(cardEl).colorScheme.includes('dark') : false;
-          let acc = darkCard ? [29, 32, 43, 1] : [255, 255, 255, 1];
-          for (let i = layers.length - 1; i >= 0; i--) {
-            if (layers[i][3] > 0) acc = composite(layers[i], acc);
-          }
+          const resolveShadowBg = node => {
+            const layers = [];
+            let cur = node;
+            while (cur && cur.nodeType === 1) {
+              layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
+              cur = cur.parentElement;
+            }
+            let acc = darkCard ? [29, 32, 43, 1] : [255, 255, 255, 1];
+            for (let i = layers.length - 1; i >= 0; i--) {
+              if (layers[i][3] > 0) acc = composite(layers[i], acc);
+            }
+            return acc;
+          };
+          const acc = resolveShadowBg(el);
+          const parentAcc = el.parentElement ? resolveShadowBg(el.parentElement) : acc;
           const fgRaw = parseCssColor(style.color);
           const fg = fgRaw[3] < 1 ? composite(fgRaw, acc) : fgRaw;
           const fgLum = relLum(fg), bgLum = relLum(acc);
+          const borderRaw = parseCssColor(style.borderTopColor);
+          const borderOnBg = borderRaw[3] < 1 ? composite(borderRaw, acc) : borderRaw;
+          const borderOnParent = borderRaw[3] < 1 ? composite(borderRaw, parentAcc) : borderRaw;
+          const borderRatio = Math.min(
+            contrastRatio(relLum(borderOnBg), bgLum),
+            contrastRatio(relLum(borderOnParent), relLum(parentAcc))
+          );
           return {
             fg: style.color,
             bg: 'rgb(' + Math.round(acc[0]) + ', ' + Math.round(acc[1]) + ', ' + Math.round(acc[2]) + ')',
@@ -235,9 +289,11 @@ async function cardStyleMetrics(page: Page, selector: string): Promise<(ColorMet
             fontSize: parseFloat(style.fontSize) || 0,
             colorScheme: style.colorScheme,
             borderTopWidth: parseFloat(style.borderTopWidth) || 0,
+            borderColor: style.borderTopColor,
+            borderRatio,
             boxShadow: style.boxShadow
           };
-        `) as (root: ShadowRoot, node: HTMLElement) => (ColorMetrics & { borderTopWidth: number; boxShadow: string });
+        `) as (root: ShadowRoot, node: HTMLElement) => (ColorMetrics & { borderTopWidth: number; borderColor: string; borderRatio: number; boxShadow: string });
         return fn(this, el);
       }.toString()
     });
@@ -467,6 +523,9 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await assertDarkSurface(rail, '#rail', 0.08);
       await assertContrast(page.locator('#saveState'), '#saveState text', 4.5);
       await assertContrast(page.locator('#saveState'), '#saveState::before dot', 3.0, 'backgroundColor', '::before');
+      await page.mouse.move(0, 0);
+      await assertBorderContrastBothThemes(page, page.locator('#notebookPose'), '#notebookPose select');
+      await assertBorderContrastBothThemes(page, page.locator('#highlightDisplay'), '#highlightDisplay select');
 
       const cmContent = rail.locator('.notebook-writing-area .cm-content');
       await cmContent.waitFor({ state: 'visible' });
@@ -619,6 +678,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await assertDarkSurface(chatInput, '.paper-chat-input textarea', 0.08);
       assert.equal((await measureLocator(chatInput)).colorScheme, 'dark');
       await assertContrast(chatInput, '.paper-chat-input textarea text', 4.5);
+      await assertBorderContrastBothThemes(page, chatInput, '.paper-chat-input textarea');
       const grip = page.locator('.paper-chat-grip');
       await grip.waitFor({ state: 'visible' });
       await assertContrast(grip, '.paper-chat-grip::after (dark)', 3.0, 'backgroundColor', '::after');
@@ -632,6 +692,10 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const dialog = page.getByRole('dialog');
       await dialog.waitFor({ state: 'visible' });
       await assertDarkSurface(dialog, 'libraryDialog', 0.08);
+      await dialog.getByRole('tab', { name: 'Zotero', exact: true }).click();
+      await dialog.locator('.reader-library select').first().waitFor({ state: 'visible' });
+      await assertBorderContrastBothThemes(page, dialog.locator('.reader-library .search').first(), 'libraryDialog .search');
+      await assertBorderContrastBothThemes(page, dialog.locator('.reader-library select').first(), 'libraryDialog select');
       await dialog.getByRole('tab', { name: 'On this device', exact: true }).click();
       await assertContrast(dialog.locator('.library-row-text strong').first(), 'libraryDialog row strong', 4.5);
       const openWebBtn = dialog.getByRole('button', { name: 'Open web page', exact: true });
@@ -639,6 +703,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const urlInput = dialog.locator('#library-url');
       await assertDarkSurface(urlInput, '#library-url input', 0.08);
       assert.equal((await measureLocator(urlInput)).colorScheme, 'dark');
+      await assertBorderContrastBothThemes(page, urlInput, 'libraryDialog #library-url');
       await urlInput.fill('ftp://invalid.example');
       await dialog.getByRole('button', { name: 'Read article', exact: true }).click();
       const libStatus = dialog.locator('.library-url .library-status');
@@ -651,10 +716,12 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await page.getByRole('button', { name: 'Connections', exact: true }).click();
       await dialog.waitFor({ state: 'visible' });
       await assertDarkSurface(dialog, 'settingsDialog', 0.08);
-      const langSelect = dialog.locator('select').first();
+      const langSelect = dialog.locator('.field select').first();
       await assertDarkSurface(langSelect, 'settingsDialog select', 0.08);
       assert.equal((await measureLocator(langSelect)).colorScheme, 'dark');
       await assertContrast(langSelect, 'settingsDialog select text', 4.5);
+      await assertBorderContrastBothThemes(page, langSelect, 'settingsDialog .field select');
+      await assertBorderContrastBothThemes(page, dialog.locator('.field input').first(), 'settingsDialog .field input');
       await page.locator('#closeDialog').click();
       await dialog.waitFor({ state: 'hidden' });
 
@@ -663,6 +730,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await dialog.waitFor({ state: 'visible' });
       await assertDarkSurface(dialog, 'collectionsDialog', 0.08);
       await assertContrast(dialog.locator('h2'), 'collectionsDialog h2', 4.5);
+      await assertBorderContrastBothThemes(page, dialog.locator('.search').first(), 'collectionsDialog .search');
       await page.locator('#closeDialog').click();
       await dialog.waitFor({ state: 'hidden' });
 
@@ -692,6 +760,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
 
       // Citation hover preview & annotation popover containment + contrast in BOTH dark and light (T1-F5-05).
       await page.locator('#pageCount').click();
+      await assertBorderContrastBothThemes(page, page.locator('#pageJump input'), '#pageJump input');
       await page.locator('#pageNumber').fill('1');
       await page.locator('#pageNumber').press('Enter');
       await page.locator('#loading').waitFor({ state: 'hidden' });
@@ -820,6 +889,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       // Enable bilingual mode and verify bilingual #card (.selection-excerpt, .selection-counterpart, .chat-starter).
       await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
       await page.locator('#translated .pdf-translated-text').first().waitFor({ state: 'visible' });
+      await assertBorderContrastBothThemes(page, page.locator('#translationMode'), '#translationMode select');
       const translatedBlock = page.locator('#translated .pdf-translated-text[data-block-id="block-tables"]');
       await translatedBlock.waitFor({ state: 'visible' });
       await translatedBlock.evaluate(el => {
@@ -840,6 +910,39 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await chatStarter.waitFor({ state: 'visible' });
       await assertDarkSurface(chatStarter, '#card .chat-starter', 0.08);
       await assertContrast(chatStarter, '#card .chat-starter', 4.5);
+      const composer = bilingualCard.locator('.chat-composer textarea');
+      await assertBorderContrastBothThemes(page, composer, '#card .chat-composer textarea');
+      // Naturally trigger multi-draft switcher (#card select.chat-drafts) and verify Dark & Light border (>= 3.0:1) and text (>= 4.5:1) contrast.
+      await composer.fill('Summarize the KV block mapping.');
+      await composer.press('Enter');
+      const firstAnswer = bilingualCard.locator('.selection-answer').first();
+      await firstAnswer.waitFor({ state: 'visible' });
+      await composer.fill('Unsent draft on memory fragmentation.');
+      await firstAnswer.evaluate(el => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        const text = walker.nextNode() as Text | null;
+        if (!text || text.data.trim().length < 4) throw new Error('Missing answer text node for follow-up quote');
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, Math.min(11, text.data.length));
+        const sel = window.getSelection()!;
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+      await bilingualCard.getByRole('group', { name: 'Selected answer text' }).getByRole('button', { name: 'Ask follow-up', exact: true }).click();
+      const chatDrafts = bilingualCard.locator('select.chat-drafts');
+      await chatDrafts.waitFor({ state: 'visible' });
+      await assertDarkSurface(chatDrafts, '#card select.chat-drafts', 0.08);
+      assert.equal((await measureLocator(chatDrafts)).colorScheme, 'dark');
+      await assertContrast(chatDrafts, '#card select.chat-drafts text (dark)', 4.5);
+      await assertBorderContrastBothThemes(page, chatDrafts, '#card select.chat-drafts');
+      await page.emulateMedia({ colorScheme: 'light' });
+      try {
+        await assertContrast(chatDrafts, '#card select.chat-drafts text (light)', 4.5);
+      } finally {
+        await page.emulateMedia({ colorScheme: 'dark' });
+      }
       await page.keyboard.press('Escape');
       if (await bilingualCard.isVisible()) await page.keyboard.press('Escape');
       await bilingualCard.waitFor({ state: 'hidden' });
@@ -988,6 +1091,15 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       assert.ok(mobile.overflow <= 1, `Mobile dark mode must have zero horizontal overflow, got ${mobile.overflow}px`);
       await assertDarkSurface(page.locator('.topbar'), 'mobile dark .topbar', 0.08);
       await assertContrast(page.locator('#docTitle'), 'mobile dark #docTitle', 4.5);
+      await page.locator('#more').click();
+      await page.getByRole('button', { name: 'Connections', exact: true }).click();
+      const mobileDialog = page.getByRole('dialog');
+      await mobileDialog.waitFor({ state: 'visible' });
+      const closeDialogBox = (await page.locator('#closeDialog').boundingBox())!;
+      assert.ok(closeDialogBox.width >= 44 && closeDialogBox.height >= 44,
+        `Mobile #closeDialog must meet 44x44px touch target, got ${closeDialogBox.width}x${closeDialogBox.height}`);
+      await page.locator('#closeDialog').click();
+      await mobileDialog.waitFor({ state: 'hidden' });
       await snap(page, 'phase5-mobile-390-dark');
       await ctx.close();
       console.log('PASS Phase 5 (T1-F5-02/03, T2-F5-01/02/04/05): #saveState >= 12px sweep, 1440px bilingual floor (open & widened), 200% zoom, and 390x844 mobile dark verified.');
@@ -1037,6 +1149,7 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
           secondary: pick('.secondary'),
           summary: pick('summary'),
           origin: pick('#origin'),
+          originBorder: measureBorder(document.querySelector('.address input')),
           plain: pick('.plain')
         };
       `) as () => Record<string, unknown>;
@@ -1050,6 +1163,7 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
       secondary: ColorMetrics;
       summary: ColorMetrics;
       origin: ColorMetrics;
+      originBorder: ColorMetrics & { borderWidth: number };
       plain: ColorMetrics;
     };
     assert.equal(popupMetrics.scheme, 'dark', 'Extension popup must declare dark color-scheme');
@@ -1059,8 +1173,21 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
       assert.ok(popupMetrics[key].ratio >= 4.5,
         `Extension popup ${key} contrast must be >= 4.5:1, got ${popupMetrics[key].ratio.toFixed(2)}:1`);
     }
+    assert.ok(popupMetrics.originBorder.borderWidth >= 1 && popupMetrics.originBorder.ratio >= 3.0,
+      `Extension popup .address input dark border contrast must be >= 3.0:1, got ${popupMetrics.originBorder.ratio.toFixed(2)}:1`);
     await menu.click('#toggle');
     await menu.detach();
+
+    // Verify extension popup .address input border contrast in Light theme too.
+    const lightPopupPage = await context.newPage();
+    try {
+      await lightPopupPage.emulateMedia({ colorScheme: 'light' });
+      await lightPopupPage.goto('chrome-extension://' + id + '/popup.html');
+      await lightPopupPage.locator('summary').click();
+      await assertBorderContrast(lightPopupPage.locator('.address input'), 'extension popup .address input (light)', 3.0);
+    } finally {
+      await lightPopupPage.close();
+    }
 
     // Verify closed-shadow-DOM card legibility on BOTH white (#ffffff) and dark (#12141a) host pages (T1-F4-06, T2-F4-07).
     for (const [label, url, needsEnable] of [
@@ -1092,20 +1219,25 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
         }
       }
 
-      // Open inline note editor to verify dark textarea contrast.
+      // Open inline note editor to verify dark & light textarea text + border contrast.
       await clickCard(page, '[data-do="note"]');
       await until(async () => Boolean(await cardElement(page, '.editor textarea')), `Note textarea did not open on ${label}`);
       const ta = await cardStyleMetrics(page, '.editor textarea');
       assert.ok(ta && ta.bgLum <= 0.08 && ta.ratio >= 4.5,
         `Dark card textarea on ${label} must be dark with >= 4.5:1 contrast`);
+      assert.ok(ta.borderTopWidth >= 1 && ta.borderRatio >= 3.0,
+        `Dark card textarea border on ${label} must have >= 3.0:1 contrast (SC 1.4.11), got ${ta.borderRatio.toFixed(2)}:1 (${ta.borderColor})`);
 
-      // Switch to light media and verify crisp light card on both host pages too.
+      // Switch to light media and verify crisp light card + textarea border contrast on both host pages too.
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
       const lightCard = await cardStyleMetrics(page, '.card');
       const lightHeading = await cardStyleMetrics(page, 'h2');
+      const lightTa = await cardStyleMetrics(page, '.editor textarea');
       assert.ok(lightCard && lightCard.bgLum > 0.9, `Light card on ${label} must render crisp white surface`);
       assert.ok(lightHeading && lightHeading.ratio >= 4.5, `Light card h2 on ${label} must have >= 4.5:1 contrast`);
+      assert.ok(lightTa && lightTa.borderTopWidth >= 1 && lightTa.borderRatio >= 3.0,
+        `Light card textarea border on ${label} must have >= 3.0:1 contrast (SC 1.4.11), got ${lightTa?.borderRatio.toFixed(2)}:1 (${lightTa?.borderColor})`);
       await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
       await cdp.detach();
     }
@@ -1131,7 +1263,7 @@ try {
     PAPER_READER_E2E_PUBLISHER_FIXTURE: publisher.origin,
     PAPER_READER_E2E_PUBLISHER_LOG: publisherLog,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import', new URL('./book-reading-preload.ts', import.meta.url).href].filter(Boolean).join(' ')
-  });
+  }, { modelFixture: true });
 } finally {
   await publisher.close();
   await rm(publisherLog, { force: true });

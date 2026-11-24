@@ -60,5 +60,5 @@ export function snapshot(pick: PickedText | null): Snapshot {
     index = article.paragraphs.findIndex(text => text === pick.context);
     if (index < 0) { index = article.paragraphs.length; article.paragraphs.push(pick.context); }
   }
-  return { article, anchor: 'p-' + (index + 1), label: 'Paragraph ' + (index + 1) };
+  return { article, anchor: 'p-' + (index + 1), label: extLabel('Paragraph ' + (index + 1), '第 ' + (index + 1) + ' 段') };
 }

@@ -128,7 +128,24 @@ test('web source and translated selections keep matching paragraph IDs after tra
     return { selected:capture.snapshot(capture.currentPick()), entire:capture.snapshot(null) };
   });
   assert.equal(codePick.selected.anchor, 'p-3', 'A repeated example must point to the code occurrence selected on the live webpage.');
+  assert.equal(codePick.selected.label, 'Paragraph 3');
+  assert.equal(codePick.entire.label, 'Paragraph 1');
   assert.deepEqual(codePick.selected.article,codePick.entire.article);
+
+  const zhPage = await browser.newPage({ locale: 'zh-CN' });
+  await zhPage.setContent('<article><h1>示例</h1><p>第一段。</p><p>第二段。</p></article>');
+  await zhPage.addScriptTag({ content: captureScript.outputFiles[0].text });
+  const zhPick = await zhPage.evaluate(() => {
+    const capture = (window as typeof window & { WebCapture: typeof import('../src/extension/web-page.js') }).WebCapture;
+    const para = document.querySelectorAll('p')[1].firstChild!;
+    getSelection()!.setBaseAndExtent(para, 0, para, 3);
+    return { selected: capture.snapshot(capture.currentPick()), entire: capture.snapshot(null) };
+  });
+  assert.equal(zhPick.selected.anchor, 'p-3');
+  assert.equal(zhPick.selected.label, '第 3 段');
+  assert.equal(zhPick.entire.anchor, 'p-1');
+  assert.equal(zhPick.entire.label, '第 1 段');
+  await zhPage.close();
 });
 
 
