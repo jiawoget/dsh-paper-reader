@@ -94,7 +94,7 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
         const wrap = el('div', 'library-device-item');
         const actions = el('div', 'library-item-actions');
         const renameBtn = button('', () => { confirmingId = ''; editingId = doc.id; render(); }, 'icon-btn', 'edit');
-        renameBtn.ariaLabel = renameBtn.title = t('Rename ' + doc.title, '重命名 ' + doc.title);
+        renameBtn.ariaLabel = renameBtn.title = t('Rename document', '重命名文档');
         const delBtn = button(confirmingId === doc.id ? t('Delete', '确认删除') : '', async () => {
           if (confirmingId !== doc.id) { confirmingId = doc.id; render(); return; }
           await api('library.delete', { id: doc.id });
@@ -107,8 +107,8 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
           toast(t('Document removed from this device.', '已从本机删除文档。'));
         }, confirmingId === doc.id ? 'btn library-delete-confirm' : 'icon-btn', confirmingId === doc.id ? undefined : 'close');
         delBtn.ariaLabel = delBtn.title = confirmingId === doc.id
-          ? t('Confirm delete ' + doc.title, '确认删除 ' + doc.title)
-          : t('Delete ' + doc.title, '删除 ' + doc.title);
+          ? t('Confirm delete', '确认删除')
+          : t('Delete document', '删除文档');
         actions.append(renameBtn, delBtn);
         wrap.append(row, actions);
         list.append(wrap);

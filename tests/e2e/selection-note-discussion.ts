@@ -77,8 +77,8 @@ async function tapOrClick(control: Locator, mobile: boolean) {
 }
 
 async function connect(page: Page, model: Awaited<ReturnType<typeof requestRecorder>>, mobile: boolean) {
-  await tapOrClick(page.getByRole('button', { name: 'More actions' }), mobile);
-  await tapOrClick(page.getByRole('button', { name: 'Connections', exact: true }), mobile);
+  await tapOrClick(page.getByRole('button', { name: '更多操作' }), mobile);
+  await tapOrClick(page.getByRole('button', { name: '连接设置', exact: true }), mobile);
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('API base URL').fill(model.url);
   await dialog.getByLabel('Model', { exact: true }).fill(model.model);
@@ -270,7 +270,7 @@ for (const mobile of devices) await withHost(async host => {
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.getByText('PagedAttention.pdf', { exact: true }).waitFor();
     await connect(page, model, mobile);
-    const pageJump = page.getByRole('button', { name: /Go to page/ });
+    const pageJump = page.getByRole('button', { name: /跳转到页码/ });
     if (!(await pageJump.innerText()).includes('6 /')) {
       await tapOrClick(pageJump, mobile);
       await page.getByRole('spinbutton', { name: 'Page number' }).fill('6');

@@ -94,8 +94,8 @@ async function openDesk(browser: Browser, host: HostFixture, url: string, mobile
 }
 
 async function connect(page: Page, model: Awaited<ReturnType<typeof localModel>>, mobile: boolean) {
-  await activate(page.getByRole('button', { name: 'More actions' }), mobile);
-  await activate(page.getByRole('button', { name: 'Connections', exact: true }), mobile);
+  await activate(page.getByRole('button', { name: '更多操作' }), mobile);
+  await activate(page.getByRole('button', { name: '连接设置', exact: true }), mobile);
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('API base URL').fill(model.url);
   await dialog.getByLabel('Model', { exact: true }).fill(model.name);
@@ -308,7 +308,7 @@ for (const mobile of mode) await withHost(async host => {
     const device = mobile ? 'phone' : 'desktop';
     const { context, page } = await openDesk(browser, host, url, mobile);
     await connect(page, model, mobile);
-    const pageJump = page.getByRole('button', { name: /Go to page/ });
+    const pageJump = page.getByRole('button', { name: /跳转到页码/ });
     if (!(await pageJump.innerText()).includes('6 /')) {
       await activate(pageJump, mobile);
       await page.getByRole('spinbutton', { name: 'Page number' }).fill('6');
@@ -469,9 +469,9 @@ for (const mobile of mode) await withHost(async host => {
       await readEarlierReply(nextPage, conversation, mobile);
       if (mobile) await photo(nextPage, device + '-earlier-reply');
       await activate(conversation.getByRole('button', { name: '收起讨论', exact: true }), mobile);
-      await activate(nextPage.getByRole('button', { name: 'Next page' }), mobile);
+      await activate(nextPage.getByRole('button', { name: '下一页' }), mobile);
       await nextPage.waitForURL(address => address.searchParams.get('page') === '7');
-      assert.match(await nextPage.getByRole('button', { name: /Go to page/ }).innerText(), /7 \/ 16/);
+      assert.match(await nextPage.getByRole('button', { name: /跳转到页码/ }).innerText(), /7 \/ 16/);
     }
     await reopened.context.close();
     console.log('PASS ' + device + ' ' + (baseline ? 'baseline' : 'reader journey'));

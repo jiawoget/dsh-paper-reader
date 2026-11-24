@@ -418,14 +418,14 @@ class Reader implements ReaderPort {
     showSectionControls(doc,page);
     const pages=this.pdf?.pages||1, count=byId<HTMLButtonElement>('pageCount');
     count.textContent=page+' / '+pages;
-    count.ariaLabel='Go to page, current page '+page+' of '+pages;
+    count.ariaLabel=label('Go to page, current page '+page+' of '+pages,'跳转到页码，当前第 '+page+' / '+pages+' 页');
     count.disabled=pages===1;
     byId<HTMLInputElement>('pageNumber').max=String(pages);
-    byId('pageLimit').textContent='of '+pages;
+    byId('pageLimit').textContent=label('of '+pages,'/ '+pages);
     byId<HTMLButtonElement>('prev').disabled=page<=1;byId<HTMLButtonElement>('next').disabled=page>=pages;
     const sourceEl=byId('original'),translationEl=byId('translated');
     const focusKey='reader.focus.'+doc.id+'.'+page;
-    if(!pdf)byId('translationInfo').textContent='Simplified Chinese';
+    if(!pdf)byId('translationInfo').textContent=label('Simplified Chinese','简体中文');
     const opening=new AbortController();
     let interacted=false;
     let capturedAnchor='';
