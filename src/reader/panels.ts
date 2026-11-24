@@ -2,6 +2,7 @@ import type { ChatSource, DocumentInfo, NotebookSnapshot, OpenDocument, PageView
 import type { DiscussionRef } from './discussion-drafts.js';
 import type { PaperAnnotation } from '../shared/annotations.js';
 import { DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGE_MAX_LENGTH, TARGET_LANGUAGE_PRESETS, findTargetLanguagePreset } from '../shared/languages.js';
+import { buildCitationMetadata, buildCiteKey, formatBibTeX, formatRIS } from '../shared/citation-export.js';
 import { chapterPassageLabel } from '../shared/notebook-structure.js';
 import { readSelectionRange, readTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
 import { notebookEditor } from './notebook.js';
@@ -221,19 +222,114 @@ export function notesPanel(app:ReaderPort,parent:HTMLElement):void {
   if (editor) editor.attach(parent, app.doc.id==='pagedattention'?node=>guide(app,node):undefined);
   else parent.replaceChildren(el('p','hint',app.notebookError || 'Opening notebook…'),button('Vault settings',()=>settingsDialog(app,true),'text-btn'));
 }
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back to a hidden textarea when clipboard permissions are denied.
+    }
+  }
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const area = el('textarea');
+  area.value = text;
+  area.readOnly = true;
+  area.setAttribute('aria-hidden', 'true');
+  area.style.position = 'fixed';
+  area.style.insetInlineStart = '-9999px';
+  area.style.top = '0';
+  area.style.opacity = '0';
+  document.body.append(area);
+  try {
+    area.focus({ preventScroll: true });
+    area.select();
+    area.setSelectionRange(0, text.length);
+    return typeof document.execCommand === 'function' && Boolean(document.execCommand('copy'));
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+    if (previous?.isConnected) previous.focus({ preventScroll: true });
+  }
+}
+
+function downloadFile(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = el('a');
+  link.href = url;
+  link.download = filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export function referencePanel(app:ReaderPort,parent:HTMLElement):void {
   const doc=app.doc;
   const title=doc.paperTitle || doc.title;
   const trail=el('div','trail');trail.append(icon('folder',13),'Library / Reference');
   parent.append(trail,el('h1','',title));
-  if(doc.authors)parent.append(el('p','',doc.authors+' · '+doc.venue));
+  const byline=[doc.authors,doc.venue,doc.year && !doc.venue?.includes(doc.year)?doc.year:undefined].filter(Boolean).join(' · ');
+  if(byline)parent.append(el('p','',byline));
   const web=safeWeb(doc.url);
   if(web){const link=el('a','external',doc.doi?'Original paper ↗':'Original article ↗');link.href=web;link.target='_blank';link.rel='noopener';parent.append(link);}
-  parent.append(rule(),el('h3','','Zotero'));
   const desktop=app.state.settings.zoteroMode==='desktop';
   const library=app.state.settings.zoteroLibraryType+':'+app.state.settings.zoteroLibraryId;
   const legacyKey='reader.zotero.'+library+':'+doc.id;
   const configured=desktop || Boolean(app.state.settings.zoteroLibraryId);
+  let linkedZotero:ZoteroItem|null=null;
+  let zoteroSettled=!configured;
+  let zoteroPending:Promise<void>|undefined;
+  const exportSection=el('section','citation-export');
+  exportSection.setAttribute('aria-label',label('Export citation','导出引文'));
+  const exportActions=el('div','citation-export-actions');
+  const exportStatus=el('p','citation-export-status');
+  exportStatus.setAttribute('role','status');
+  exportStatus.setAttribute('aria-live','polite');
+  const buildCitationPayload=(format:'bibtex'|'ris')=>{
+    const meta=buildCitationMetadata(doc,linkedZotero);
+    const content=format==='bibtex'?formatBibTeX(meta):formatRIS(meta);
+    const key=buildCiteKey(meta).toLowerCase().replace(/[^a-z0-9]+/g,'') || 'reference';
+    return {content,filename:`${key}.${format==='bibtex'?'bib':'ris'}`};
+  };
+  const waitForZotero=async()=>{
+    if(!zoteroSettled && zoteroPending){
+      await Promise.race([zoteroPending.catch(()=>undefined),new Promise<void>(resolve=>window.setTimeout(resolve,1500))]);
+    }
+  };
+  const copyCitation=async(format:'bibtex'|'ris')=>{
+    if(!zoteroSettled)await waitForZotero();
+    if(!exportSection.isConnected || app.doc.id!==doc.id)return;
+    const {content}=buildCitationPayload(format);
+    const copied=await copyText(content);
+    if(!exportSection.isConnected || app.doc.id!==doc.id)return;
+    const feedback=copied
+      ? (format==='bibtex'?label('BibTeX copied to clipboard.','BibTeX 已复制到剪贴板。'):label('RIS copied to clipboard.','RIS 已复制到剪贴板。'))
+      : label('Clipboard access was blocked. Use Download instead.','剪贴板权限受限，请改用下载按钮。');
+    exportStatus.textContent=feedback;
+    toast(feedback);
+  };
+  const downloadCitation=async(format:'bibtex'|'ris')=>{
+    if(!zoteroSettled)await waitForZotero();
+    if(!exportSection.isConnected || app.doc.id!==doc.id)return;
+    const {content,filename}=buildCitationPayload(format);
+    downloadFile(filename,content,format==='bibtex'?'application/x-bibtex;charset=utf-8':'application/x-research-info-systems;charset=utf-8');
+    const feedback=label(`Downloaded ${filename}.`,`已下载 ${filename}。`);
+    exportStatus.textContent=feedback;
+    toast(feedback);
+  };
+  exportActions.append(
+    button(label('Copy BibTeX','复制 BibTeX'),()=>copyCitation('bibtex'),'btn'),
+    button(label('Download .bib','下载 .bib'),()=>downloadCitation('bibtex'),'btn'),
+    button(label('Copy RIS','复制 RIS'),()=>copyCitation('ris'),'btn'),
+    button(label('Download .ris','下载 .ris'),()=>downloadCitation('ris'),'btn')
+  );
+  exportSection.append(el('h3','',label('Export citation','导出引文')),exportActions,exportStatus);
+  parent.append(exportSection);
+  parent.append(rule(),el('h3','','Zotero'));
   const connection=el('section','zotero-connection'),status=el('p'),connectionActions=el('div','row');
   connection.ariaLabel='Zotero connection';status.setAttribute('role','status');
   connection.append(status,connectionActions);parent.append(connection);
@@ -263,6 +359,8 @@ export function referencePanel(app:ReaderPort,parent:HTMLElement):void {
     const result=await api('zotero.get',{docId:doc.id,key:oldKey||undefined});
     if(!summary.isConnected || app.doc.id!==doc.id)return;
     const item=result.item;
+    linkedZotero=item;
+    zoteroSettled=true;
     summary.replaceChildren();addItem.hidden=Boolean(item);
     if(!item){summary.append(el('p','hint','Find an existing item or save this document to a collection.'));return;}
     const titleLine=el('p');titleLine.append(el('strong','',item.title));
@@ -282,7 +380,9 @@ export function referencePanel(app:ReaderPort,parent:HTMLElement):void {
     const checked=new Set(item?.collections||[]);
     editor.replaceChildren(el('div','section-title',item?'Collections for '+item.title:'Choose collections'));
     if(item)editor.append(button('Link this item',async()=>{
-      await api('zotero.link',{docId:doc.id,key:item.key});editor.replaceChildren();found.replaceChildren();await restore();toast('Linked to this paper.');
+      const {item:linked}=await api('zotero.link',{docId:doc.id,key:item.key});
+      linkedZotero=linked;zoteroSettled=true;
+      editor.replaceChildren();found.replaceChildren();await restore();toast('Linked to this paper.');
     },'btn','note'));
     for(const c of collections){const l=el('label','check-row'),box=el('input');box.type='checkbox';box.checked=checked.has(c.key);box.disabled=box.checked || readOnly;
       box.onchange=()=>{if(box.checked)checked.add(c.key);else checked.delete(c.key);};l.append(box,c.name);editor.append(l);}
@@ -305,5 +405,8 @@ export function referencePanel(app:ReaderPort,parent:HTMLElement):void {
     for(const item of items)found.append(button(item.title,()=>choose(item),'doc-row','note'));
   },'btn','book'),addItem,found,editor);
   void test().catch(error=>{status.textContent=message(error);});
-  void restore().catch(error=>{summary.replaceChildren(el('p','hint',message(error)));});
+  zoteroPending=restore().catch(error=>{
+    linkedZotero=null;zoteroSettled=true;
+    if(summary.isConnected)summary.replaceChildren(el('p','hint',message(error)));
+  });
 }

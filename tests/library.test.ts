@@ -55,3 +55,33 @@ test('saved documents can be renamed and deleted with their cached translations 
   assert.equal((await library.list()).some(doc => doc.id === imported.id), false);
   await assert.rejects(library.delete('pagedattention'));
 });
+
+test('importWeb sanitizes optional bibliographic metadata without altering content-hash identity', async t => {
+  const rootA = await mkdtemp(path.join(tmpdir(), 'reader-ts-meta-a-'));
+  const rootB = await mkdtemp(path.join(tmpdir(), 'reader-ts-meta-b-'));
+  t.after(() => Promise.all([rm(rootA, { recursive: true, force: true }), rm(rootB, { recursive: true, force: true })]));
+  const libA = new Library(rootA);
+  const libB = new Library(rootB);
+  const base = { title: 'Sanitized Article', url: 'https://example.org/meta-test', paragraphs: ['Alpha.', 'Beta.'] };
+
+  const plain = await libA.importWeb(base);
+  const enriched = await libB.importWeb({
+    ...base,
+    paperTitle: 'Clean\u0000Title\nWith Controls',
+    authors: 'Alice Smith;\u0007 Bob Jones',
+    venue: 'Conference\t2025',
+    year: 'not-a-year',
+    doi: 'not-a-valid-doi',
+    publisher: 'A'.repeat(600),
+    abstract: 'Line 1\r\nLine 2\u0000'
+  });
+
+  assert.equal(enriched.id, plain.id);
+  assert.equal(enriched.paperTitle, 'Clean Title With Controls');
+  assert.equal(enriched.authors, 'Alice Smith; Bob Jones');
+  assert.equal(enriched.venue, 'Conference 2025');
+  assert.equal(enriched.year, undefined);
+  assert.equal(enriched.doi, undefined);
+  assert.equal(enriched.publisher?.length, 500);
+  assert.equal(enriched.abstract, 'Line 1\nLine 2');
+});

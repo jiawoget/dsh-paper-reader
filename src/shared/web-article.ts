@@ -15,7 +15,19 @@ export interface ArticleBlock {
   cells?: string[][];
 }
 export type ArticleLayout = Record<string, ArticleBlock>;
-export interface WebArticle { url: string; title: string; paragraphs: string[]; articleLayout?: ArticleLayout }
+export interface WebArticle {
+  url: string;
+  title: string;
+  paragraphs: string[];
+  articleLayout?: ArticleLayout;
+  paperTitle?: string;
+  authors?: string;
+  venue?: string;
+  year?: string;
+  doi?: string;
+  publisher?: string;
+  abstract?: string;
+}
 
 export function articleUrl(value: string | undefined, base?: string): URL | undefined {
   if (!value || value.length > 8192) return;
@@ -56,11 +68,61 @@ export function extractArticle<N>(root: N, tree: ArticleTree<N>, address: string
   const researchBlog = articleUrl(address)?.hostname === 'research.google';
   let storyHeader: N | undefined, storySummary: N | undefined, storyBody: N | undefined;
   const coverImages = new Set<N>(), figureDescriptions = new Set<string>();
+  const metaSingle = new Map<string, string>();
+  const metaLists = new Map<string, string[]>();
+  const metaAuthorKeys = new Set(['citation_author', 'dc.creator', 'dcterms.creator']);
+  const metaAbstractKeys = new Set(['citation_abstract', 'dcterms.abstract', 'dc.description', 'description', 'og:description']);
+  const metaDoiKeys = new Set(['citation_doi', 'dc.identifier']);
+  const metaDateKeys = new Set(['citation_publication_date', 'citation_date', 'citation_online_date', 'dc.date', 'dcterms.issued', 'article:published_time']);
+  function collectMeta(node: N): void {
+    const rawKey = attr(node, 'name') || attr(node, 'property');
+    const rawContent = attr(node, 'content');
+    if (!rawKey || !rawContent) return;
+    const key = rawKey.trim().toLowerCase();
+    if (!key) return;
+    const value = metaAbstractKeys.has(key)
+      ? rawContent.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/\r\n?/g, '\n').trim()
+      : clean(rawContent);
+    if (!value) return;
+    if (metaAuthorKeys.has(key)) {
+      const list = metaLists.get(key) ?? [];
+      if (!list.some(entry => entry.toLowerCase() === value.toLowerCase())) list.push(value);
+      metaLists.set(key, list);
+      return;
+    }
+    if (metaSingle.has(key)) return;
+    if (metaDoiKeys.has(key)) {
+      const doi = value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').trim();
+      if (/^10\.\d{4,9}\/\S+$/i.test(doi)) metaSingle.set(key, doi);
+      return;
+    }
+    if (metaDateKeys.has(key)) {
+      const year = value.match(/(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/)?.[1];
+      if (year) metaSingle.set(key, year);
+      return;
+    }
+    metaSingle.set(key, value);
+  }
+  function firstMeta(...keys: string[]): string | undefined {
+    for (const key of keys) {
+      const value = metaSingle.get(key);
+      if (value) return value;
+    }
+    return undefined;
+  }
   function find(node: N, depth: number, storyPart?: 'header' | 'body'): void {
     if (depth > 150 || tag(node) === '#text') return;
     const name = tag(node);
     if (name === 'base' && !documentBase) documentBase = articleUrl(attr(node, 'href') || '', address)?.href;
     if (name === 'title' && !pageTitle) pageTitle = clean(tree.text(node));
+    if (name === 'meta') { collectMeta(node); return; }
+    if (name === 'head') {
+      for (const child of children(node)) {
+        const childName = tag(child);
+        if (childName === 'base' || childName === 'title' || childName === 'meta') find(child, depth + 1, storyPart);
+      }
+      return;
+    }
     if (excluded(node)) return;
     if (researchBlog) {
       const names = classes(node);
@@ -197,5 +259,28 @@ export function extractArticle<N>(root: N, tree: ArticleTree<N>, address: string
   } else visit(articleRoot, 'p', undefined, 0);
   flush();
   if (!paragraphs.length) throw new Error('No visible article text was found on this page. Open the original webpage and use the browser extension.');
-  return { article: { url: address, title: title || pageTitle || new URL(address).hostname, paragraphs, articleLayout: layout }, index: pickedIndex };
+  const paperTitle = firstMeta('citation_title', 'dc.title');
+  const authorList = metaLists.get('citation_author') ?? metaLists.get('dc.creator') ?? metaLists.get('dcterms.creator');
+  const authors = authorList?.length ? authorList.join('; ') : firstMeta('author');
+  const venue = firstMeta('citation_journal_title', 'citation_conference_title', 'citation_inbook_title', 'citation_book_title', 'citation_technical_report_institution');
+  const year = firstMeta('citation_publication_date', 'citation_date', 'citation_online_date', 'dc.date', 'dcterms.issued', 'article:published_time');
+  const doi = firstMeta('citation_doi', 'dc.identifier');
+  const publisher = firstMeta('citation_publisher', 'dc.publisher', 'dcterms.publisher');
+  const abstract = firstMeta('citation_abstract', 'dcterms.abstract', 'dc.description', 'description', 'og:description');
+  return {
+    article: {
+      url: address,
+      title: title || paperTitle || pageTitle || new URL(address).hostname,
+      paragraphs,
+      articleLayout: layout,
+      ...(paperTitle ? { paperTitle } : {}),
+      ...(authors ? { authors } : {}),
+      ...(venue ? { venue } : {}),
+      ...(year ? { year } : {}),
+      ...(doi ? { doi } : {}),
+      ...(publisher ? { publisher } : {}),
+      ...(abstract ? { abstract } : {})
+    },
+    index: pickedIndex
+  };
 }

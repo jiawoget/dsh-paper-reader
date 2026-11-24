@@ -36,6 +36,22 @@ export function fail(message: string, status = 400): never { throw Object.assign
 function isFsError(error: unknown, code: string): boolean { return isRecord(error) && error.code === code; }
 const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
 
+function optionalText(value: unknown, max: number, multiline = false): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = multiline
+    ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/\r\n?/g, '\n').trim()
+    : value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned ? cleaned.slice(0, max) : undefined;
+}
+function optionalDoi(value: unknown): string | undefined {
+  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').trim();
+  return raw && /^10\.\d{4,9}\/\S+$/i.test(raw) ? raw : undefined;
+}
+function optionalYear(value: unknown): string | undefined {
+  const raw = optionalText(value, 32);
+  return raw?.match(/(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/)?.[1];
+}
+
 async function writeOnce(file: string, bytes: Buffer | string): Promise<void> {
   const temporary = file + '.' + randomUUID() + '.tmp';
   await writeFile(temporary, bytes, { flag: 'wx' });
@@ -96,7 +112,7 @@ export class Library {
     await mkdir(this.directory, { recursive: true });
     const names = (await readdir(this.directory)).filter(file => /^(pdf|web|book)-[a-f0-9]{64}\.json$/.test(file));
     const docs = await Promise.all(names.map(name => this.get(name.slice(0,-5))));
-    return [sample, ...docs.sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).map(({ paragraphs, articleLayout, ...meta }) => meta)];
+    return [sample, ...docs.sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
   async rename(id: unknown, title: unknown): Promise<DocumentInfo> {
     if (id === sample.id) fail('The bundled sample paper cannot be renamed.');
@@ -222,8 +238,22 @@ export class Library {
       await mkdir(this.directory, { recursive: true });
       await writeOnce(path.join(this.directory, id + '.layout.json'), JSON.stringify(layout));
     }
+    const paperTitle = optionalText(input.paperTitle, 500);
+    const authors = optionalText(input.authors, 2000);
+    const venue = optionalText(input.venue, 500);
+    const year = optionalYear(input.year);
+    const doi = optionalDoi(input.doi);
+    const publisher = optionalText(input.publisher, 500);
+    const abstract = optionalText(input.abstract, 8000, true);
     return { doc: await this.store({ kind:'web', id, url:url.href,
       title: typeof input.title === 'string' && input.title.trim() ? input.title.trim().slice(0,250) : url.hostname,
+      ...(paperTitle ? { paperTitle } : {}),
+      ...(authors ? { authors } : {}),
+      ...(venue ? { venue } : {}),
+      ...(year ? { year } : {}),
+      ...(doi ? { doi } : {}),
+      ...(publisher ? { publisher } : {}),
+      ...(abstract ? { abstract } : {}),
       createdAt:new Date().toISOString(), defaultPage:1, paragraphs }) };
   }
   async importPdf(title: string, bytes: Buffer, url?: string): Promise<DocumentInfo> {

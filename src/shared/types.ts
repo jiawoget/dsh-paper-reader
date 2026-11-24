@@ -23,6 +23,9 @@ export interface DocumentInfo {
   authors?: string;
   venue?: string;
   doi?: string;
+  year?: string;
+  publisher?: string;
+  abstract?: string;
   paragraphs?: string[];
   articleLayout?: ArticleLayout;
   book?: BookInfo;
