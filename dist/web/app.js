@@ -44706,13 +44706,13 @@ var PageRaster = class {
       this.drawing = this.page.render({ canvas: next, viewport, background: "#ffffff" });
       await this.drawing.promise;
       this.signal.throwIfAborted();
-      const previous = this.original;
+      this.original.width = next.width;
+      this.original.height = next.height;
+      this.original.getContext("2d")?.drawImage(next, 0, 0);
       this.artwork.width = next.width;
       this.artwork.height = next.height;
       paintArtwork(this.artwork, next, this.areas, this.pageWidth, this.pageHeight);
-      previous.replaceWith(next);
-      this.original = next;
-      previous.width = previous.height = 1;
+      next.width = next.height = 1;
     }
   }
   refresh() {
@@ -46905,14 +46905,22 @@ function hasPassageGutter() {
 }
 function positionPassageCard(card, selection) {
   const { original, top: top2, bottom, gutterLeft, gutterRight } = passageGutters();
-  const width = Math.max(1, gutterLeft, gutterRight);
-  card.style.setProperty("--window-max-width", width + "px");
-  card.style.setProperty("--window-max-height", Math.max(1, bottom - top2) + "px");
-  const w2 = card.offsetWidth, h3 = card.offsetHeight;
+  const w2 = card.offsetWidth;
   const leading = selection.left < original.left + original.width / 2;
-  const useLeft = gutterLeft >= w2 && (leading || gutterRight < w2);
+  const current = card.dataset.gutter;
+  const useLeft = current === "left" && gutterLeft >= 200 ? true : current === "right" && gutterRight >= 200 ? false : gutterLeft >= w2 && (leading || gutterRight < w2);
+  const gutterWidth = Math.max(1, useLeft ? gutterLeft : gutterRight);
+  card.style.setProperty("--window-max-width", gutterWidth + "px");
+  card.style.setProperty("--window-max-height", Math.max(1, bottom - top2) + "px");
+  const h3 = card.offsetHeight;
   card.dataset.gutter = useLeft ? "left" : "right";
-  card.style.left = (useLeft ? original.left - w2 - inset : original.right + inset) + "px";
+  if (useLeft) {
+    card.style.left = "auto";
+    card.style.right = Math.max(inset, document.documentElement.clientWidth - (original.left - inset)) + "px";
+  } else {
+    card.style.right = "auto";
+    card.style.left = original.right + inset + "px";
+  }
   card.style.top = clamp2(selection.top, top2, bottom - h3) + "px";
 }
 
@@ -51175,7 +51183,7 @@ var SelectionChat = class {
     const close3 = button("", () => {
       this.show(false);
       closeChat();
-    }, "icon-btn");
+    }, "icon-btn chat-close");
     close3.ariaLabel = readerLabel("Close chat", "\u6536\u8D77\u8BA8\u8BBA");
     close3.append(icon("close", 14));
     this.heading.append(el("h3", "", readerLabel("Reading discussion", "\u9605\u8BFB\u8BA8\u8BBA")), this.modelPicker.button, close3);
@@ -52155,7 +52163,7 @@ var SelectionCard = class {
   dismiss(restoreFocus = false) {
     const card = byId("card");
     if (restoreFocus && card.dataset.workspace) {
-      if (card.dataset.workspace === "chat") card.querySelector(".chat-heading button")?.click();
+      if (card.dataset.workspace === "chat") card.querySelector(".chat-heading .chat-close")?.click();
       else this.leaveTool();
       return;
     }

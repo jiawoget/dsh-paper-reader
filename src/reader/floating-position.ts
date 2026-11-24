@@ -23,13 +23,23 @@ export function hasPassageGutter(): boolean {
 
 export function positionPassageCard(card: HTMLElement, selection: DOMRect): void {
   const { original, top, bottom, gutterLeft, gutterRight } = passageGutters();
-  const width = Math.max(1, gutterLeft, gutterRight);
-  card.style.setProperty('--window-max-width', width + 'px');
-  card.style.setProperty('--window-max-height', Math.max(1, bottom - top) + 'px');
-  const w = card.offsetWidth, h = card.offsetHeight;
+  const w = card.offsetWidth;
   const leading = selection.left < original.left + original.width / 2;
-  const useLeft = gutterLeft >= w && (leading || gutterRight < w);
+  const current = card.dataset.gutter;
+  const useLeft = current === 'left' && gutterLeft >= 200 ? true
+    : current === 'right' && gutterRight >= 200 ? false
+    : gutterLeft >= w && (leading || gutterRight < w);
+  const gutterWidth = Math.max(1, useLeft ? gutterLeft : gutterRight);
+  card.style.setProperty('--window-max-width', gutterWidth + 'px');
+  card.style.setProperty('--window-max-height', Math.max(1, bottom - top) + 'px');
+  const h = card.offsetHeight;
   card.dataset.gutter = useLeft ? 'left' : 'right';
-  card.style.left = (useLeft ? original.left - w - inset : original.right + inset) + 'px';
+  if (useLeft) {
+    card.style.left = 'auto';
+    card.style.right = Math.max(inset, document.documentElement.clientWidth - (original.left - inset)) + 'px';
+  } else {
+    card.style.right = 'auto';
+    card.style.left = (original.right + inset) + 'px';
+  }
   card.style.top = clamp(selection.top, top, bottom - h) + 'px';
 }
