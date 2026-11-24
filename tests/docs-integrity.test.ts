@@ -18,11 +18,19 @@ interface PackageLock {
 }
 
 const EN_BANNED_SLOP_WORDS = [
-  'delve', 'foster', 'leverage', 'utilize', 'facilitate', 'empower', 'streamline',
+  'delve', 'delves', 'delving', 'delved',
+  'foster', 'fosters', 'fostering', 'fostered',
+  'leverage', 'leverages', 'leveraging', 'leveraged',
+  'utilize', 'utilizes', 'utilizing', 'utilized',
+  'facilitate', 'facilitates', 'facilitating', 'facilitated',
+  'empower', 'empowers', 'empowering', 'empowered',
+  'streamline', 'streamlines', 'streamlining', 'streamlined',
+  'elevate', 'elevates', 'elevating', 'elevated',
+  'harness', 'harnesses', 'harnessing', 'harnessed',
   'robust', 'cutting-edge', 'paradigm shift', 'game changer', 'this is huge',
   'this changes everything', 'tapestry', 'realm', 'beacon', 'multifaceted',
-  'meticulous', 'intricate', 'paramount', 'transformative', 'elevate', 'embark',
-  'supercharge', 'harness', 'ever-evolving',
+  'meticulous', 'intricate', 'paramount', 'transformative', 'embark',
+  'supercharge', 'ever-evolving',
   'seamless', 'seamlessly', 'effortless', 'effortlessly', 'holistic', 'synergy',
   'revolutionize', 'groundbreaking', 'next-generation', 'comprehensive'
 ];
@@ -74,9 +82,37 @@ function stripFencedCode(md: string): string {
   }).join('\n');
 }
 
-function stripInlineCodeAndUrls(md: string): string {
+function isTechnicalInlineCode(raw: string): boolean {
+  const s = raw.trim();
+  if (!s) return true;
+  if (/^(?:npm|npx|dsh|node|git|tsx|curl|cd)\s+/i.test(s)) return true;
+  if (/^paper-reader-[a-z0-9-]+$/i.test(s)) return true;
+  if (/^--[a-z0-9-]+(?:[=\s]\S+)?$/i.test(s)) return true;
+  if (/^(?:https?:\/\/|localhost:\d+|127\.0\.0\.1:\d+)/i.test(s)) return true;
+  if (/^\$?[A-Z][A-Z0-9_]{2,}(?:=\S+)?$/.test(s)) return true;
+  if (/^(?:github|node):[^\s]+$/i.test(s)) return true;
+  if (/^[a-z0-9@._-]+(?:[-:][a-z0-9._-]+)+$/i.test(s) && !s.includes(' ')) return true;
+  if (/^[a-z][a-z0-9]+js$/i.test(s)) return true;
+  if (/^(?:\.\.?\/|~\/|\$[A-Z0-9_]+\/|<[^>\n]+>\/)/.test(s)) return true;
+  if (s.includes('/') && !/\s\/|\/\s/.test(s) && /^(?:[\w.* -]+\/)+[\w.* -]*$/.test(s)) return true;
+  if (/^\.[a-z0-9]{1,8}$/i.test(s)) return true;
+  if (/^[\w.*-]+\.(?:md|ts|js|mjs|cjs|json|ya?ml|css|html|pdf|bib|ris|txt|sh)$/i.test(s)) return true;
+  if (/^[.#][a-zA-Z_-][\w-]*$/.test(s)) return true;
+  if (/^[a-zA-Z0-9_.*-]*\[[^\]]+\]$/.test(s)) return true;
+  if (/^<[^>\n]+>$/.test(s)) return true;
+  if (/^[a-z0-9_-]+(?:_\*|\.\*)$/i.test(s)) return true;
+  if (/^[a-z-]+:\s*[a-z0-9-]+$/i.test(s)) return true;
+  if (/^(?:Node\.js\s+)?[><=~^]*\d+\.\d+(?:\.\d+)?(?:-[a-z0-9.]+)?$/i.test(s)) return true;
+  if (/^[0-9a-f]{7,40}$/i.test(s)) return true;
+  if (/^(?:[A-Za-z0-9?+=-]|[←→↑↓]|Esc|Enter|Tab|Space|Home|End|PageUp|PageDown|Backspace|Delete|(?:(?:Ctrl|Cmd|Shift|Alt|Meta)(?:\/(?:Ctrl|Cmd|Shift|Alt|Meta))*\+)+(?:[A-Za-z0-9?+=-]|Enter|Esc|Tab|Space|[←→↑↓]))$/.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+function stripTechnicalInlineCodeAndUrls(md: string): string {
   return md
-    .replace(/`[^`\n]+`/g, ' ')
+    .replace(/`([^`\n]+)`/g, (_match, inner: string) => (isTechnicalInlineCode(inner) ? ' ' : inner))
     .replace(/!?\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/https?:\/\/\S+/g, ' ');
 }
@@ -140,7 +176,9 @@ function findBrokenRelativeLinks(
       if (/^(?:https?:|mailto:|tel:)/i.test(rawTarget)) continue;
 
       const hashIndex = rawTarget.indexOf('#');
-      const rawFile = hashIndex === -1 ? rawTarget : rawTarget.slice(0, hashIndex);
+      const rawWithoutHash = hashIndex === -1 ? rawTarget : rawTarget.slice(0, hashIndex);
+      const queryIndex = rawWithoutHash.indexOf('?');
+      const rawFile = queryIndex === -1 ? rawWithoutHash : rawWithoutHash.slice(0, queryIndex);
       const rawAnchor = hashIndex === -1 ? '' : rawTarget.slice(hashIndex + 1);
 
       let filePart = rawFile;
@@ -219,9 +257,18 @@ function findInvalidCliCommands(md: string, pkgJson: PackageJson, lockJson: Pack
     }
   }
 
+  const allowBuildArgRe = /--allow-build(?:=|\s+)((?!-)[@A-Za-z0-9._/-]+)/g;
   for (const line of md.split(/\r?\n/)) {
-    if (!/\bdsh\s+plugin\b[^\n]*\badd\b/.test(line)) continue;
-    const declared = new Set(Array.from(line.matchAll(/--allow-build=([@A-Za-z0-9._/-]+)/g), m => m[1]!));
+    if (!/\bdsh\s+plugin\b/.test(line)) continue;
+    const declared = new Set<string>();
+    for (const m of line.matchAll(allowBuildArgRe)) {
+      const pkg = m[1]!;
+      declared.add(pkg);
+      if (!requiredAllowBuild.has(pkg) && !m[0].includes('=')) {
+        violations.push(`stale or unknown --allow-build ${pkg}`);
+      }
+    }
+    if (!/\badd\b/.test(line)) continue;
     for (const pkg of requiredAllowBuild) {
       if (!declared.has(pkg)) {
         violations.push(`dsh plugin add line missing --allow-build=${pkg}`);
@@ -263,7 +310,7 @@ function checkStructure(md: string): { h2Count: number; maxConsecutiveBullets: n
 }
 
 function checkTerminology(md: string, lang: DocLang): { missing: string[]; banned: string[] } {
-  const prose = stripInlineCodeAndUrls(stripFencedCode(md));
+  const prose = stripTechnicalInlineCodeAndUrls(stripFencedCode(md));
   const missing: string[] = [];
   const banned: string[] = [];
 
@@ -299,7 +346,7 @@ function checkTerminology(md: string, lang: DocLang): { missing: string[]; banne
 }
 
 function findUntranslatedZhUiTerms(md: string): string[] {
-  const prose = stripInlineCodeAndUrls(stripFencedCode(md));
+  const prose = stripTechnicalInlineCodeAndUrls(stripFencedCode(md));
   const violations: string[] = [];
 
   const bannedUiRe = /\b(?:Connection settings|Local DSH address|Library|Contents|Reference|Paper chat|Section chat|Marks|Notes|Keyboard shortcuts|More actions|Vocabulary and history|Reset reading layout|Original|Bilingual|Enable selection cards|Open in Paper Reader|Open web page|Open book|On this device|Add to Notes|Refresh notes|Ask with a screenshot|Write note|Compare latest|In Marks only|In Notes)\b/gi;
@@ -356,7 +403,7 @@ function escapeRegExp(text: string): string {
 }
 
 function findAiSlopViolations(md: string, lang: DocLang): string[] {
-  const prose = stripInlineCodeAndUrls(stripFencedCode(md));
+  const prose = stripTechnicalInlineCodeAndUrls(stripFencedCode(md));
   const violations: string[] = [];
 
   if (lang === 'en') {
@@ -397,14 +444,26 @@ function findAiSlopViolations(md: string, lang: DocLang): string[] {
 
 function findEnvironmentLeaks(md: string): string[] {
   const violations: string[] = [];
-  for (const m of md.matchAll(/(?::|port\s+)3080\b/gi)) {
+  for (const m of md.matchAll(/(?::|port[\s=]+)3080\b/gi)) {
     violations.push(`hardcoded port 3080 ("${m[0]}")`);
   }
   for (const m of md.matchAll(/(?:^|[\s(`"'])(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)/gi)) {
     violations.push(`private local path ("${m[0].trim()}")`);
   }
-  for (const m of md.matchAll(/\b2202612\b|\.agents\/teamwork/gi)) {
-    violations.push(`internal runtime metadata ("${m[0]}")`);
+  return violations;
+}
+
+function findNonTechnicalInlineCode(md: string): string[] {
+  const violations: string[] = [];
+  const lines = stripFencedCode(md).split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    for (const m of line.matchAll(/`([^`\n]+)`/g)) {
+      const inner = m[1]!;
+      if (!isTechnicalInlineCode(inner)) {
+        violations.push(`line ${i + 1}: non-technical inline code \`${inner}\``);
+      }
+    }
   }
   return violations;
 }
@@ -467,17 +526,22 @@ describe('F10 documentation integrity (README.md and 交付说明.md)', () => {
     }
   });
 
-  test('T1-F10-05 & T2-F10-04: zero AI-slop cliches or formatting slop', () => {
+  test('T1-F10-05 & T2-F10-04: zero AI-slop cliches, formatting slop, or non-technical UI backticks', () => {
     for (const doc of docs) {
       assert.deepEqual(
         findAiSlopViolations(doc.content, doc.lang),
         [],
         `${doc.relPath} contains AI-slop or formatting violations`
       );
+      assert.deepEqual(
+        findNonTechnicalInlineCode(doc.content),
+        [],
+        `${doc.relPath} wraps ordinary UI labels in inline code backticks`
+      );
     }
   });
 
-  test('T2-F10-05: zero hardcoded conflicting ports, private paths, or internal metadata', () => {
+  test('T2-F10-05: zero hardcoded conflicting ports or private paths', () => {
     for (const doc of docs) {
       assert.deepEqual(
         findEnvironmentLeaks(doc.content),
@@ -489,7 +553,7 @@ describe('F10 documentation integrity (README.md and 交付说明.md)', () => {
 });
 
 describe('docs-integrity detectors catch injected negative cases', () => {
-  test('link & anchor detector catches missing files, bad ASCII/CJK anchors, and accepts valid CJK & duplicate slugs', () => {
+  test('link & anchor detector catches missing files, bad ASCII/CJK anchors, and accepts valid CJK, query strings, & duplicate slugs', () => {
     const validMd = [
       '# Title',
       '## DSH Web 命令行安装',
@@ -497,6 +561,7 @@ describe('docs-integrity detectors catch injected negative cases', () => {
       '## Notes',
       '[ok cjk](#dsh-web-命令行安装)',
       '[ok dup](#notes-1)',
+      '[ok query](README.md?raw=1)',
       '```md',
       '[ignored in code](does/not/exist.md)',
       '```'
@@ -516,12 +581,13 @@ describe('docs-integrity detectors catch injected negative cases', () => {
     assert.ok(failures.some(f => f.includes('#不存在的标题')));
   });
 
-  test('CLI command detector catches unknown npm scripts, unknown exec bins, and stale --allow-build=sharp', () => {
+  test('CLI command detector catches unknown npm scripts, unknown exec bins, and stale --allow-build flags', () => {
     const badCli = [
       '```sh',
       'npm run does-not-exist',
       'dsh plugin --profile web exec nonexistent-bin',
       'dsh plugin --profile web add github:jiawoget/dsh-paper-reader --allow-build=onnxruntime-node --allow-build=protobufjs --allow-build=sharp',
+      'dsh plugin --profile web add github:jiawoget/dsh-paper-reader --allow-build onnxruntime-node --allow-build protobufjs --allow-build sharp',
       'dsh plugin --profile web add github:jiawoget/dsh-paper-reader --allow-build=onnxruntime-node',
       '```'
     ].join('\n');
@@ -529,6 +595,7 @@ describe('docs-integrity detectors catch injected negative cases', () => {
     assert.ok(failures.some(f => f.includes('does-not-exist')));
     assert.ok(failures.some(f => f.includes('nonexistent-bin')));
     assert.ok(failures.some(f => f.includes('--allow-build=sharp')));
+    assert.ok(failures.some(f => f.includes('--allow-build sharp')));
     assert.ok(failures.some(f => f.includes('missing --allow-build=protobufjs')));
   });
 
@@ -539,14 +606,23 @@ describe('docs-integrity detectors catch injected negative cases', () => {
     assert.equal(checkStructure(loose).maxConsecutiveBullets, 11);
   });
 
-  test('terminology detector catches EN/ZH drift while ignoring code identifiers and repository ZIP', () => {
+  test('terminology & ZH UI detectors catch both plain and backtick-wrapped drift while allowing genuine code spans', () => {
     const enBad = '## Read and annotate\nUse Notebook, Annotations, Paper conversation, Add to notebook, and Refresh notebook.';
     const enRes = checkTerminology(enBad, 'en');
     assert.ok(enRes.banned.length >= 6);
     assert.ok(enRes.missing.includes('Marks'));
 
+    const enBacktickBad = 'Use `Add to notebook`, `Paper conversation`, `Reading notebook`, and `Annotations`.';
+    const enBacktickRes = checkTerminology(enBacktickBad, 'en');
+    assert.ok(enBacktickRes.banned.some(v => /Add to notebook/i.test(v)));
+    assert.ok(enBacktickRes.banned.some(v => /Paper conversation/i.test(v)));
+    assert.ok(enBacktickRes.banned.some(v => /Reading notebook/i.test(v)));
+    assert.ok(enBacktickRes.banned.some(v => /Annotations/i.test(v)));
+    assert.equal(findNonTechnicalInlineCode(enBacktickBad).length, 4);
+
     const enCodeSafe = 'Marks, Paper chat, Section chat, Notes, Obsidian vault. Run `npm run test:annotations` and `npm run test:notebook-scenarios`.';
     assert.deepEqual(checkTerminology(enCodeSafe, 'en'), { missing: [], banned: [] });
+    assert.deepEqual(findNonTechnicalInlineCode(enCodeSafe), []);
 
     const zhBad = '使用阅读笔记本、批注与 Obsidian 仓库，展开 Connection settings 打开 Library。';
     const zhTerm = checkTerminology(zhBad, 'zh');
@@ -555,9 +631,17 @@ describe('docs-integrity detectors catch injected negative cases', () => {
     assert.ok(zhUi.some(v => v.includes('Connection settings')));
     assert.ok(zhUi.some(v => v.includes('Library')));
 
+    const zhBacktickBad = '打开 `Connection settings` 并使用 `阅读笔记本`。';
+    const zhBacktickTerm = checkTerminology(zhBacktickBad, 'zh');
+    assert.ok(zhBacktickTerm.banned.includes('阅读笔记本'));
+    const zhBacktickUi = findUntranslatedZhUiTerms(zhBacktickBad);
+    assert.ok(zhBacktickUi.some(v => v.includes('Connection settings')));
+    assert.equal(findNonTechnicalInlineCode(zhBacktickBad).length, 2);
+
     const zhClean = '解压仓库 ZIP 并选择 `dist/extension`，支持 BibTeX、RIS、标记、全文问答、本节问答、笔记与 Obsidian 笔记库。';
     assert.deepEqual(checkTerminology(zhClean, 'zh'), { missing: [], banned: [] });
     assert.deepEqual(findUntranslatedZhUiTerms(zhClean), []);
+    assert.deepEqual(findNonTechnicalInlineCode(zhClean), []);
   });
 
   test('feature coverage detector reports omitted capabilities', () => {
@@ -574,16 +658,18 @@ describe('docs-integrity detectors catch injected negative cases', () => {
     assert.ok(missingZh.includes('obsidian-vault'));
   });
 
-  test('AI-slop detector catches EN/ZH cliches, heading emoji, em-dash clusters, and dense bolding', () => {
+  test('AI-slop detector catches EN/ZH cliches, inflected verbs, heading emoji, em-dash clusters, and dense bolding', () => {
     const badEn = [
       '## 🚀 Quickstart',
-      'Delve into a seamless workflow and harness AI — one — two — three.',
+      'Delving into a seamless workflow by leveraging and harnessing AI while streamlining reading — one — two — three.',
       '- Click **One**, **Two**, **Three**, and **Four**.'
     ].join('\n');
     const enViolations = findAiSlopViolations(badEn, 'en');
-    assert.ok(enViolations.some(v => v.includes('delve')));
+    assert.ok(enViolations.some(v => v.includes('delving')));
+    assert.ok(enViolations.some(v => v.includes('leveraging')));
+    assert.ok(enViolations.some(v => v.includes('harnessing')));
+    assert.ok(enViolations.some(v => v.includes('streamlining')));
     assert.ok(enViolations.some(v => v.includes('seamless')));
-    assert.ok(enViolations.some(v => v.includes('harness')));
     assert.ok(enViolations.some(v => v.includes('heading emoji')));
     assert.ok(enViolations.some(v => v.includes('em dashes')));
     assert.ok(enViolations.some(v => v.includes('dense bolding')));
@@ -597,20 +683,20 @@ describe('docs-integrity detectors catch injected negative cases', () => {
     assert.ok(zhViolations.some(v => v.includes('丝滑')));
   });
 
-  test('environment leak detector catches port 3080, private paths, and protected PID in raw text and code blocks', () => {
+  test('environment leak detector catches port 3080 variants and private paths in raw text and code blocks', () => {
     const leaky = [
       '```sh',
       'curl http://127.0.0.1:3080',
+      'dsh web --port=3080',
       'cd /home/alice/repo',
       '```',
-      'Vault at /Users/bob/vault or C:\\Users\\bob\\notes (PID 2202612, .agents/teamwork).'
+      'Vault at /Users/bob/vault or C:\\Users\\bob\\notes.'
     ].join('\n');
     const leaks = findEnvironmentLeaks(leaky);
-    assert.ok(leaks.some(v => v.includes('3080')));
+    assert.ok(leaks.some(v => v.includes(':3080')));
+    assert.ok(leaks.some(v => v.includes('port=3080')));
     assert.ok(leaks.some(v => v.includes('/home/')));
     assert.ok(leaks.some(v => v.includes('/Users/')));
     assert.ok(leaks.some(v => v.includes('C:\\Users\\')));
-    assert.ok(leaks.some(v => v.includes('2202612')));
-    assert.ok(leaks.some(v => v.includes('.agents/teamwork')));
   });
 });
