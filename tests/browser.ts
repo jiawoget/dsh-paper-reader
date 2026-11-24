@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type FrameLocator, type Locator, type Page } from 'playwright-core';
 import { openReader, withHost } from './e2e/host.js';
+import { markdownLinks, vaultSource, visibleMarkdown } from './e2e/vault-links.js';
 
 async function screen(pane: FrameLocator, page: number): Promise<void> {
   await pane.locator(`#original [aria-label="Original, page ${page}"]`).waitFor();
@@ -163,13 +164,19 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
     await pane.locator('#saveState.exported').waitFor();
     await pane.getByText('Saved to vault', {exact: true}).waitFor();
     const directory = path.join(vault, 'Paper Reader');
-    const [markdown] = await readdir(directory);
-    const exported = await readFile(path.join(directory, markdown), 'utf8');
-    const links = [...exported.matchAll(/<([^>]+)>/g)].map(m => m[1]).filter(s => s.startsWith(origin));
-    const anchored = links.find(link => new URL(link).searchParams.get('quote') === 'block tables');
-    assert.ok(anchored && new URL(anchored).searchParams.get('page') === '6', 'The actual note export must link back to its exact selected words.');
+    const markdown = (await readdir(directory)).find(entry => entry.endsWith('.md'));
+    assert.ok(markdown, 'The Obsidian vault export must write a Markdown notebook file.');
+    const noteFile = path.join(directory, markdown);
+    const exported = await readFile(noteFile, 'utf8');
+    const visible = visibleMarkdown(exported);
+    const links = markdownLinks(visible);
+    const copyLink = links.find(link => link.target.startsWith('Sources/') && link.target.endsWith('#page=6'));
+    assert.ok(copyLink && visible.includes('block tables'), 'The actual note export must include a portable vault source link for the page 6 note.');
+    const copy = vaultSource(vault, noteFile, copyLink.target);
+    assert.equal(copy.fragment, 'page=6', 'The vault source link must cite page 6.');
+    assert.ok((await readFile(copy.file)).subarray(0, 5).equals(Buffer.from('%PDF-')));
     const deep = await browserContext.newPage();
-    await deep.goto(anchored);
+    await deep.goto(recorded.href);
     await deep.locator('#original .pdf-quote-mark').first().waitFor();
     await deep.reload();
     const showNotebook = deep.getByRole('button', { name: 'Show notebook', exact: true });

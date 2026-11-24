@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,16 +39,44 @@ function ready(child: ChildProcessWithoutNullStreams): Promise<string> {
   });
 }
 
+function cachedPlaywrightChromium(): string[] {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright')
+      : process.platform === 'darwin'
+        ? path.join(os.homedir(), 'Library/Caches/ms-playwright')
+        : path.join(os.homedir(), '.cache/ms-playwright')
+  ].filter((dir): dir is string => Boolean(dir && existsSync(dir)));
+  const binaries: string[] = [];
+  for (const root of roots) {
+    const entries = readdirSync(root).filter(name => /^chromium-\d+$/u.test(name))
+      .sort((a, b) => Number(b.slice(9)) - Number(a.slice(9)));
+    for (const entry of entries) {
+      const base = path.join(root, entry);
+      if (process.platform === 'win32') binaries.push(path.join(base, 'chrome-win64/chrome.exe'), path.join(base, 'chrome-win/chrome.exe'));
+      else if (process.platform === 'darwin') binaries.push(path.join(base, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'),
+        path.join(base, 'chrome-mac/Chromium.app/Contents/MacOS/Chromium'));
+      else binaries.push(path.join(base, 'chrome-linux64/chrome'), path.join(base, 'chrome-linux/chrome'));
+    }
+  }
+  return binaries;
+}
+
+export function browserExecutable(): string {
+  return installed('Set CHROME_PATH to the installed Chromium executable.', [process.env.CHROME_PATH,
+    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google/Chrome/Application/chrome.exe'),
+    '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    chromium.executablePath(), ...cachedPlaywrightChromium()]);
+}
+
 export async function withHost<T>(callback: (host: HostFixture) => Promise<T>, environment: NodeJS.ProcessEnv = {},
   options: { installedModelProfile?: boolean; modelFixture?: boolean } = {}): Promise<T> {
-  const native = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'node-v26.13.1-win-x64');
   const dsh = installed('Set DSH_ENTRY to the installed DSH lib/bin.js.', [process.env.DSH_ENTRY,
     path.join(path.dirname(process.execPath), 'node_modules/@deepseek-ai/dsh/lib/bin.js'),
-    native && path.join(native, 'node_modules/@deepseek-ai/dsh/lib/bin.js'),
+    path.resolve(path.dirname(process.execPath), '../lib/node_modules/@deepseek-ai/dsh/lib/bin.js'),
     '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js', '/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js']);
-  const executable = installed('Set CHROME_PATH to the installed Chromium executable.', [process.env.CHROME_PATH,
-    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google/Chrome/Application/chrome.exe'),
-    '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', chromium.executablePath()]);
+  const executable = browserExecutable();
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'paper-reader-e2e-'));
   const artifacts = path.join(project, 'artifacts');
   await mkdir(artifacts, { recursive: true });
