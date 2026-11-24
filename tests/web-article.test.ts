@@ -6,6 +6,7 @@ import test from 'node:test';
 import { Library } from '../src/server/library.js';
 import { publicAddress, publicResource } from '../src/server/public-resource.js';
 import { parseWebArticle } from '../src/server/web-article.js';
+import { buildCitationMetadata, formatBibTeX, formatRIS } from '../src/shared/citation-export.js';
 
 test('HTML and saved webpages keep quote anchors, publication structure and relative figure links', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'dsh-web-article-'));
@@ -52,4 +53,82 @@ test('remote articles and their images accept only public HTTP destinations', as
   for (const address of ['8.8.8.8','2606:4700:4700::1111']) assert.equal(publicAddress(address), true);
   for (const url of ['file:///tmp/test','https://admin:pass@example.org/','http://127.1/','http://[::1]/','http://server.internal/'])
     await assert.rejects(publicResource(url, 'document'), /public/);
+});
+
+test('parseWebArticle extracts academic HTML meta tags and persists sanitized citation fields through Library', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dsh-web-meta-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const url = 'https://journal.example.org/papers/meta-2024';
+  const html = `<!doctype html><html><head>
+    <title>Journal Site</title>
+    <meta name="Citation_Title" content="Structured Attention for Long Contexts">
+    <meta name="citation_author" content="Smith, Alice">
+    <meta name="citation_author" content="Doe, Bob">
+    <meta name="citation_author" content="smith, alice">
+    <meta name="citation_journal_title" content="Journal of Machine Reading">
+    <meta name="citation_publication_date" content="2024/05/12">
+    <meta name="citation_publisher" content="Academic Press">
+    <meta name="CITATION_DOI" content="https://doi.org/10.1000/jmr.2024.09">
+    <meta name="citation_abstract" content="First line of abstract.&#10;Second line of abstract.">
+    <meta name="citation_date" content="not-a-year">
+    <meta content="missing-name">
+    <meta name="empty_content" content="   ">
+  </head><body><article><h1>Structured Attention</h1><p>Body paragraph with sufficient text.</p></article></body></html>`;
+
+  const parsed = parseWebArticle(html, url);
+  assert.equal(parsed.paperTitle, 'Structured Attention for Long Contexts');
+  assert.equal(parsed.authors, 'Smith, Alice; Doe, Bob');
+  assert.equal(parsed.venue, 'Journal of Machine Reading');
+  assert.equal(parsed.year, '2024');
+  assert.equal(parsed.publisher, 'Academic Press');
+  assert.equal(parsed.doi, '10.1000/jmr.2024.09');
+  assert.equal(parsed.abstract, 'First line of abstract.\nSecond line of abstract.');
+
+  const library = new Library(root);
+  const imported = await library.importWeb(parsed);
+  const loaded = await library.get(imported.id);
+  assert.equal(loaded.paperTitle, parsed.paperTitle);
+  assert.equal(loaded.authors, 'Smith, Alice; Doe, Bob');
+  assert.equal(loaded.venue, 'Journal of Machine Reading');
+  assert.equal(loaded.year, '2024');
+  assert.equal(loaded.publisher, 'Academic Press');
+  assert.equal(loaded.doi, '10.1000/jmr.2024.09');
+  assert.equal(loaded.abstract, parsed.abstract);
+
+  const listed = (await library.list()).find(doc => doc.id === imported.id);
+  assert.ok(listed);
+  assert.equal(listed.abstract, undefined);
+  assert.equal(listed.year, '2024');
+
+  const meta = buildCitationMetadata(loaded);
+  const bib = formatBibTeX(meta);
+  const ris = formatRIS(meta);
+  assert.ok(bib.startsWith('@article{smith2024structured,\n'), bib);
+  assert.ok(bib.includes('  author = {Smith, Alice and Doe, Bob},'));
+  assert.ok(bib.includes('  journal = {Journal of Machine Reading},'));
+  assert.ok(bib.includes('  publisher = {Academic Press},'));
+  assert.ok(bib.includes('  doi = {10.1000/jmr.2024.09},'));
+  assert.ok(ris.includes('TY  - JOUR\n'));
+  assert.ok(ris.includes('AU  - Smith, Alice\nAU  - Doe, Bob\n'));
+  assert.ok(ris.includes('JO  - Journal of Machine Reading\n'));
+  assert.ok(ris.includes('PB  - Academic Press\n'));
+  assert.ok(ris.includes('PY  - 2024\n'));
+  assert.ok(ris.includes('DO  - 10.1000/jmr.2024.09\n'));
+  assert.ok(ris.includes('AB  - First line of abstract. Second line of abstract.\n'));
+  assert.ok(ris.endsWith('ER  - '));
+
+  const fallbackHtml = `<!doctype html><html><head>
+    <meta name="dc.creator" content="Ada Lovelace">
+    <meta name="dc.creator" content="Charles Babbage">
+    <meta name="dc.date" content="2021-11-01">
+    <meta name="dc.identifier" content="urn:isbn:9780000000000">
+    <meta name="dc.publisher" content="Royal Society">
+    <meta property="OG:Description" content="Fallback abstract from OpenGraph.">
+  </head><body><article><h1>Fallback Paper</h1><p>Content text.</p></article></body></html>`;
+  const fallback = parseWebArticle(fallbackHtml, 'https://journal.example.org/papers/fallback');
+  assert.equal(fallback.authors, 'Ada Lovelace; Charles Babbage');
+  assert.equal(fallback.year, '2021');
+  assert.equal(fallback.doi, undefined);
+  assert.equal(fallback.publisher, 'Royal Society');
+  assert.equal(fallback.abstract, 'Fallback abstract from OpenGraph.');
 });

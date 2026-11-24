@@ -132,11 +132,55 @@ function extractArticle(root, tree, address2, fallbackTitle, picked) {
   const researchBlog = articleUrl(address2)?.hostname === "research.google";
   let storyHeader, storySummary, storyBody;
   const coverImages = /* @__PURE__ */ new Set(), figureDescriptions = /* @__PURE__ */ new Set();
+  const metaSingle = /* @__PURE__ */ new Map();
+  const metaLists = /* @__PURE__ */ new Map();
+  const metaAuthorKeys = /* @__PURE__ */ new Set(["citation_author", "dc.creator", "dcterms.creator"]);
+  const metaAbstractKeys = /* @__PURE__ */ new Set(["citation_abstract", "dcterms.abstract", "dc.description", "description", "og:description"]);
+  const metaDoiKeys = /* @__PURE__ */ new Set(["citation_doi", "dc.identifier"]);
+  const metaDateKeys = /* @__PURE__ */ new Set(["citation_publication_date", "citation_date", "citation_online_date", "dc.date", "dcterms.issued", "article:published_time"]);
+  function collectMeta(node) {
+    const rawKey = attr(node, "name") || attr(node, "property");
+    const rawContent = attr(node, "content");
+    if (!rawKey || !rawContent) return;
+    const key2 = rawKey.trim().toLowerCase();
+    if (!key2) return;
+    const value = metaAbstractKeys.has(key2) ? rawContent.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\r\n?/g, "\n").trim() : clean(rawContent);
+    if (!value) return;
+    if (metaAuthorKeys.has(key2)) {
+      const list = metaLists.get(key2) ?? [];
+      if (!list.some((entry) => entry.toLowerCase() === value.toLowerCase())) list.push(value);
+      metaLists.set(key2, list);
+      return;
+    }
+    if (metaSingle.has(key2)) return;
+    if (metaDoiKeys.has(key2)) {
+      const doi2 = value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+      if (/^10\.\d{4,9}\/\S+$/i.test(doi2)) metaSingle.set(key2, doi2);
+      return;
+    }
+    if (metaDateKeys.has(key2)) {
+      const year2 = value.match(/(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/)?.[1];
+      if (year2) metaSingle.set(key2, year2);
+      return;
+    }
+    metaSingle.set(key2, value);
+  }
+  function firstMeta(...keys) {
+    for (const key2 of keys) {
+      const value = metaSingle.get(key2);
+      if (value) return value;
+    }
+    return void 0;
+  }
   function find2(node, depth, storyPart) {
     if (depth > 150 || tag(node) === "#text") return;
     const name2 = tag(node);
     if (name2 === "base" && !documentBase) documentBase = articleUrl(attr(node, "href") || "", address2)?.href;
     if (name2 === "title" && !pageTitle) pageTitle = clean(tree.text(node));
+    if (name2 === "meta") {
+      collectMeta(node);
+      return;
+    }
     if (excluded(node)) return;
     if (researchBlog) {
       const names = classes(node);
@@ -291,7 +335,30 @@ function extractArticle(root, tree, address2, fallbackTitle, picked) {
   } else visit(articleRoot, "p", void 0, 0);
   flush();
   if (!paragraphs.length) throw new Error("No visible article text was found on this page. Open the original webpage and use the browser extension.");
-  return { article: { url: address2, title: title || pageTitle || new URL(address2).hostname, paragraphs, articleLayout: layout }, index: pickedIndex };
+  const paperTitle = firstMeta("citation_title", "dc.title");
+  const authorList = metaLists.get("citation_author") ?? metaLists.get("dc.creator") ?? metaLists.get("dcterms.creator");
+  const authors = authorList?.length ? authorList.join("; ") : firstMeta("author");
+  const venue = firstMeta("citation_journal_title", "citation_conference_title", "citation_inbook_title", "citation_book_title", "citation_technical_report_institution");
+  const year = firstMeta("citation_publication_date", "citation_date", "citation_online_date", "dc.date", "dcterms.issued", "article:published_time");
+  const doi = firstMeta("citation_doi", "dc.identifier");
+  const publisher = firstMeta("citation_publisher", "dc.publisher", "dcterms.publisher");
+  const abstract = firstMeta("citation_abstract", "dcterms.abstract", "dc.description", "description", "og:description");
+  return {
+    article: {
+      url: address2,
+      title: title || paperTitle || pageTitle || new URL(address2).hostname,
+      paragraphs,
+      articleLayout: layout,
+      ...paperTitle ? { paperTitle } : {},
+      ...authors ? { authors } : {},
+      ...venue ? { venue } : {},
+      ...year ? { year } : {},
+      ...doi ? { doi } : {},
+      ...publisher ? { publisher } : {},
+      ...abstract ? { abstract } : {}
+    },
+    index: pickedIndex
+  };
 }
 
 // src/server/article-layout.ts
@@ -586,6 +653,19 @@ function isFsError(error, code) {
   return isRecord(error) && error.code === code;
 }
 var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
+function optionalText(value, max, multiline = false) {
+  if (typeof value !== "string") return void 0;
+  const cleaned = multiline ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\r\n?/g, "\n").trim() : value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned ? cleaned.slice(0, max) : void 0;
+}
+function optionalDoi(value) {
+  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+  return raw && /^10\.\d{4,9}\/\S+$/i.test(raw) ? raw : void 0;
+}
+function optionalYear(value) {
+  const raw = optionalText(value, 32);
+  return raw?.match(/(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/)?.[1];
+}
 async function writeOnce(file, bytes) {
   const temporary = file + "." + randomUUID() + ".tmp";
   await writeFile(temporary, bytes, { flag: "wx" });
@@ -655,7 +735,7 @@ var Library = class {
     await mkdir(this.directory, { recursive: true });
     const names = (await readdir(this.directory)).filter((file) => /^(pdf|web|book)-[a-f0-9]{64}\.json$/.test(file));
     const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
-    return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, ...meta }) => meta)];
+    return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
   async rename(id, title) {
     if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
@@ -797,11 +877,25 @@ var Library = class {
       await mkdir(this.directory, { recursive: true });
       await writeOnce(path.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
     }
+    const paperTitle = optionalText(input.paperTitle, 500);
+    const authors = optionalText(input.authors, 2e3);
+    const venue = optionalText(input.venue, 500);
+    const year = optionalYear(input.year);
+    const doi = optionalDoi(input.doi);
+    const publisher = optionalText(input.publisher, 500);
+    const abstract = optionalText(input.abstract, 8e3, true);
     return { doc: await this.store({
       kind: "web",
       id,
       url: url.href,
       title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname,
+      ...paperTitle ? { paperTitle } : {},
+      ...authors ? { authors } : {},
+      ...venue ? { venue } : {},
+      ...year ? { year } : {},
+      ...doi ? { doi } : {},
+      ...publisher ? { publisher } : {},
+      ...abstract ? { abstract } : {},
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       defaultPage: 1,
       paragraphs
