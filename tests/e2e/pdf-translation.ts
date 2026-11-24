@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomInt } from 'node:crypto';
+import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { chromium, type FrameLocator, type Locator, type Page } from 'playwright-core';
+import { localTranslationAvailable } from '../../src/server/local-translation.js';
 import { openReader, withHost } from './host.js';
 
 type Reader = Page | FrameLocator;
@@ -103,52 +106,95 @@ async function verifyFigureAndTextPixels(page: Page, reader: Reader): Promise<vo
     'The two rendered page bodies must have different glyphs. A duplicate English raster cannot pass.');
 }
 
+async function translationFixture() {
+  const model = 'paper-reader-zh-fixture';
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const message = body.messages.find((entry: { role: string }) => entry.role === 'user');
+    const { blocks }: { blocks: { id: string; text: string }[] } = JSON.parse(message.content);
+    const translate = (text: string) => {
+      const count = /\b(\d+)\b/.exec(text)?.[1];
+      if (/library|table/i.test(text)) return `图书馆有 ${count ?? ''} 本书。蓝色盒子在桌子上。`;
+      if (/cat|chair|water/i.test(text)) return '猫正在椅子上睡觉。水在零度结冰。';
+      return '中文译文：' + text;
+    };
+    const translations = Object.fromEntries(blocks.map(block => [block.id, translate(block.text)]));
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: {
+      role: 'assistant', content: JSON.stringify({ translations })
+    } }] }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return { model, url: 'http://127.0.0.1:' + address.port + '/v1',
+    close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) };
+}
+
 async function importedPdf(browserPage: Page, reader: Reader, scratch: string): Promise<void> {
-  const number = randomInt(20, 90);
-  const fixture = await browserPage.context().newPage();
-  await fixture.setContent('<style>@page{size:letter;margin:1in}body{font:18pt Georgia}section+section{break-before:page}</style>'
-    + '<section>The library has ' + number + ' books. The blue box is on the table.</section>'
-    + '<section>The cat is sleeping on a chair. Water freezes at zero degrees.</section>');
-  const file = path.join(scratch, 'New reading sample.pdf');
-  await fixture.pdf({ path: file, preferCSSPageSize: true });
-  await fixture.close();
-  const requests: string[] = [];
-  browserPage.on('request', req => {
-    if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/paper-reader/action')
-      && req.postDataJSON()?.op === 'translation.page') requests.push('translation.page');
-  });
-  await reader.getByRole('button', { name: 'Open library' }).click();
-  const [chooser] = await Promise.all([browserPage.waitForEvent('filechooser'),
-    reader.getByRole('button', { name: 'Open a PDF' }).click()]);
-  await chooser.setFiles(file);
-  await reader.getByRole('dialog').waitFor({ state: 'hidden' });
-  await ready(reader, 1);
-  const first = sheet(reader, 'translated', 1);
-  await first.getByText(/\u4e66/u).first().waitFor({ timeout: 150_000 });
-  const firstText = await targetText(reader, 1);
-  assert.ok(firstText.includes(String(number)) && /\u684c/u.test(firstText), 'Fresh inference must preserve the input quantity and the table.');
-  await turn(reader, 1, 2);
-  await sheet(reader, 'translated', 2).getByText(/\u732b/u).first().waitFor({ timeout: 150_000 });
-  const secondText = await targetText(reader, 2);
-  assert.ok(/\u6c34/u.test(secondText) && /\u6905/u.test(secondText), 'The second page must translate water and chair.');
-  assert.ok(requests.length >= 2, 'Newly imported pages must go through the translation service.');
-  const before = requests.length;
-  await turn(reader, 2, 1);
-  assert.equal(await targetText(reader, 1), firstText);
-  const sourceUrl = await reader.locator('body').evaluate(body => body.ownerDocument.location.href);
-  const reopened = await browserPage.context().newPage();
-  let repeated = 0;
-  reopened.on('request', req => {
-    if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/paper-reader/action')
-      && req.postDataJSON()?.op === 'translation.page') repeated++;
-  });
-  await reopened.goto(sourceUrl);
-  await ready(reopened, 1);
-  assert.equal(await targetText(reopened, 1), firstText);
-  assert.equal(requests.length, before);
-  assert.equal(repeated, 0, 'Reopening a translated PDF must read its saved page without another inference request.');
-  await reopened.close();
-  console.log('PASS imported PDF: two new pages translated through real inference, including the random input quantity. Reopen used the cached result.');
+  const useLocalModel = localTranslationAvailable();
+  const provider = useLocalModel ? undefined : await translationFixture();
+  try {
+    if (provider) {
+      await reader.getByRole('button', { name: 'More actions' }).click();
+      await reader.getByRole('button', { name: 'Connections', exact: true }).click();
+      const dialog = reader.getByRole('dialog');
+      await dialog.getByLabel('API base URL').fill(provider.url);
+      await dialog.getByLabel('Model', { exact: true }).fill(provider.model);
+      await dialog.getByRole('button', { name: 'Save connections' }).click();
+      await dialog.waitFor({ state: 'hidden' });
+    }
+    const number = randomInt(20, 90);
+    const fixture = await browserPage.context().newPage();
+    await fixture.setContent('<style>@page{size:letter;margin:1in}body{font:18pt Georgia}section+section{break-before:page}</style>'
+      + '<section>The library has ' + number + ' books. The blue box is on the table.</section>'
+      + '<section>The cat is sleeping on a chair. Water freezes at zero degrees.</section>');
+    const file = path.join(scratch, 'New reading sample.pdf');
+    await fixture.pdf({ path: file, preferCSSPageSize: true });
+    await fixture.close();
+    const requests: string[] = [];
+    browserPage.on('request', req => {
+      if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/paper-reader/action')
+        && req.postDataJSON()?.op === 'translation.page') requests.push('translation.page');
+    });
+    await reader.getByRole('button', { name: 'Open library' }).click();
+    const [chooser] = await Promise.all([browserPage.waitForEvent('filechooser'),
+      reader.getByRole('button', { name: 'Open a PDF' }).click()]);
+    await chooser.setFiles(file);
+    await reader.getByRole('dialog').waitFor({ state: 'hidden' });
+    await ready(reader, 1);
+    const first = sheet(reader, 'translated', 1);
+    await first.getByText(/\u4e66/u).first().waitFor({ timeout: 150_000 });
+    const firstText = await targetText(reader, 1);
+    assert.ok(firstText.includes(String(number)) && /\u684c/u.test(firstText), 'Fresh inference must preserve the input quantity and the table.');
+    await turn(reader, 1, 2);
+    await sheet(reader, 'translated', 2).getByText(/\u732b/u).first().waitFor({ timeout: 150_000 });
+    const secondText = await targetText(reader, 2);
+    assert.ok(/\u6c34/u.test(secondText) && /\u6905/u.test(secondText), 'The second page must translate water and chair.');
+    assert.ok(requests.length >= 2, 'Newly imported pages must go through the translation service.');
+    const before = requests.length;
+    await turn(reader, 2, 1);
+    assert.equal(await targetText(reader, 1), firstText);
+    const sourceUrl = await reader.locator('body').evaluate(body => body.ownerDocument.location.href);
+    const reopened = await browserPage.context().newPage();
+    let repeated = 0;
+    reopened.on('request', req => {
+      if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/paper-reader/action')
+        && req.postDataJSON()?.op === 'translation.page') repeated++;
+    });
+    await reopened.goto(sourceUrl);
+    await ready(reopened, 1);
+    assert.equal(await targetText(reopened, 1), firstText);
+    assert.equal(requests.length, before);
+    assert.equal(repeated, 0, 'Reopening a translated PDF must read its saved page without another inference request.');
+    await reopened.close();
+    console.log('PASS imported PDF: two new pages translated through ' + (useLocalModel ? 'real local inference' : 'local HTTP translation fixture') + ', including the random input quantity. Reopen used the cached result.');
+  } finally {
+    await provider?.close();
+  }
 }
 
 await withHost(async host => {

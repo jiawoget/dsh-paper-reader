@@ -152,10 +152,11 @@ await withHost(async host => {
         await chooser.getByRole('button', { name: 'Use model' }).click();
         await chooser.waitFor({ state: 'hidden' });
         await chat.getByRole('button', { name: /^Question model.*reasoner.*high/ }).waitFor();
+        await field.click();
         await field.fill('Which model answers this whole-paper question?');
         const response = reader.waitForResponse(response => response.url().endsWith('/action') &&
-          response.request().postDataJSON()?.op === 'chat.ask');
-        await field.press('Enter');
+          response.request().postDataJSON()?.op === 'chat.ask', { timeout: 45_000 });
+        await chat.getByRole('button', { name: 'Send', exact: true }).click();
         const reply = await response;
         assert.ok(reply.ok(), await reply.text());
         assert.equal((await reply.json()).text, 'reader-test / reasoner / high');

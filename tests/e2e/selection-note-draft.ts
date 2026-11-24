@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { chromium } from 'playwright-core';
 import type { JournalNote, Operations } from '../../src/shared/types.js';
+import { browserExecutable } from './host.js';
 
 const origin = 'http://127.0.0.1:31231';
 const draft = 'Check the optimization argument. 残差';
@@ -15,7 +15,7 @@ const { outputFiles: [bundle] } = await build({
     contents: `
       import { SelectionWorkspace } from './src/reader/selection-workspace.ts';
       const card = document.querySelector('#card');
-      const app = { doc: { kind: 'pdf', id: '', title: 'Research paper' }, state: { notes: [] }, refresh: async () => {} };
+      const app = { doc: { kind: 'pdf', id: '', title: 'Research paper' }, state: { notes: [], settings: { aiMode: 'unconfigured', dshModels: [], localTranslationAvailable: false } }, refresh: async () => {} };
       const workspace = new SelectionWorkspace(app);
       const original = ${JSON.stringify(quote)};
       const context = original + ' A follow-up. ' + original;
@@ -42,8 +42,7 @@ const { outputFiles: [bundle] } = await build({
   bundle: true, platform: 'browser', write: false
 });
 
-const executablePath = process.env.CHROME_PATH || (process.platform === 'win32' && process.env.ProgramFiles
-  ? path.join(process.env.ProgramFiles, 'Google', 'Chrome', 'Application', 'chrome.exe') : undefined);
+const executablePath = browserExecutable();
 const browser = await chromium.launch({ executablePath });
 try {
   const page = await browser.newPage({ locale: 'en-US' });

@@ -45,6 +45,7 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     await card.getByText(/逻辑 KV 块/).first().waitFor();
     await page.setViewportSize({ width: 2100, height: 900 });
     await page.locator('#card:not([data-docked])').waitFor();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     const floating = (await card.boundingBox())!;
     const leftGutter = floating.x < (await original.boundingBox())!.x;
     const cornerX = floating.x + (leftGutter ? 4 : floating.width - 4);

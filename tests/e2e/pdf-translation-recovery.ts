@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { chromium, type FrameLocator, type Locator, type Page, type Response } from 'playwright-core';
+import { localTranslationAvailable } from '../../src/server/local-translation.js';
 import { openReader, withHost } from './host.js';
 
 const sentences = [
@@ -108,9 +109,37 @@ async function started(signal: Promise<void>, description: string): Promise<void
   } finally { clearTimeout(timer); }
 }
 
+async function chineseProvider() {
+  const model = 'paper-reader-zh-recovery';
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const message = body.messages.find((entry: { role: string }) => entry.role === 'user');
+    const { blocks }: { blocks: Block[] } = JSON.parse(message.content);
+    const translate = (text: string) => {
+      if (/apple trees/i.test(text)) return '去年春天农民在河边种了 37 棵苹果树。';
+      if (/passengers/i.test(text)) return '火车载着 84 名乘客从车站开往城市。';
+      return '中文译文：' + text;
+    };
+    const translations = Object.fromEntries(blocks.map(block => [block.id, translate(block.text)]));
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: {
+      role: 'assistant', content: JSON.stringify({ translations })
+    } }] }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return { model, url: 'http://127.0.0.1:' + address.port + '/v1',
+    close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) };
+}
+
 await withHost(async host => {
   const browser = await chromium.launch({ executablePath: host.executable, headless: process.env.PAPER_READER_HEADED !== '1' });
   const faulty = await echoProvider();
+  const fallback = localTranslationAvailable() ? undefined : await chineseProvider();
   const gates = [gate(), gate()];
   try {
     const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, locale: 'en-US' });
@@ -162,8 +191,8 @@ await withHost(async host => {
     await status.getByRole('button', { name: 'Connections', exact: true }).click();
     assert.equal(await urlField.inputValue(), faulty.url);
     assert.equal(await modelField.inputValue(), faulty.model);
-    await urlField.fill(originalUrl);
-    await modelField.fill(originalModel);
+    await urlField.fill(fallback ? fallback.url : originalUrl);
+    await modelField.fill(fallback ? fallback.model : originalModel);
     await dialog.getByRole('button', { name: 'Save connections' }).click();
     await dialog.waitFor({ state: 'hidden' });
 
@@ -233,11 +262,12 @@ await withHost(async host => {
     assert.deepEqual(browserErrors, []);
     console.log('PASS PDF recovery: the English echo returned HTTP ' + failure.status() + ' and left an empty cache. '
       + 'Original and failed target rasters contained ' + sourceInk + ' and ' + targetInk + ' dark pixels. '
-      + 'After connection repair, two real inference requests translated 37 apple trees and 84 passengers. '
+      + 'After connection repair, ' + (fallback ? 'two controlled translation requests' : 'two real inference requests') + ' translated 37 apple trees and 84 passengers. '
       + 'The late first response stayed off page two, and reopening restored the exact saved text without another request.');
   } finally {
     for (const hold of gates) hold.release.resolve();
     await browser.close();
     await faulty.close();
+    await fallback?.close();
   }
 });
