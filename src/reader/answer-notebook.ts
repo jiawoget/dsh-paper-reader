@@ -63,7 +63,7 @@ export class AnswerNotebookAction {
     this.add.hidden = entries.has(this.text) && !error || undoFailed;
     this.add.disabled = this.undo.disabled = busy;
     this.add.textContent = error && !undoFailed ? label('Retry', '重试') :
-      this.excerpt ? label('Save selection', '记下选句') : label('Add to notebook', '记入笔记');
+      this.excerpt ? label('Save selection', '记下选句') : label('Add to Notes', '记入笔记');
     this.feedback.textContent = busy ? label('Saving…', '保存中…') : error ||
       (entry ? label('Added', '已记入') : '');
     this.feedback.hidden = !this.feedback.textContent;
@@ -80,8 +80,8 @@ export class AnswerNotebookAction {
       if (!attempt.entry) {
         await goToNoteChapter(this.app, this.source);
         const editor = paperNotebook(this.app);
-        if (!editor) throw Error(label('Open the notebook and try again.', '请打开本篇笔记后重试。'));
-        let citation = label('Paper discussion', '全文问答');
+        if (!editor) throw Error(label('Open Notes and try again.', '请打开本篇笔记后重试。'));
+        let citation = label('Paper chat', '全文问答');
         if ('selected' in this.source) {
           const caption = isScreenshotAnchor(this.source.anchor)
             ? screenshotFigureLabel(this.source.label) ?? label('Screenshot', '截图选区') : this.source.selected;

@@ -1,6 +1,6 @@
 import { showCard, WebSource, type WebCardDraft } from './card.js';
 import { currentPick, type PickedText } from './web-page.js';
-import { errorText } from './protocol.js';
+import { errorText, extLabel as t } from './protocol.js';
 import type { Envelope, TabCommand } from './protocol.js';
 
 interface PageWorld extends Window { dshPaperReaderReady?: boolean }
@@ -65,7 +65,7 @@ if (!world.dshPaperReaderReady) {
     if (command === 'disable') { enabled = false; cancelAnimationFrame(scheduled); dismiss(); }
     if (command === 'translate') {
       const open = select();
-      if (!open) throw new Error('Select a word or sentence on the page to translate.');
+      if (!open) throw new Error(t('Select a word or sentence on the page to translate.', '请先在网页中选中要翻译的词句。'));
       await open.translate();
     }
     if (command === 'capture') {

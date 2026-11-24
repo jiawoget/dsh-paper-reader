@@ -185,7 +185,7 @@ await withHost(async host => {
       assert.equal(jump.pathname, '/api/paper-reader/app/index.html');
       assert.equal(jump.searchParams.get('anchor'), 'p-4');
       await reader.getByRole('button', { name: 'Bilingual', exact: true }).click();
-      await reader.getByRole('button', { name: 'Show notebook' }).click();
+      await reader.getByRole('button', { name: 'Show notes' }).click();
       await reader.locator('.cm-line[data-note-id]').filter({hasText: annotation}).waitFor();
       await reader.getByRole('button', { name: 'Translate article' }).click();
       await reader.getByText(fixture.answers[3], { exact: true }).waitFor();
@@ -209,10 +209,10 @@ await withHost(async host => {
       await pane.getByRole('button', { name: 'Vocabulary and history' }).click();
       const dialog = pane.getByRole('dialog');
       await dialog.getByText('mapping', { exact: true }).waitFor();
-      await dialog.getByRole('button', { name: 'History' }).click();
+      await dialog.getByRole('tab', { name: 'History' }).click();
       await dialog.getByText(passages[2], { exact: true }).waitFor();
       await dialog.getByText('mapping', { exact: true }).waitFor();
-      await dialog.getByRole('button', { name: 'Vocabulary' }).click();
+      await dialog.getByRole('tab', { name: 'Vocabulary' }).click();
       await dialog.getByRole('searchbox').fill('mapping');
       assert.equal(await dialog.locator('.list-row').count(), 1);
       await pane.locator('#toast').waitFor({ state: 'hidden' });

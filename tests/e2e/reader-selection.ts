@@ -419,7 +419,7 @@ await withHost(async host => {
     await chooser.setFiles(pdf);
     await reader.getByRole('dialog').waitFor({ state: 'hidden' });
     await reader.getByRole('button', { name: 'Bilingual', exact: true }).click();
-    await reader.getByRole('button', { name: 'Show notebook', exact: true }).click();
+    await reader.getByRole('button', { name: 'Show notes', exact: true }).click();
     await reader.getByRole('tab', { name: 'Notes', exact: true }).click();
     const selected = await selection(reader);
     assert.ok(selected.text.length > 200);
@@ -450,7 +450,7 @@ await withHost(async host => {
     await card.getByRole('button', { name: 'Save note' }).click();
     await card.getByText('Note saved.', { exact: true }).waitFor();
     assert.equal(await editor.count(), 0, 'A saved note must leave the editor and its Save control.');
-    const rail = reader.getByRole('textbox', { name: 'Notebook Markdown' });
+    const rail = reader.getByRole('textbox', { name: 'Notes Markdown' });
     await rail.getByText(noteBody, { exact: true }).waitFor();
     const [initial] = await notes(reader);
     assert.equal(initial.quote, selected.text);
@@ -537,7 +537,7 @@ await withHost(async host => {
     assert.equal(await question.inputValue(), firstQuestion);
     const send = card.getByRole('button', { name: 'Send', exact: true });
     await send.click();
-    const log = card.getByRole('log', { name: 'Selection conversation' });
+    const log = card.getByRole('log', { name: 'Selection chat history' });
     await log.locator('strong').getByText('residual block', { exact: true }).waitFor();
     assert.equal(await log.locator('.katex-display').count(), 1);
     assert.equal(await log.locator('.katex').count(), 2);
@@ -663,7 +663,7 @@ await withHost(async host => {
     await openSelectionNotes(card, 3);
     await card.locator('.selection-saved-note').filter({ hasText: composed }).locator('.katex-display').waitFor();
     await reader.setViewportSize({ width: 390, height: 700 });
-    await reader.getByRole('button', { name: 'Close notebook', exact: true }).click();
+    await reader.getByRole('button', { name: 'Close notes', exact: true }).click();
     await reader.getByRole('button', { name: 'Original', exact: true }).click();
     await selection(reader);
     await card.getByRole('button', { name: 'Ask AI' }).click();
@@ -673,7 +673,7 @@ await withHost(async host => {
     assert.equal(await question.inputValue(), unsent);
     await reader.setViewportSize({ width: 1390, height: 860 });
     await reader.getByRole('button', { name: 'Bilingual', exact: true }).click();
-    await reader.getByRole('button', { name: 'Show notebook', exact: true }).click();
+    await reader.getByRole('button', { name: 'Show notes', exact: true }).click();
     await repeatedEnglish(reader, selected.anchor);
     await translatedTerm(reader, selected.anchor);
     await translateWord(reader);

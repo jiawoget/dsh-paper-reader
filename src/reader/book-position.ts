@@ -14,7 +14,7 @@ export async function savedBookPlace(doc: string): Promise<BookPlace | undefined
 }
 
 /** The first paragraph at the reading line remains meaningful after zooming or resizing the window. */
-export function trackBookPlace(docId: string, page: number, resume?: BookPlace): () => void {
+export function trackBookPlace(docId: string, page: number, resume?: BookPlace): (save?: boolean) => void {
   const paper = byId('paperScroll'), translation = byId('translated');
   const events = new AbortController();
   const rows = {
@@ -99,5 +99,5 @@ export function trackBookPlace(docId: string, page: number, resume?: BookPlace):
   if (aligning) { align(); resize.observe(byId('original')); resize.observe(translation); }
   else flush();
   const settled = window.setTimeout(stopAligning, 3000);
-  return () => { flush(); events.abort(); resize.disconnect(); window.clearTimeout(settled); };
+  return (save = true) => { if (save) flush(); events.abort(); resize.disconnect(); window.clearTimeout(settled); };
 }

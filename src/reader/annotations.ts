@@ -59,10 +59,10 @@ export class AnnotationWorkspace {
   revision = 0;
 
   constructor(private readonly controls: Controls) {
-    this.root.ariaLabel = 'Annotations for this paper';
+    this.root.ariaLabel = label('Marks for this paper', '本篇标记');
     this.root.append(this.index);
     this.popover.hidden = true;
-    this.popover.ariaLabel = 'Page note';
+    this.popover.ariaLabel = label('Page note', '页边笔记');
     this.popover.addEventListener('keydown', event => {
       if (event.key === 'Escape') { event.preventDefault(); this.closeEditor(true); }
     });
@@ -120,7 +120,7 @@ export class AnnotationWorkspace {
   showList(): void { this.closeEditor(false); this.controls.showIndex(); }
   private renderIndex(): void {
     const focused = this.index.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset : undefined;
-    const categories = el('div', 'annotation-filters'); categories.ariaLabel = label('Filter annotations','筛选批注');
+    const categories = el('div', 'annotation-filters'); categories.ariaLabel = label('Filter marks','筛选标记');
     for (const [value, caption] of [['all',label('All','全部')],['highlight',label('Highlights','高亮')],['pin',label('Page notes','页边笔记')]] as const) {
       const choice = button(caption, () => {this.filter = value; this.renderIndex();}, 'annotation-filter');
       choice.dataset.filter = value;
@@ -139,20 +139,21 @@ export class AnnotationWorkspace {
       row.dataset.id = note.id;
       const type = el('span', 'annotation-meta');
       type.append(icon(note.kind === 'pin' ? 'pin' : 'edit', 14), note.kind === 'pin' ? label('Page note','页边笔记') : highlightName(note.color));
-      if(note.kind==='pin' && note.label!=='Page note')type.append(' · '+note.label);
+      if(note.kind==='pin' && note.label!=='Page note' && note.label!=='页边笔记')type.append(' · '+note.label);
       if (this.drafts.has(note.id)) type.append(label(' · Draft',' · 草稿'));
       if (note.kind === 'highlight') type.dataset.color = note.color;
-      const excerpt = el('strong','', note.text.trim() || visibleQuote(note) || note.label);
+      const fallbackLabel = note.label === 'Page note' ? label('Page note', '页边笔记') : note.label;
+      const excerpt = el('strong','', note.text.trim() || visibleQuote(note) || fallbackLabel);
       excerpt.dir = 'auto'; row.append(type, excerpt);
       if (note.text && note.quote) {const quote = el('span','annotation-excerpt',visibleQuote(note)); quote.dir='auto'; row.append(quote);}
       list.append(row);
     }
     if (!items.length) list.append(el('p','hint',this.filter === 'all' ? label('Your highlights and page notes appear here.','这里会显示高亮和页边笔记。') :
       this.filter === 'pin' ? label('No page notes for this paper.','本篇暂无页边笔记。') : label('No highlights for this paper.','本篇暂无高亮。')));
-    this.index.replaceChildren(el('h2','',label('Annotations','批注索引')), categories);
+    this.index.replaceChildren(el('h2','',label('Marks','标记')), categories);
     if (this.problem) {
       const failure = el('p','annotation-error',this.problem + ' ');
-      failure.append(button('Retry', () => this.controls.refresh(), 'text-btn')); this.index.append(failure);
+      failure.append(button(label('Retry','重试'), () => this.controls.refresh(), 'text-btn')); this.index.append(failure);
     }
     this.index.append(list);
     if (focused?.id) this.index.querySelector<HTMLElement>('[data-id="'+CSS.escape(focused.id)+'"]')?.focus({preventScroll:true});
@@ -245,14 +246,14 @@ export class AnnotationWorkspace {
   private buildEditor(note: PaperAnnotation): Editor {
     const root=el('section','annotation-editor'), header=el('header','annotation-heading');
     const kind=note.kind==='pin'?'Page note':'Highlight';
-    const close=button('',()=>this.closeEditor(true),'icon-btn','close'); close.ariaLabel=close.title=label('Close annotation','关闭批注');
+    const close=button('',()=>this.closeEditor(true),'icon-btn','close'); close.ariaLabel=close.title=label('Close mark','关闭标记');
     header.append(el('h2','',label(kind,note.kind==='pin'?'页边笔记':'高亮')),close);
     const place=this.book?label('Section','小节'):note.docId.startsWith('web-')?label('Article','文章'):label('Page '+note.page,'第 '+note.page+' 页');
-    const location=button(place+(note.label && note.label!==kind?' · '+note.label:''),()=>this.controls.locate(note),'source-chip','arrow');
+    const location=button(place+(note.label && note.label!==kind && note.label!=='页边笔记'?' · '+note.label:''),()=>this.controls.locate(note),'source-chip','arrow');
     root.append(header,location);
     if(note.quote){const quote=el('blockquote','annotation-quote',visibleQuote(note));quote.dir='auto';root.append(quote);}
     const field=el('label','field');const text=el('textarea','annotation-text');text.rows=3;text.dir='auto';
-    text.value=note.text;field.append(el('span','',label('Comment','批注内容')),text);root.append(field);
+    text.value=note.text;field.append(el('span','',label('Comment','备注')),text);root.append(field);
     const problem=el('div','annotation-error');problem.setAttribute('role','alert');
     const save=button(label('Save','保存'),()=>this.saveEditor(editor),'btn primary','check');
     const editor:Editor={note,root,text,problem,save,colorButtons:[],saving:false};
@@ -269,18 +270,18 @@ export class AnnotationWorkspace {
       root.append(palette);
     }
     const end=el('div','annotation-editor-actions');
-    const cite=button(label('Cite in notebook','引用到笔记'),async()=>{
+    const cite=button(label('Cite in Notes','引用到笔记'),async()=>{
       const saved=await this.saveEditor(editor,false);
       if(!saved || this.editor!==editor)return;
       this.closeEditor(false);
-      await this.controls.cite(saved,visibleQuote(saved)||saved.text||'Page note');
+      await this.controls.cite(saved,visibleQuote(saved)||saved.text||label('Page note','页边笔记'));
     },'btn','arrow');
     end.append(save,cite);
     const extras=el('div','annotation-extras');
-    if(!this.inRail) extras.append(button(label('Open in notebook','在笔记本中打开'),()=>this.dockEditor(),'text-btn','book'));
+    if(!this.inRail) extras.append(button(label('Open in Marks','在标记中打开'),()=>this.dockEditor(),'text-btn','book'));
     extras.append(button(label('Remove','移除'),()=>{
-      problem.replaceChildren(el('p','',label('Remove this mark? Citations in your notebook will still open its source.','移除此批注？笔记中的引用仍可回到出处。')),
-        button(label('Remove mark','移除批注'),()=>this.remove(note,true),'btn'),button(label('Keep mark','保留批注'),()=>problem.replaceChildren(),'text-btn'));
+      problem.replaceChildren(el('p','',label('Remove this mark? Citations in your notes will still open its source.','移除此标记？笔记中的引用仍可回到出处。')),
+        button(label('Remove mark','移除标记'),()=>this.remove(note,true),'btn'),button(label('Keep mark','保留标记'),()=>problem.replaceChildren(),'text-btn'));
     },'text-btn'));
     root.append(problem,end,extras);return editor;
   }
@@ -317,19 +318,19 @@ export class AnnotationWorkspace {
     try {
       const saved=await this.write({...e.note});
       if(e===this.editor){e.note.updatedAt=saved.updatedAt;e.note.createdAt=saved.createdAt;if(close)this.closeEditor(true);}
-      if(close)toast(label('Annotation saved.', '批注已保存。'));return saved;
+      if(close)toast(label('Mark saved.', '标记已保存。'));return saved;
     } catch(error) {
       if(this.editor!==e)return;
-      e.problem.textContent=message(error)+' Your draft is kept.';
+      e.problem.textContent=message(error)+label(' Your draft is kept.',' 你的草稿已保留。');
       try {await this.controls.refresh();}catch{/* Save remains available for a later retry. */}
       const latest=this.records.get(e.note.id);
       if(this.editor===e && latest && latest.updatedAt!==e.note.updatedAt){
-        e.problem.append(el('blockquote','',latest.text||'Saved highlight'),button('Use saved version',()=>{
+        e.problem.append(el('blockquote','',latest.text||label('Saved highlight','已保存的高亮')),button(label('Use saved version','改用已保存版本'),()=>{
           this.drafts.delete(latest.id);this.remember();this.controls.repaintPage();this.open(latest.id,this.lastTrigger,this.inRail);
-        },'text-btn'),button('Keep my draft',()=>{e.note.updatedAt=latest.updatedAt;this.drafts.set(e.note.id,{...e.note});
-          this.remember();e.problem.textContent='Review your draft and save again.';},'text-btn'));
+        },'text-btn'),button(label('Keep my draft','保留我的草稿'),()=>{e.note.updatedAt=latest.updatedAt;this.drafts.set(e.note.id,{...e.note});
+          this.remember();e.problem.textContent=label('Review your draft and save again.','请核对草稿后重新保存。');},'text-btn'));
       }else if(this.editor===e && !latest && e.note.updatedAt && !this.problem){
-        e.problem.append(button('Restore as a new mark',()=>{e.note.updatedAt='';this.drafts.set(e.note.id,{...e.note});this.remember();e.problem.textContent='Save to restore this mark.';},'text-btn'));
+        e.problem.append(button(label('Restore as a new mark','恢复为新标记'),()=>{e.note.updatedAt='';this.drafts.set(e.note.id,{...e.note});this.remember();e.problem.textContent=label('Save to restore this mark.','点击保存即可恢复此标记。');},'text-btn'));
       }
     } finally {e.saving=false;e.root.inert=false;}
   }
@@ -339,6 +340,6 @@ export class AnnotationWorkspace {
     this.revision++;this.drafts.delete(note.id);this.records.delete(note.id);this.remember();
     if(this.editor?.note.id===note.id)this.closeEditor(!!this.returnFromInline);
     this.renderIndex();this.controls.repaintPage();
-    if(undo)toast('Mark removed.',{label:'Undo',run:()=>this.write({...note,updatedAt:''})});
+    if(undo)toast(label('Mark removed.','标记已移除。'),{label:label('Undo','撤销'),run:()=>this.write({...note,updatedAt:''})});
   }
 }

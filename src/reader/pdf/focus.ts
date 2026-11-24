@@ -1,5 +1,6 @@
 import type { Box, PageLayout, Passage } from './model.js';
 import type { Sheet } from './paper.js';
+import { readerLabel } from '../ui.js';
 
 export type TranslationFocus = 'page' | 'column' | 'passage';
 interface FocusEntry { passage: Passage; source: HTMLElement; target: HTMLElement; translated: HTMLElement }
@@ -90,8 +91,8 @@ export class PdfFocus {
     }
     this.target.setWindow(column ? { ...page, x: column.left, width: column.right - column.left } : page);
     let label = this.targetLabel;
-    if (this.mode === 'column' && column) label = this.columns.length === 1 ? 'Single printed column' :
-      this.columns.length === 2 ? (index === 0 ? 'Left printed column' : 'Right printed column') : 'Printed column ' + (index + 1);
+    if (this.mode === 'column' && column) label = this.columns.length === 1 ? readerLabel('Single printed column', '单栏正文') :
+      this.columns.length === 2 ? (index === 0 ? readerLabel('Left printed column', '左侧栏') : readerLabel('Right printed column', '右侧栏')) : readerLabel('Printed column ' + (index + 1), '第 ' + (index + 1) + ' 栏');
     else if (this.effective === 'passage' && entry) label = entry.passage.label;
     this.changed(this.id, label);
     this.repaint(previous === 'passage' && this.effective !== 'passage');

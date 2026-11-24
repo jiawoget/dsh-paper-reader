@@ -27,7 +27,7 @@ function tell(text: string, failed = false): void {
 
 async function activeTab(): Promise<number> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id === undefined) throw new Error('Could not find the active tab.');
+  if (tab?.id === undefined) throw new Error(label('Could not find the active tab.', '找不到当前活动标签页。'));
   return tab.id;
 }
 

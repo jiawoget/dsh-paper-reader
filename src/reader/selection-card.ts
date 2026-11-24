@@ -42,7 +42,7 @@ function passagePreview(selection: string): HTMLElement {
   const expand = (open: boolean) => {
     quotation.textContent = open ? selection : short;
     more.setAttribute('aria-expanded', String(open));
-    more.ariaLabel = more.title = open ? 'Show less' : 'Show full passage';
+    more.ariaLabel = more.title = open ? readerLabel('Show less', '收起') : readerLabel('Show full passage', '展开全文');
   };
   expand(false);
   more.onclick = () => expand(more.getAttribute('aria-expanded') !== 'true');
@@ -311,11 +311,11 @@ export class SelectionCard {
     const title = el('h2', '', term ? selection : hit.image ? excerpt(selection, 68) : readerLabel('Selected passage', '所选原文'));
     title.dir = 'auto';
     title.tabIndex = -1;
-    const prefix = 'Page ' + hit.page + ' · ';
-    const pageLabel = app.doc.kind === 'web' || hit.label.startsWith(prefix) ? hit.label : prefix + hit.label;
+    const prefix = readerLabel('Page ' + hit.page + ' · ', '第 ' + hit.page + ' 页 · ');
+    const pageLabel = app.doc.kind === 'web' || hit.label.startsWith(prefix) || hit.label.startsWith('Page ' + hit.page + ' · ') ? hit.label : prefix + hit.label;
     heading.append(title, el('div', 'selection-location', pageLabel));
     const dismiss = button('', () => this.dismiss(true), 'icon-btn');
-    dismiss.ariaLabel = dismiss.title = 'Close selection';
+    dismiss.ariaLabel = dismiss.title = readerLabel('Close selection', '关闭选区');
     dismiss.append(icon('close', 15));
     header.append(heading, dismiss);
     main.append(header);
@@ -337,7 +337,7 @@ export class SelectionCard {
       return current && (correspondingText(current, part.original, 'original', part.offset) || current.translation);
     };
     const counterpartText = () => {
-      if (glossary) return 'A block table maps each request’s logical KV blocks to physical blocks in the cache.';
+      if (glossary) return readerLabel('A block table maps each request’s logical KV blocks to physical blocks in the cache.', '块表（block table）将每个请求的逻辑 KV 块映射到显存中的物理块。');
       if (hit.side === 'translation') return original;
       return parts.length ? parts.map(partTranslation).filter(Boolean).join('\n\n') : block()?.translation;
     };
@@ -371,7 +371,7 @@ export class SelectionCard {
       const restoreFocus = counterpart.contains(document.activeElement);
       counterpart.replaceChildren();
       if (term && text === selection) {
-        counterpart.append(el('p', 'selection-context', 'This term is unchanged in the other language.'));
+        counterpart.append(el('p', 'selection-context', readerLabel('This term is unchanged in the other language.', '该术语在译文中保持原样。')));
       } else if (text) {
         const sameBlock = hit.side === 'translation' ? original === hit.sourceText : text === block()?.translation;
         const label = glossary ? readerLabel('Paper glossary','论文释义') : isContext
@@ -409,7 +409,7 @@ export class SelectionCard {
     if (term) workspace.actions.prepend(button(readerLabel('Save word','收藏词语'), async () => {
       await api('vocab.save', { ...source, text: selection, meaning: workspace.meaning() ?? (contextual() ? '' : counterpartText() ?? ''), context: item.context });
       await app.refresh();
-      toast('Saved to vocabulary.');
+      toast(readerLabel('Saved to vocabulary.', '已添加到生词本。'));
     }, 'btn', 'star'));
     if(app.saveHighlight && !hit.image) {
       const highlight = button(readerLabel('Highlight', '高亮'), async () => {

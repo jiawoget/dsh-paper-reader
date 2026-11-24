@@ -3,7 +3,8 @@ import { readSelectionRange, readTranslatedLocator, type SavedSelectionRange } f
 import type { PageView, ReaderBlock, ReadingSide } from '../shared/types.js';
 import { pairSelection } from './pdf/alignment.js';
 import { restoreSelection } from './saved-selection.js';
-import { el, icon } from './ui.js';
+import { highlightName } from './annotations.js';
+import { el, icon, readerLabel as t } from './ui.js';
 
 type Point = { x: number; y: number };
 
@@ -148,7 +149,7 @@ export class AnnotationLayer {
           const line = firstVisibleLine(ranges, box);
           if (!line) continue;
           const button = this.control(mounted, 'highlight:' + mark.id, 'annotation-highlight', [mark], ranges);
-          button.ariaLabel = mark.color + ' highlight · ' + label(mark);
+          button.ariaLabel = highlightName(mark.color) + ' · ' + label(mark);
           Object.assign(button.style, { left: line.left - box.left + 'px', top: line.top - box.top + 'px',
             width: line.width + 'px', height: line.height + 'px' });
           live.add(button);
@@ -171,7 +172,9 @@ export class AnnotationLayer {
               button.dataset.count = String(group.length);
               button.replaceChildren(icon('note', 14), ...(group.length > 1 ? [String(group.length)] : []));
             }
-            button.title = button.ariaLabel = group.length > 1 ? 'Choose from ' + group.length + ' page notes' : 'Open page note · ' + label(first);
+            button.title = button.ariaLabel = group.length > 1
+              ? t('Choose from ' + group.length + ' page notes', '选择此处 ' + group.length + ' 条页边笔记之一')
+              : t('Open page note', '打开页边笔记') + ' · ' + label(first);
             if (group.length > 1) button.setAttribute('aria-haspopup', 'dialog');
             else button.removeAttribute('aria-haspopup');
             live.add(button);
@@ -233,8 +236,8 @@ export class AnnotationLayer {
     const { records, button } = target;
     if (records.length === 1) { this.onOpen(records[0].id, button); return; }
     const box = el('div', 'annotation-chooser');
-    box.popover = 'auto'; box.setAttribute('role', 'dialog'); box.ariaLabel = 'Page notes at this position';
-    box.append(el('strong', '', 'Page notes at this position'));
+    box.popover = 'auto'; box.setAttribute('role', 'dialog'); box.ariaLabel = t('Page notes at this position', '此处的页边笔记');
+    box.append(el('strong', '', t('Page notes at this position', '此处的页边笔记')));
     records.forEach((record, index) => {
       const choice = el('button', '', (index + 1) + '. ' + label(record));
       choice.type = 'button';
@@ -306,7 +309,7 @@ export class AnnotationLayer {
     if (!page || !visible(page)) return false;
     this.locator?.remove();
     const marker = el('button', 'annotation-location');
-    marker.type = 'button'; marker.tabIndex = -1; marker.ariaLabel = 'Referenced page position';
+    marker.type = 'button'; marker.tabIndex = -1; marker.ariaLabel = t('Referenced page position', '引用的页面位置');
     marker.append(icon('pin', 16));
     placeAt(marker, point);
     page.append(marker); this.locator = marker;
@@ -328,7 +331,7 @@ export class AnnotationLayer {
     const tool = el('button', 'annotation-placement');
     const cross = el('span', 'annotation-crosshair');
     tool.type = 'button';
-    tool.ariaLabel = 'Place page note. Use the arrow keys to move, Enter to place, or Escape to cancel.';
+    tool.ariaLabel = t('Place page note. Use the arrow keys to move, Enter to place, or Escape to cancel.', '放置页边笔记。用方向键移动，按回车放置，按 Esc 取消。');
     const box = page.getBoundingClientRect();
     const scroller = page.closest('#paperScroll')?.getBoundingClientRect();
     const center = (from: number, to: number, min: number, max: number) =>

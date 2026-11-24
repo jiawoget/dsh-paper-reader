@@ -173,9 +173,9 @@ await withHost(async host => {
     }
     const address = host.origin + '/api/paper-reader/app/index.html?doc=' + doc.id;
     await page.goto(address + '&page=1');
-    await page.getByRole('button', { name: 'Show notebook', exact: true }).click();
+    await page.getByRole('button', { name: 'Show notes', exact: true }).click();
     await page.getByRole('tab', { name: 'Notes', exact: true }).click();
-    const rail = page.getByRole('textbox', { name: 'Notebook Markdown' });
+    const rail = page.getByRole('textbox', { name: 'Notes Markdown' });
     const card = page.locator('#card'), insert = card.getByRole('button', { name: 'Insert passage link' });
     const run = (value: string) => page.locator('#original .pdf-native-text [data-block-id]').filter({ hasText: value }).first();
     await run(training).waitFor();
@@ -238,7 +238,7 @@ await withHost(async host => {
     await page.getByText('Saved to vault', { exact: true }).waitFor();
     await card.getByRole('button', { name: 'Close selection' }).click();
     if (actualPaper) {
-      const splitter = page.getByRole('separator', { name: 'Resize notebook' });
+      const splitter = page.getByRole('separator', { name: 'Resize notes' });
       for (let i = 0; i < 4; i++) await splitter.press('ArrowLeft');
       await followPassage(page, links.nth(1));
       assert.ok(await exactMarker(paperRun, shortcut, '#original'));

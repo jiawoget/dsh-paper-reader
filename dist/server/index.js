@@ -688,13 +688,15 @@ async function writeOnce(file, bytes) {
 }
 var pictureType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
 var Library = class {
-  constructor(root, readBook = publicResource) {
+  constructor(root, readBook = publicResource, onDelete) {
     this.readBook = readBook;
+    this.onDelete = onDelete;
     this.directory = path.join(root, "documents");
     this.translationDir = path.join(root, "translations");
     this.imageDir = path.join(root, "article-images");
   }
   readBook;
+  onDelete;
   directory;
   translationDir;
   imageDir;
@@ -775,6 +777,7 @@ var Library = class {
       rm(path.join(this.translationDir, id), { recursive: true, force: true }),
       rm(path.join(this.imageDir, id), { recursive: true, force: true })
     ]);
+    this.onDelete?.(id);
     return { id, deleted: existed };
   }
   bookJob(key2, start) {
@@ -2001,6 +2004,22 @@ var ReaderStore = class {
     return this.#transaction(false, (db) => db.prepare(
       "SELECT substr(identity,10) AS docId FROM citations WHERE library=? AND itemKey=? AND identity LIKE 'document/%' ORDER BY rowid DESC"
     ).all(library, itemKey).map((row) => readColumn(row, "docId")));
+  }
+  deleteDocument(docId) {
+    if (!docId || docId === "pagedattention") return;
+    const prefix2 = docId + "";
+    this.#transaction(true, (db) => {
+      db.prepare("DELETE FROM entries WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM annotations WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM chat_exchanges WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
+      db.prepare("DELETE FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
+      db.prepare("DELETE FROM notebooks WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
+      db.prepare("DELETE FROM book_positions WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM pdf_outlines WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM article_captures WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM citations WHERE identity=?").run("document/" + docId);
+    });
   }
 };
 
@@ -4026,8 +4045,8 @@ async function boundedBody(request, limit) {
 }
 function apply(ctx) {
   const root = process.env.PAPER_READER_HOME || path10.join(process.env.DSH_HOME || path10.join(os.homedir(), ".dsh"), "paper-reader");
-  const library = new Library(root);
   const store = new ReaderStore(root);
+  const library = new Library(root, publicResource, (id) => store.deleteDocument(id));
   const models = {};
   let listener;
   ctx.inject(["webServer"], (child) => {

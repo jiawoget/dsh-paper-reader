@@ -139,7 +139,7 @@ export class ReadingDesk {
     const pageSplit = byId('pageSplit');
     pageSplit.setAttribute('aria-valuemin', '25'); pageSplit.setAttribute('aria-valuemax', '76');
     pageSplit.setAttribute('aria-valuenow', String(Math.round(proportion * 100)));
-    pageSplit.setAttribute('aria-valuetext', Math.round(proportion * 100) + '% original');
+    pageSplit.setAttribute('aria-valuetext', label(Math.round(proportion * 100) + '% original', '原文占 ' + Math.round(proportion * 100) + '%'));
     byId<HTMLSelectElement>('translationMode').hidden = !this.pdf;
     byId<HTMLSelectElement>('translationMode').value = this.focus;
   }
@@ -183,7 +183,7 @@ export class ReadingDesk {
   private updateSidebarButtons(): void {
     const notes = this.notebookOpen && !this.contents, contents = this.notebookOpen && this.contents;
     const toggle = byId('mobileRail');
-    toggle.ariaLabel = toggle.title = notes ? label('Hide notebook', '收起笔记本') : label('Show notebook', '打开笔记本');
+    toggle.ariaLabel = toggle.title = notes ? label('Hide notes', '收起笔记') : label('Show notes', '打开笔记');
     toggle.setAttribute('aria-expanded', String(notes));
     const nav = byId('contentsToggle');
     nav.title = contents ? label('Hide contents', '收起目录') : label('Show contents', '打开目录');

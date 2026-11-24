@@ -39,15 +39,15 @@ async function selectText(run: Locator): Promise<void> {
 
 async function notebookLayouts(page: Page): Promise<void> {
   const rail = page.locator('#rail'), paper = page.locator('#paperScroll');
-  const editor = rail.getByRole('textbox', { name: 'Notebook Markdown' });
-  const show = page.getByRole('button', { name: 'Show notebook' });
-  const close = rail.getByRole('button', { name: 'Close notebook' });
+  const editor = rail.getByRole('textbox', { name: 'Notes Markdown' });
+  const show = page.getByRole('button', { name: 'Show notes' });
+  const close = rail.getByRole('button', { name: 'Close notes' });
   await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
   await show.click();
   const workspace = await box(page.locator('.workspace')), right = await box(rail), frame = await box(page.locator('#reader'));
   assert.ok(right.x >= workspace.x + workspace.width && right.height >= workspace.height - 1,
     'The notebook stays docked on the chosen side in bilingual mode.');
-  const grip = page.getByRole('separator', { name: 'Resize notebook' });
+  const grip = page.getByRole('separator', { name: 'Resize notes' });
   assert.equal(await grip.getAttribute('aria-orientation'), 'vertical');
   await grip.press('ArrowLeft');
   assert.ok((await box(rail)).width >= right.width + 18);
@@ -66,13 +66,13 @@ async function notebookLayouts(page: Page): Promise<void> {
     return node.scrollTop / document.querySelector('#original')!.scrollHeight;
   });
   assert.ok(position > 0);
-  const positionControl = rail.getByRole('combobox', { name: 'Notebook position' });
+  const positionControl = rail.getByRole('combobox', { name: 'Notes position' });
   await positionControl.selectOption('float');
   const floated = await box(rail);
   assert.ok(floated.width < workspace.width * .65 && floated.y < workspace.height);
   assert.ok(Math.abs(position - await paper.evaluate(node =>
     node.scrollTop / document.querySelector('#original')!.scrollHeight)) < .005);
-  const handle = rail.getByRole('heading', { name: 'Notebook', exact: true });
+  const handle = rail.getByRole('heading', { name: 'Notes', exact: true });
   await drag(page, handle, 500, 900);
   const bounded = await box(rail);
   assert.ok(Math.abs(bounded.x + bounded.width - frame.width) <= 1 && Math.abs(bounded.y + bounded.height - frame.height) <= 1);
@@ -98,7 +98,7 @@ async function notebookLayouts(page: Page): Promise<void> {
   await positionControl.waitFor({ state: 'hidden' });
   for (const viewport of [{ width: 390, height: 740 }, { width: 844, height: 390 }]) {
     await page.setViewportSize(viewport);
-    const sheet = await box(page.getByRole('dialog', { name: 'Reading notebook' }));
+    const sheet = await box(page.getByRole('dialog', { name: 'Reading notes' }));
     assert.ok(Math.abs(sheet.width - viewport.width) <= 1 && Math.abs(sheet.y + sheet.height - viewport.height) <= 1);
     const dismiss = await box(close);
     assert.ok(sheet.y > 0 && dismiss.y >= sheet.y, JSON.stringify({ viewport, sheet, dismiss }));
@@ -254,12 +254,12 @@ await withHost(async host => {
     await writeFile(path.join(destination, 'pdf-resolution.json'), JSON.stringify({ document: title, page: pageNumber, initial, enlarged, zoomed }, null, 2));
     await page.getByLabel('Zoom').selectOption('1');
 
-    await page.getByRole('button', { name: 'Show notebook' }).click();
+    await page.getByRole('button', { name: 'Show notes' }).click();
     await rail.waitFor();
     const before = await box(original), oldRail = await box(rail);
     await drag(page, page.getByRole('separator', { name: 'Resize original and translation' }), 125);
     assert.ok((await box(original)).width > before.width + 110);
-    await drag(page, page.getByRole('separator', { name: 'Resize notebook' }), -85);
+    await drag(page, page.getByRole('separator', { name: 'Resize notes' }), -85);
     const sizedRail = await box(rail), sizedSource = await box(original);
     assert.ok(sizedRail.width > oldRail.width + 77);
     await page.reload(); await liveRun.waitFor();
@@ -357,7 +357,7 @@ await withHost(async host => {
       const laptop = await browser.newContext({ viewport: { width: size.width, height: size.height }, deviceScaleFactor: size.dpr, locale: 'en-US' });
       const embedded = await laptop.newPage();
       const frame = await openReader(embedded, host.authenticatedUrl);
-      const desk = frame.locator('#reader'), showNotebook = frame.getByRole('button', { name: 'Show notebook' });
+      const desk = frame.locator('#reader'), showNotebook = frame.getByRole('button', { name: 'Show notes' });
       assert.equal(await desk.getAttribute('data-reading-mode'), 'source');
       assert.ok((await box(frame.locator('#original'))).width >= 720 && await frame.locator('#translated').isHidden());
       assert.equal(await desk.getAttribute('data-notebook-open'), 'false');
@@ -376,7 +376,7 @@ await withHost(async host => {
       if (size.width === 1280) {
         await frame.getByRole('tab', { name: 'Notes', exact: true }).waitFor();
         const notebook = frame.locator('#rail'), start = (await box(notebook)).width;
-        const grip = frame.getByRole('separator', { name: 'Resize notebook' });
+        const grip = frame.getByRole('separator', { name: 'Resize notes' });
         await drag(embedded, grip, -45);
         assert.ok((await box(notebook)).width >= start + 40);
         await grip.press('ArrowRight');

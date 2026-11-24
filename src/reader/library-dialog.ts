@@ -17,6 +17,42 @@ function webLink(url: string, name: string): HTMLAnchorElement {
   return link;
 }
 
+export function clearDocumentStorage(docId: string): void {
+  const exactLocal = [
+    'reader.page.' + docId,
+    'reader.tab.' + docId,
+    'reader.pdf-pages.' + docId,
+    'reader.book-position.' + docId
+  ];
+  for (const key of exactLocal) localStorage.removeItem(key);
+  if (localStorage.getItem('reader.last-document') === docId) localStorage.removeItem('reader.last-document');
+  const focusPrefix = 'reader.focus.' + docId + '.';
+  const zoteroSuffix = ':' + docId;
+  const localKeys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith(focusPrefix) || (key.startsWith('reader.zotero.') && key.endsWith(zoteroSuffix)))) {
+      localKeys.push(key);
+    }
+  }
+  for (const key of localKeys) localStorage.removeItem(key);
+  try {
+    const sessionKeys: string[] = [];
+    const mdExact = 'reader.markdown-draft.' + docId;
+    const mdPrefix = mdExact + '/';
+    const annExact = 'reader.annotation-drafts.' + docId;
+    const qPrefix = 'reader.question-draft.' + encodeURIComponent(docId) + '/';
+    const snPrefix = 'reader.selection-note-draft.' + docId + ':';
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key && (key === mdExact || key.startsWith(mdPrefix) || key === annExact || key.startsWith(qPrefix) || key.startsWith(snPrefix))) {
+        sessionKeys.push(key);
+      }
+    }
+    for (const key of sessionKeys) sessionStorage.removeItem(key);
+  } catch { /* sessionStorage may be unavailable. */ }
+}
+
 function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: DocumentInfo) => Promise<void>): void {
   const search = el('input', 'search');
   search.type = 'search';
@@ -98,11 +134,14 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
         const delBtn = button(confirmingId === doc.id ? t('Delete', '确认删除') : '', async () => {
           if (confirmingId !== doc.id) { confirmingId = doc.id; render(); return; }
           await api('library.delete', { id: doc.id });
+          const wasActive = app.doc.id === doc.id;
+          app.discardDocument?.(doc.id);
+          clearDocumentStorage(doc.id);
           const index = docs.indexOf(doc);
           if (index >= 0) docs.splice(index, 1);
-          localStorage.removeItem('reader.pdf-pages.' + doc.id);
           confirmingId = '';
-          if (app.doc.id === doc.id) await app.navigate('pagedattention');
+          if (wasActive) await app.navigate('pagedattention');
+          else await app.refresh();
           render();
           toast(t('Document removed from this device.', '已从本机删除文档。'));
         }, confirmingId === doc.id ? 'btn library-delete-confirm' : 'icon-btn', confirmingId === doc.id ? undefined : 'close');

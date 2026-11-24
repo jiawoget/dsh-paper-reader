@@ -1,5 +1,5 @@
 import type { Operations, SourceRecord } from '../shared/types.js';
-import { action, askWorker, errorText, getOrigin, readerAddress } from './protocol.js';
+import { action, askWorker, errorText, extChinese, extLabel as t, getOrigin, readerAddress } from './protocol.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { cardStyle } from './card-style.js';
 import { questionModelForm } from '../shared/question-model-form.js';
@@ -18,7 +18,7 @@ export class WebSource {
   private get page(): Snapshot {
     if (this.captured) return this.captured;
     if (this.url !== location.href || (this.pick && !this.pick.range.startContainer.isConnected)) {
-      throw new Error('The article has changed. Select the passage again to save its location.');
+      throw new Error(t('The article has changed. Select the passage again to save its location.', '文章内容已变化，请重新选中段落以保存位置。'));
     }
     return this.captured = snapshot(this.pick);
   }
@@ -36,7 +36,7 @@ export class WebSource {
   private async importSource(): Promise<SourceRecord> {
     if (openStaxLocation(this.url)) {
       const {doc, page, anchor: fragment} = await action('web.open', {url:this.url});
-      if (!doc.book) throw Error('This book section could not be opened.');
+      if (!doc.book) throw Error(t('This book section could not be opened.', '无法打开本书这一小节。'));
       this.bookPage = page ?? null;
       const number = page || doc.defaultPage || 1;
       let anchor = fragment || '';
@@ -49,7 +49,7 @@ export class WebSource {
         const structural = matches.filter(m => doc.articleLayout?.[m.id]?.ids?.some(id=>ids.has(id)));
         const exact = matches.filter(m => m.p === context);
         const best = structural.length === 1 ? structural : exact.length === 1 ? exact : matches;
-        if(best.length!==1)throw Error('Open this section in the reader and select the passage there to save its exact location.');
+        if(best.length!==1)throw Error(t('Open this section in the reader and select the passage there to save its exact location.', '请在阅读器中打开本节并选中这段，以保存精确位置。'));
         anchor=best[0].id;
       }
       const local = new URL(readerAddress(await getOrigin(),doc.id,anchor,this.bookPage));
@@ -57,7 +57,7 @@ export class WebSource {
       return this.bookSource={docId:doc.id,title:doc.title,page:number,anchor,label:doc.book.sections[number-1].title,sourceUrl:local.href};
     }
     return action('web.import', this.page.article).then(({ doc }) => {
-      if (!doc?.id) throw new Error('DSH did not return an article ID. Try again.');
+      if (!doc?.id) throw new Error(t('DSH did not return an article ID. Try again.', 'DSH 未返回文章编号，请重试。'));
       this.docId=doc.id;
       return this.record();
     });
@@ -115,6 +115,19 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
   const modelPicker = shadow.querySelector<HTMLDetailsElement>('.model-picker')!;
   const textarea = shadow.querySelector<HTMLTextAreaElement>('textarea')!;
   const button = (id: string) => shadow.querySelector<HTMLButtonElement>('[data-do="' + id + '"]')!;
+  panel.lang = extChinese() ? 'zh-CN' : 'en';
+  panel.setAttribute('aria-label', t('DSH selection card', 'DSH 划词卡片'));
+  button('close').setAttribute('aria-label', t('Close card', '关闭卡片'));
+  button('translate').textContent = t('Translate', '翻译');
+  button('explain').textContent = t('Explain in context', '结合上下文解释');
+  button('followup').textContent = t('Ask', '提问');
+  answer.textContent = t('Choose a lookup to use your DSH model.', '选择上方操作以调用 DSH 模型。');
+  modelPicker.querySelector('summary')!.textContent = t('Question model', '问答模型');
+  button('cancel').textContent = t('Cancel', '取消');
+  button('submit').textContent = t('Send', '发送');
+  button('open').textContent = t('Read ↗', '在阅读器中打开 ↗');
+  button('vocab').textContent = t('☆ Save word', '☆ 收藏词语');
+  button('note').textContent = t('Add to Notes', '记入笔记');
   const turns: Conversation = restored?.turns.slice() ?? [];
   const fields = restored ? { ...restored.fields } : { followup: '', note: '' };
   const events = new AbortController();
@@ -127,11 +140,11 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
   modelPicker.ontoggle = () => {
     modelPicker.querySelector('form')?.remove();
     if (!modelPicker.open) return;
-    modelPicker.append(questionModelForm({ label: english => english, load: () => action('ai.models', {}),
+    modelPicker.append(questionModelForm({ label: t, load: () => action('ai.models', {}),
       save: questionModel => run(async () => {
         await action('ai.selectModel', { questionModel });
         modelPicker.open = false;
-        modelPicker.querySelector('summary')!.textContent = ['Question model', questionModel?.model, questionModel?.reasoningEffort].filter(Boolean).join(' · ');
+        modelPicker.querySelector('summary')!.textContent = [t('Question model', '问答模型'), questionModel?.model, questionModel?.reasoningEffort].filter(Boolean).join(' · ');
       })
     }));
   };
@@ -179,12 +192,12 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
     submitted.hidden = !question;
     submitted.textContent = question || '';
     answer.className = 'answer hint';
-    answer.textContent = 'Looking up…';
+    answer.textContent = t('Looking up…', '正在查询…');
     let reply: string;
     try {
       const result = await action('ai', { mode, text: pick.text, context: pick.context, ...(question ? { question, history: turns.slice(-8) } : {}) });
       reply = result?.text?.trim();
-      if (!reply) throw new Error('The model returned an empty answer. Try again.');
+      if (!reply) throw new Error(t('The model returned an empty answer. Try again.', '模型返回了空内容，请重试。'));
     } catch (error) {
       answer.className = 'answer error';
       answer.textContent = errorText(error);
@@ -199,7 +212,7 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
     if (mode !== 'followup') {
       if (mode === 'translate' || !meaning) meaning = reply;
       try { await action('history.add', { ...source.record(), text: pick.text, meaning: reply, context: pick.context }); }
-      catch (error) { status.textContent = 'Could not save lookup history. ' + errorText(error); }
+      catch (error) { status.textContent = t('Could not save lookup history. ', '无法保存查询历史。') + errorText(error); }
     }
   }
 
@@ -208,11 +221,13 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
     modelPicker.open = false;
     formMode = mode;
     editor.hidden = false;
-    editor.querySelector('label span')!.textContent = mode === 'note' ? 'Note' : 'Ask about this passage';
+    editor.querySelector('label span')!.textContent = mode === 'note' ? t('Note', '笔记') : t('Ask about this passage', '针对这段提问');
     textarea.value = fields[mode];
-    textarea.placeholder = mode === 'note' ? 'Optional. Leave blank to save the meaning or quote.' : 'What does this word refer to here?';
+    textarea.placeholder = mode === 'note'
+      ? t('Optional. Leave blank to save the meaning or quote.', '可选。留空则直接保存释义或引文。')
+      : t('What does this word refer to here?', '这个词在这里指什么？');
     textarea.required = mode === 'followup';
-    button('submit').textContent = mode === 'note' ? 'Save note' : 'Send';
+    button('submit').textContent = mode === 'note' ? t('Save note', '保存笔记') : t('Send', '发送');
     if (mode === 'followup') toggleMode(mode);
     position();
     textarea.focus({ preventScroll: true });
@@ -237,8 +252,8 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
       const saved = await source.collect();
       await action('vocab.save', { ...saved, text: pick.text, meaning, context: pick.context });
       savedWord = true;
-      button('vocab').textContent = 'Word saved';
-      status.textContent = 'Saved to your vocabulary.';
+      button('vocab').textContent = t('Word saved', '已收藏');
+      status.textContent = t('Saved to your vocabulary.', '已添加到生词本。');
     });
   });
   editor.addEventListener('submit', event => {
@@ -255,8 +270,8 @@ export function showCard(pick: PickedText, close: () => void, restored?: WebCard
       editor.hidden = true;
       fields.note = '';
       savedNote = true;
-      button('note').textContent = 'Note added';
-      status.textContent = 'Added to this article’s notes.';
+      button('note').textContent = t('Note added', '已记入笔记');
+      status.textContent = t('Added to this article’s notes.', '已添加到本文笔记。');
     });
   });
   document.documentElement.appendChild(host);

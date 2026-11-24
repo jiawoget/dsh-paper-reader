@@ -249,7 +249,8 @@ function automatic(lines: Line[], view: Viewport, page: number, graphics?: PageG
     const text = prose(rows);
     const id = caption && !used.has(caption.id) ? caption.id : `p${page}-b${index + 1}`;
     used.add(id);
-    return { id, text, role, label: caption?.label ?? (role === 'heading' ? text : `Page ${page} · Paragraph ${index + 1}`),
+    const zh = typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');
+    return { id, text, role, label: caption?.label ?? (role === 'heading' ? text : zh ? `第 ${page} 页 · 第 ${index + 1} 段` : `Page ${page} · Paragraph ${index + 1}`),
       illustration: caption?.illustration, indices: rows.flatMap(line => line.runs.map(r => r.index)), fontSize: rows[0].size,
       box: box(Math.max(0, area.x - 0.6), Math.max(0, area.y - 0.8), area.width + 1.2, area.height + 1.8) };
   });
@@ -284,7 +285,8 @@ export function extractLayout(content: TextContent, view: Viewport, page: number
     for (let i = 0; i < ranges.length; i += 2) {
       for (let r = ranges[i]; r <= ranges[i + 1]; r++) indices.push(r);
     }
-    const label = role === 'caption' ? text.split('.')[0] : role === 'heading' ? text : `Page ${page} · Paragraph ${index + 1}`;
+    const zh = typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');
+    const label = role === 'caption' ? text.split('.')[0] : role === 'heading' ? text : zh ? `第 ${page} 页 · 第 ${index + 1} 段` : `Page ${page} · Paragraph ${index + 1}`;
     return { id, role, box: box(...bounds), fontSize, indices, text, label, translation: translations[id],
       illustration: picture && box(...picture) };
   });

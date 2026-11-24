@@ -1,0 +1,715 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
+import { cardElement, openToolbar, until } from './extension-controls.js';
+import { withHost, type HostFixture } from './host.js';
+
+const extensionPath = fileURLToPath(new URL('../../dist/extension', import.meta.url));
+const preload = new URL('./book-reading-preload.ts', import.meta.url).href;
+const appPath = '/api/paper-reader/app/index.html';
+
+const CONTRAST_HELPER = `
+function parseCssColor(raw) {
+  if (!raw || raw === 'transparent') return [0, 0, 0, 0];
+  const srgb = /color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+))?\\)/.exec(raw);
+  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] !== undefined ? Number(srgb[4]) : 1];
+  const rgba = /rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:[,/\\s]+([\\d.]+%?))?\\s*\\)/.exec(raw);
+  if (!rgba) return [0, 0, 0, 1];
+  let a = 1;
+  if (rgba[4] !== undefined) a = rgba[4].endsWith('%') ? parseFloat(rgba[4]) / 100 : Number(rgba[4]);
+  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), a];
+}
+function composite(top, bottom) {
+  const a = top[3], outA = a + bottom[3] * (1 - a);
+  if (outA <= 0) return [0, 0, 0, 0];
+  return [
+    (top[0] * a + bottom[0] * bottom[3] * (1 - a)) / outA,
+    (top[1] * a + bottom[1] * bottom[3] * (1 - a)) / outA,
+    (top[2] * a + bottom[2] * bottom[3] * (1 - a)) / outA,
+    outA
+  ];
+}
+function relLum(rgb) {
+  const c = v => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+  return 0.2126 * c(rgb[0]) + 0.7152 * c(rgb[1]) + 0.0722 * c(rgb[2]);
+}
+function measureContrast(el) {
+  const layers = [];
+  for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
+  const darkRoot = document.documentElement.dataset.theme === 'dark';
+  let bg = darkRoot ? [19, 22, 31, 1] : [255, 255, 255, 1];
+  for (let i = layers.length - 1; i >= 0; i--) if (layers[i][3] > 0) bg = composite(layers[i], bg);
+  const style = getComputedStyle(el);
+  const fgRaw = parseCssColor(style.color);
+  const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
+  const l1 = Math.max(relLum(fg), relLum(bg)), l2 = Math.min(relLum(fg), relLum(bg));
+  return { ratio: (l1 + 0.05) / (l2 + 0.05), fontSize: parseFloat(style.fontSize) || 0 };
+}
+globalThis.measureContrast = measureContrast;
+`;
+
+// Proper nouns, standards, keycaps, and bundled sample paper identifiers allowed inside zh-CN chrome.
+const ZH_ENGLISH_ALLOWLIST = new Set([
+  'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown',
+  'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
+  'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
+  'block', 'tables', 'table', 'figure', 'parallel', 'sampling', 'cache', 'access', 'left', 'column',
+  'section', 'decoding', 'sequence', 'batching', 'memory', 'two', 'requests', 'scenarios', 'other',
+  'one', 'for', 'the', 'and', 'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
+  'woosuk', 'et', 'al', 'key', 'value', 'kv'
+]);
+
+const BANNED_EN_RE = /\b(?:Annotations|Paper conversation|Paper discussion|Reading notebook|Notebook)\b/i;
+const BANNED_ZH_RE = /(?:阅读笔记本|笔记本|批注索引|批注|Obsidian\s*仓库|已存入仓库|存入仓库)/;
+
+function attachErrorGuards(page: Page): { pageErrors: string[]; consoleErrors: string[] } {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on('pageerror', err => pageErrors.push(err.message));
+  page.on('console', msg => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    // Isolated E2E host has no live Zotero desktop daemon or optional favicon, so ignore expected 404/503 network logs.
+    if (/Failed to load resource: the server responded with a status of (?:404|503)\b/.test(text)) return;
+    consoleErrors.push(text);
+  });
+  return { pageErrors, consoleErrors };
+}
+
+async function openReaderPage(context: BrowserContext, host: HostFixture, query = '?doc=pagedattention&page=6'): Promise<Page> {
+  const page = await context.newPage();
+  page.setDefaultTimeout(12_000);
+  await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
+  await page.goto(host.origin + appPath + query, { waitUntil: 'domcontentloaded' });
+  await page.locator('#loading').waitFor({ state: 'hidden' });
+  return page;
+}
+
+async function collectChromeStrings(page: Page): Promise<{ text: string; source: string }[]> {
+  return page.evaluate(() => {
+    const excluded = '.pdf-sheet, .web-reading-sheet, .cm-content, .quote, .selection-excerpt blockquote, .selection-heading h2, #docTitle, #docMeta, #railBody h1, .list-row strong, .toc-entry, .toc-fold, .paper-answer, .selection-answer, .library-row-text strong, .library-row-text small, .doc-row strong, .doc-row small, #sourceInfo, .selection-location';
+    const items: { text: string; source: string }[] = [];
+    const seen = new Set<string>();
+    const elements = document.querySelectorAll<HTMLElement>('body *');
+    for (const el of elements) {
+      if (el.closest(excluded)) continue;
+      if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'SVG' || el.closest('svg')) continue;
+      const hidden = el.closest('[hidden]') && !el.closest('dialog[open]');
+      // Always audit ARIA / title / placeholder even on hidden/icon-only controls!
+      const idTag = el.id ? '#' + el.id : el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : el.tagName.toLowerCase();
+      const candidates: [string | null | undefined, string][] = [
+        [el.getAttribute('aria-label'), `${idTag}[aria-label]`],
+        [el.getAttribute('title'), `${idTag}[title]`],
+        [el.getAttribute('placeholder'), `${idTag}[placeholder]`]
+      ];
+      if (!hidden) {
+        for (const child of el.childNodes) {
+          if (child.nodeType === Node.TEXT_NODE) candidates.push([child.textContent, `${idTag}:text`]);
+        }
+      }
+      for (const [raw, source] of candidates) {
+        const value = (raw ?? '').replace(/\s+/gu, ' ').trim();
+        if (!value) continue;
+        const key = source + '|' + value;
+        if (!seen.has(key)) { seen.add(key); items.push({ text: value, source }); }
+      }
+    }
+    return items;
+  });
+}
+
+function assertNoZhEnglishLeaks(items: { text: string; source: string }[], contextLabel: string): void {
+  const leaks: string[] = [];
+  for (const item of items) {
+    const banned = item.text.match(BANNED_ZH_RE);
+    assert.equal(banned, null, `[${contextLabel}] Banned ZH drift term in ${item.source}: ${JSON.stringify(item.text)}`);
+    const words = item.text.match(/[A-Za-z]{3,}/g) ?? [];
+    const bad = words.filter(word => !ZH_ENGLISH_ALLOWLIST.has(word.toLowerCase()));
+    if (bad.length) leaks.push(`${item.source}: "${item.text}" -> [${bad.join(', ')}]`);
+  }
+  assert.deepEqual(leaks, [], `[${contextLabel}] Untranslated English leaks in zh-CN:\n${leaks.join('\n')}`);
+}
+
+function assertNoEnBannedTerms(items: { text: string; source: string }[], contextLabel: string): void {
+  const violations: string[] = [];
+  for (const item of items) {
+    if (BANNED_EN_RE.test(item.text)) {
+      violations.push(`${item.source}: "${item.text}"`);
+    }
+  }
+  assert.deepEqual(violations, [], `[${contextLabel}] Banned EN drift terms:\n${violations.join('\n')}`);
+}
+
+async function testF6Shortcuts(host: HostFixture): Promise<void> {
+  const browser = await chromium.launch({ executablePath: host.executable });
+  try {
+    // 1. Desktop en-US shortcuts on PDF, OpenStax book, and web article
+    const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
+    const page = await openReaderPage(context, host);
+    const { pageErrors, consoleErrors } = attachErrorGuards(page);
+
+    // T1-F6-01 & T2-F6-07: Shift+? opens #shortcutsDialog, repeated Shift+? is safe no-op, Esc restores focus
+    const paperScroll = page.locator('#paperScroll');
+    await paperScroll.focus();
+    await page.keyboard.press('Shift+?');
+    const dialog = page.locator('#shortcutsDialog');
+    await dialog.waitFor({ state: 'visible' });
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), true);
+    await dialog.getByRole('heading', { name: 'Keyboard shortcuts', exact: true }).waitFor();
+    assert.ok(await dialog.locator('table.shortcuts-table').count() >= 4, 'Shortcuts dialog should render grouped semantic tables.');
+
+    // Verify light-mode contrast >= 4.5:1 and fontSize >= 12px
+    const lightMetrics = await dialog.evaluate((_el, helper) => {
+      // eslint-disable-next-line no-eval
+      eval(helper);
+      const measure = (globalThis as unknown as { measureContrast: (el: Element) => { ratio: number; fontSize: number } }).measureContrast;
+      const samples = [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')];
+      return samples.map(el => ({ tag: el.tagName, ...measure(el) }));
+    }, CONTRAST_HELPER);
+    for (const m of lightMetrics) {
+      assert.ok(m.ratio >= 4.5, `Light shortcuts contrast too low on ${m.tag}: ${m.ratio.toFixed(2)}`);
+      assert.ok(m.fontSize >= 12, `Light shortcuts font size < 12px on ${m.tag}: ${m.fontSize}`);
+    }
+
+    // Repeated Shift+? while open causes no duplicate/error
+    await page.keyboard.press('Shift+?');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), true);
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'paperScroll', 'Escape must restore focus to prior element.');
+
+    // T1-F6-02: #more -> Keyboard shortcuts opens modal; Close button restores focus to #more
+    await page.locator('#more').click();
+    await page.locator('#menu').getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click();
+    await dialog.waitFor({ state: 'visible' });
+    await page.locator('#closeShortcuts').click();
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'more', 'Close button must restore focus to #more.');
+
+    // T1-F6-03 & T2-F6-06: Shift++, =, - zoom stepping & clamping at Fit width (1) and 200% (2)
+    await paperScroll.focus();
+    const zoom = page.locator('#zoom');
+    assert.equal(await zoom.inputValue(), '1');
+    await page.keyboard.press('Shift++');
+    assert.equal(await zoom.inputValue(), '1.25', 'Shift++ must step zoom from 1 to 1.25.');
+    await page.keyboard.press('=');
+    assert.equal(await zoom.inputValue(), '1.5');
+    await page.keyboard.press('Shift++');
+    assert.equal(await zoom.inputValue(), '2');
+    await page.keyboard.press('Shift++');
+    assert.equal(await zoom.inputValue(), '2', 'Zoom must clamp at 200%.');
+    await page.keyboard.press('-');
+    assert.equal(await zoom.inputValue(), '1.5');
+    await page.keyboard.press('-');
+    await page.keyboard.press('-');
+    assert.equal(await zoom.inputValue(), '1');
+    await page.keyboard.press('-');
+    assert.equal(await zoom.inputValue(), '1', 'Zoom must clamp at Fit width.');
+
+    // T1-F6-04: b, n, c toggle bilingual, Notes (twice to prove repeat toggle works after focus moves to #notesTab!), Contents
+    const reader = page.locator('#reader');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    await page.keyboard.press('b');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'bilingual');
+    await page.keyboard.press('b');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'false');
+    await page.keyboard.press('n');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'true');
+    assert.equal(await page.locator('#notesTab').getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('n');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'false', 'Pressing n a second time must toggle Notes closed even when #notesTab had focus.');
+
+    await page.keyboard.press('c');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'true');
+    assert.equal(await page.locator('#contentsTab').getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('c');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'false', 'Pressing c a second time must toggle Contents closed.');
+
+    // T1-F6-05 & T2-F6-05: ArrowRight / ArrowLeft PDF pagination + clamps at page 1 & page 16
+    await paperScroll.focus();
+    assert.equal(await page.locator('#pageCount').innerText(), '6 / 16');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '7 / 16');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '6 / 16');
+    // Jump to page 1 and check ArrowLeft clamp
+    await page.locator('#pageCount').click();
+    await page.locator('#pageNumber').fill('1');
+    await page.locator('#pageJump button[type="submit"]').click();
+    await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '1 / 16');
+    await paperScroll.focus();
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(await page.locator('#pageCount').innerText(), '1 / 16');
+    // Jump to page 16 and check ArrowRight clamp
+    await page.locator('#pageCount').click();
+    await page.locator('#pageNumber').fill('16');
+    await page.locator('#pageJump button[type="submit"]').click();
+    await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '16 / 16');
+    await paperScroll.focus();
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.locator('#pageCount').innerText(), '16 / 16');
+
+    // T2-F6-02: Modifier suppression (Ctrl+b, Meta+c, Alt+n, Ctrl++, Alt+ArrowLeft)
+    await page.keyboard.press('Control+b');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    await page.keyboard.press('Meta+c');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'false');
+    await page.keyboard.press('Alt+n');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'false');
+    await page.keyboard.press('Control++');
+    assert.equal(await zoom.inputValue(), '1');
+    await page.keyboard.press('Alt+ArrowLeft');
+    assert.equal(await page.locator('#pageCount').innerText(), '16 / 16');
+
+    // T2-F6-03: Suppression when #pageJump popover or libraryDialog is open
+    await page.locator('#pageCount').click();
+    await page.locator('#pageJump').waitFor({ state: 'visible' });
+    await page.keyboard.press('b');
+    await page.keyboard.press('Shift+?');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), false);
+    await page.keyboard.press('Escape');
+
+    await page.locator('#library').click();
+    await page.locator('#dialog').waitFor({ state: 'visible' });
+    await page.keyboard.press('b');
+    await page.keyboard.press('Shift+?');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), false);
+    await page.locator('#closeDialog').click();
+
+    // T2-F6-01: Suppression inside <select>, CodeMirror .cm-editor, <textarea>, <input>, [contenteditable]
+    await zoom.focus();
+    await page.keyboard.press('b');
+    await page.keyboard.press('Shift+?');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), false);
+
+    // CodeMirror .cm-editor
+    await paperScroll.focus();
+    await page.keyboard.press('n');
+    const cmEditor = page.getByRole('textbox', { name: 'Notes Markdown' });
+    await cmEditor.click();
+    await page.keyboard.type('bn?c+-');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'true');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), false);
+    assert.equal(await zoom.inputValue(), '1');
+
+    // Paper chat <textarea>
+    await page.locator('.paper-chat-toggle').click();
+    const chatTextarea = page.getByRole('textbox', { name: 'Message about this paper' });
+    await chatTextarea.click();
+    await page.keyboard.type('b?n');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), false);
+    assert.equal(await chatTextarea.inputValue(), 'b?n');
+    await page.locator('.paper-chat-toggle').click();
+    await page.locator('#closeRail').click();
+
+    // Synthetic [contenteditable] and <input> inside page
+    await page.evaluate(() => {
+      const box = document.createElement('div');
+      box.id = 'test-ce';
+      box.contentEditable = 'true';
+      document.body.append(box);
+      box.focus();
+    });
+    await page.keyboard.type('b?n');
+    assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
+    assert.equal(await dialog.evaluate(el => (el as HTMLDialogElement).open), false);
+    await page.evaluate(() => document.getElementById('test-ce')?.remove());
+
+    // T1-F6-06 & T2-F6-05: OpenStax book ArrowRight / ArrowLeft section nav & boundary clamps
+    const bookRes = await context.request.post(host.origin + '/api/paper-reader/action', {
+      data: { op: 'web.open', payload: { url: bookRoot + sections.start.slug } }
+    });
+    assert.equal(bookRes.status(), 200);
+    const { doc: bookDoc } = await bookRes.json() as { doc: { id: string; book: { sections: { title: string }[] } } };
+    await page.goto(host.origin + appPath + '?doc=' + bookDoc.id + '&page=1', { waitUntil: 'domcontentloaded' });
+    await page.locator('#loading').waitFor({ state: 'hidden' });
+    await page.locator('#paperScroll').focus();
+    // Clamp at section 1
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(new URL(page.url()).searchParams.get('page'), '1');
+    // Step section 1 -> 2 -> 1
+    await page.keyboard.press('ArrowRight');
+    await page.waitForURL(url => url.searchParams.get('page') === '2');
+    await page.locator('#loading').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#docMeta').innerText(), bookDoc.book.sections[1].title);
+    await page.locator('#paperScroll').focus();
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForURL(url => url.searchParams.get('page') === '1');
+    await page.locator('#loading').waitFor({ state: 'hidden' });
+    assert.equal(await page.locator('#docMeta').innerText(), bookDoc.book.sections[0].title);
+    // Clamp at last section
+    const lastSection = String(bookDoc.book.sections.length);
+    await page.goto(host.origin + appPath + '?doc=' + bookDoc.id + '&page=' + lastSection, { waitUntil: 'domcontentloaded' });
+    await page.locator('#loading').waitFor({ state: 'hidden' });
+    await page.locator('#paperScroll').focus();
+    await page.keyboard.press('ArrowRight');
+    assert.equal(new URL(page.url()).searchParams.get('page'), lastSection);
+
+    // T2-F6-04: Non-book web article ArrowLeft / ArrowRight is safe no-op (zero pageerror)
+    const webRes = await context.request.post(host.origin + '/api/paper-reader/action', {
+      data: { op: 'web.import', payload: { title: 'Plain Web Article', url: 'https://example.org/plain-article', paragraphs: ['First paragraph.', 'Second paragraph.'] } }
+    });
+    assert.equal(webRes.status(), 200);
+    const { doc: webDoc } = await webRes.json() as { doc: { id: string } };
+    await page.goto(host.origin + appPath + '?doc=' + webDoc.id, { waitUntil: 'domcontentloaded' });
+    await page.locator('#loading').waitFor({ state: 'hidden' });
+    await page.locator('#paperScroll').focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(new URL(page.url()).searchParams.get('doc'), webDoc.id);
+
+    assert.deepEqual(pageErrors, [], 'F6 desktop pageerrors: ' + pageErrors.join('; '));
+    assert.deepEqual(consoleErrors, [], 'F6 desktop console errors: ' + consoleErrors.join('; '));
+    await context.close();
+
+    // 2. Dark mode + 390x844 mobile check for #shortcutsDialog
+    const mobileDark = await browser.newContext({
+      locale: 'zh-CN',
+      colorScheme: 'dark',
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    const mPage = await openReaderPage(mobileDark, host);
+    const mGuards = attachErrorGuards(mPage);
+    assert.equal(await mPage.evaluate(() => document.documentElement.dataset.theme), 'dark');
+    await mPage.locator('#more').click();
+    await mPage.locator('#menu').getByRole('button', { name: '快捷键', exact: true }).click();
+    const mDialog = mPage.locator('#shortcutsDialog');
+    await mDialog.waitFor({ state: 'visible' });
+    const mobileAudit = await mDialog.evaluate((_el, helper) => {
+      // eslint-disable-next-line no-eval
+      eval(helper);
+      const measure = (globalThis as unknown as { measureContrast: (el: Element) => { ratio: number; fontSize: number } }).measureContrast;
+      const closeRect = document.getElementById('closeShortcuts')!.getBoundingClientRect();
+      const samples = [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')];
+      return {
+        overflow: document.documentElement.scrollWidth - innerWidth,
+        dialogOverflow: document.getElementById('shortcutsDialog')!.scrollWidth - document.getElementById('shortcutsDialog')!.clientWidth,
+        closeWidth: closeRect.width,
+        closeHeight: closeRect.height,
+        samples: samples.map(el => ({ tag: el.tagName, ...measure(el) }))
+      };
+    }, CONTRAST_HELPER);
+    assert.ok(mobileAudit.overflow <= 1, `Mobile page horizontal overflow: ${mobileAudit.overflow}`);
+    assert.ok(mobileAudit.dialogOverflow <= 1, `Shortcuts dialog horizontal overflow at 390x844: ${mobileAudit.dialogOverflow}`);
+    assert.ok(mobileAudit.closeWidth >= 44 && mobileAudit.closeHeight >= 44, `Mobile closeShortcuts target < 44px: ${mobileAudit.closeWidth}x${mobileAudit.closeHeight}`);
+    for (const m of mobileAudit.samples) {
+      assert.ok(m.ratio >= 4.5, `Dark shortcuts contrast < 4.5 on ${m.tag}: ${m.ratio.toFixed(2)}`);
+      assert.ok(m.fontSize >= 12, `Dark shortcuts fontSize < 12px on ${m.tag}: ${m.fontSize}`);
+    }
+    assert.deepEqual(mGuards.pageErrors, []);
+    assert.deepEqual(mGuards.consoleErrors, []);
+    await mobileDark.close();
+    console.log('PASS F6: shortcuts modal (light/dark/390x844), Shift+?/?/Shift++/=/-, b/n/c repeat toggles, PDF & OpenStax Arrow nav, web no-op, suppression guards.');
+  } finally { await browser.close(); }
+}
+
+async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
+  const browser = await chromium.launch({ executablePath: host.executable });
+  try {
+    // 1. zh-CN full sweep across topbar, all 4 sidebar tabs, all 4 modals, selection card/notes/chat, Paper chat, empty & error states
+    const zhCtx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
+    const zhPage = await openReaderPage(zhCtx, host);
+    const zhGuards = attachErrorGuards(zhPage);
+
+    assert.equal(await zhPage.evaluate(() => document.documentElement.lang), 'zh-CN');
+    assert.equal(await zhPage.locator('#mobileRail').getAttribute('aria-label'), '打开笔记');
+    assert.equal(await zhPage.locator('#rail').getAttribute('aria-label'), '阅读笔记');
+    assert.equal(await zhPage.locator('#closeRail').getAttribute('aria-label'), '关闭笔记');
+    assert.equal(await zhPage.locator('#notesSplit').getAttribute('aria-label'), '调整笔记宽度');
+    assert.equal(await zhPage.locator('#notebookPose').getAttribute('aria-label'), '笔记位置');
+    assert.equal(await zhPage.locator('.paper-chat').getAttribute('aria-label'), '全文问答');
+
+    // Open sidebar and inspect all 4 tabs
+    await zhPage.locator('#mobileRail').click();
+    assert.deepEqual(
+      await zhPage.locator('.rail-head [role="tab"]').allInnerTexts(),
+      ['目录', '笔记', '标记', '文献']
+    );
+    // T2-F8-03: #highlightDisplay options in ZH
+    assert.deepEqual(
+      await zhPage.locator('#highlightDisplay option').allInnerTexts(),
+      ['随笔记显示', '仅在标记中显示']
+    );
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Notes tab');
+
+    // Expand Reading guide on pagedattention
+    await zhPage.getByText('阅读提示', { exact: true }).click();
+    await zhPage.getByText('第 6 页要点', { exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Reading guide');
+
+    // Marks tab (empty state)
+    await zhPage.locator('#annotationsTab').click();
+    await zhPage.locator('#rail').getByRole('heading', { name: '标记', exact: true }).waitFor();
+    assert.equal(await zhPage.locator('.annotation-workspace').getAttribute('aria-label'), '本篇标记');
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Marks tab');
+
+    // Reference tab
+    await zhPage.locator('#refsTab').click();
+    await zhPage.getByText('导出引文', { exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Reference tab');
+
+    // Contents tab
+    await zhPage.locator('#contentsTab').click();
+    await zhPage.locator('.toc-fold').first().waitFor();
+    const foldLabel = await zhPage.locator('.toc-fold').first().getAttribute('aria-label');
+    assert.ok(foldLabel?.startsWith('下级目录 · '), `Expected localized TOC fold aria-label, got: ${foldLabel}`);
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Contents tab');
+
+    // Paper chat drawer (unconfigured model state)
+    await zhPage.locator('.paper-chat-toggle').click();
+    await zhPage.getByText('请连接模型以使用全文问答。', { exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Paper chat');
+    await zhPage.locator('.paper-chat-toggle').click();
+
+    // Selection card + selection notes + selection chat (unconfigured)
+    await zhPage.locator('#closeRail').click();
+    await zhPage.locator('#original .pdf-native-text [data-block-id="block-tables"]').filter({ hasText: 'block tables' }).first().click();
+    const card = zhPage.locator('#card');
+    await card.waitFor({ state: 'visible' });
+    await card.getByRole('button', { name: '记笔记', exact: true }).click();
+    await card.getByRole('textbox', { name: '笔记内容', exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Selection notes');
+    await card.getByRole('button', { name: '提问', exact: true }).click();
+    await card.getByRole('textbox', { name: '针对此选段提问', exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Selection chat');
+    await zhPage.keyboard.press('Escape');
+    await zhPage.keyboard.press('Escape');
+
+    // All 4 modals in zh-CN: Library (+ invalid URL error), Connections, Vocabulary & history, Shortcuts
+    await zhPage.locator('#library').click();
+    const modal = zhPage.locator('#dialog');
+    await modal.waitFor({ state: 'visible' });
+    await modal.getByRole('tab', { name: '本机文档', exact: true }).click();
+    await modal.getByRole('button', { name: '打开网页', exact: true }).click();
+    await modal.getByLabel('网页地址', { exact: true }).fill('ftp://invalid.example');
+    await modal.locator('#library-url-form').evaluate(form => (form as HTMLFormElement).dispatchEvent(new Event('submit', { cancelable: true })));
+    await modal.getByText('请输入以 http 或 https 开头的网页地址。', { exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Library modal');
+    await zhPage.locator('#closeDialog').click();
+
+    await zhPage.locator('#more').click();
+    await zhPage.locator('#menu').getByRole('button', { name: '连接设置', exact: true }).click();
+    await modal.waitFor({ state: 'visible' });
+    // T2-F8-04: Obsidian 笔记库 preserved distinctly
+    await modal.getByLabel('Obsidian 笔记库文件夹', { exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Connections modal');
+    await zhPage.locator('#closeDialog').click();
+
+    await zhPage.locator('#more').click();
+    await zhPage.locator('#menu').getByRole('button', { name: '生词与历史', exact: true }).click();
+    await modal.waitFor({ state: 'visible' });
+    await modal.getByRole('tab', { name: '生词', exact: true }).waitFor();
+    await modal.getByRole('tab', { name: '历史', exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Collections modal');
+    await zhPage.locator('#closeDialog').click();
+
+    await zhPage.locator('#more').click();
+    await zhPage.locator('#menu').getByRole('button', { name: '快捷键', exact: true }).click();
+    await zhPage.locator('#shortcutsDialog').waitFor({ state: 'visible' });
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Shortcuts modal');
+    await zhPage.locator('#closeShortcuts').click();
+
+    assert.deepEqual(zhGuards.pageErrors, []);
+    assert.deepEqual(zhGuards.consoleErrors, []);
+    await zhCtx.close();
+
+    // 2. T2-F7-02: Bare 'zh' activates Chinese UI
+    const bareZhCtx = await browser.newContext({ locale: 'zh', viewport: { width: 1280, height: 800 } });
+    const bareZhPage = await openReaderPage(bareZhCtx, host);
+    assert.equal(await bareZhPage.evaluate(() => document.documentElement.lang), 'zh-CN');
+    assert.equal(await bareZhPage.locator('#annotationsTab').innerText(), '标记');
+    await bareZhCtx.close();
+
+    // 3. T2-F7-03: Non-Chinese locale ('ja-JP') defaults cleanly to English with zero Chinese leakage in chrome
+    const jaCtx = await browser.newContext({ locale: 'ja-JP', viewport: { width: 1280, height: 800 } });
+    const jaPage = await openReaderPage(jaCtx, host);
+    assert.equal(await jaPage.evaluate(() => document.documentElement.lang), 'en');
+    await jaPage.locator('#mobileRail').click();
+    const jaStrings = await collectChromeStrings(jaPage);
+    for (const item of jaStrings) {
+      assert.equal(/\p{Script=Han}/u.test(item.text), false, `ja-JP chrome leaked Chinese in ${item.source}: ${item.text}`);
+    }
+    await jaCtx.close();
+
+    // 4. en-US full terminology sweep (T1-F8-01, T1-F8-03, T2-F8-01..05)
+    const enCtx = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
+    const enPage = await openReaderPage(enCtx, host);
+    const enGuards = attachErrorGuards(enPage);
+    assert.equal(await enPage.evaluate(() => document.documentElement.lang), 'en');
+    assert.equal(await enPage.locator('#mobileRail').getAttribute('aria-label'), 'Show notes');
+    assert.equal(await enPage.locator('#rail').getAttribute('aria-label'), 'Reading notes');
+    assert.equal(await enPage.locator('#closeRail').getAttribute('aria-label'), 'Close notes');
+    assert.equal(await enPage.locator('#notesSplit').getAttribute('aria-label'), 'Resize notes');
+    assert.equal(await enPage.locator('#notebookPose').getAttribute('aria-label'), 'Notes position');
+    assert.equal(await enPage.locator('.paper-chat').getAttribute('aria-label'), 'Paper chat');
+
+    await enPage.locator('#mobileRail').click();
+    assert.deepEqual(
+      await enPage.locator('.rail-head [role="tab"]').allInnerTexts(),
+      ['Contents', 'Notes', 'Marks', 'Reference']
+    );
+    assert.deepEqual(
+      await enPage.locator('#highlightDisplay option').allInnerTexts(),
+      ['In Notes', 'In Marks only']
+    );
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Notes tab');
+
+    await enPage.locator('#annotationsTab').click();
+    await enPage.locator('#rail').getByRole('heading', { name: 'Marks', exact: true }).waitFor();
+    assert.equal(await enPage.locator('.annotation-workspace').getAttribute('aria-label'), 'Marks for this paper');
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Marks tab');
+
+    await enPage.locator('#refsTab').click();
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Reference tab');
+
+    await enPage.locator('.paper-chat-toggle').click();
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Paper chat');
+    await enPage.locator('.paper-chat-toggle').click();
+
+    await enPage.locator('#more').click();
+    await enPage.locator('#menu').getByRole('button', { name: 'Connections', exact: true }).click();
+    await enPage.locator('#dialog').getByLabel('Obsidian vault folder', { exact: true }).waitFor();
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Connections modal');
+    await enPage.locator('#closeDialog').click();
+
+    await enPage.locator('#more').click();
+    await enPage.locator('#menu').getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click();
+    await enPage.locator('#shortcutsDialog').waitFor({ state: 'visible' });
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Shortcuts modal');
+    await enPage.locator('#closeShortcuts').click();
+
+    assert.deepEqual(enGuards.pageErrors, []);
+    assert.deepEqual(enGuards.consoleErrors, []);
+    await enCtx.close();
+
+    console.log('PASS F7 & F8: complete EN/ZH/bare-zh/ja-JP i18n and strict Marks/Paper chat/Notes terminology unification verified with 0 leaks.');
+  } finally { await browser.close(); }
+}
+
+async function testExtensionLocale(host: HostFixture, locale: 'zh-CN' | 'en-US'): Promise<void> {
+  const articleServer = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><head><title>Locale Probe</title></head><body><article><h1>Locale Probe</h1><p><span id="term">PagedAttention</span> manages virtual KV blocks across requests.</p></article></body></html>');
+  });
+  await new Promise<void>(resolve => articleServer.listen(0, '127.0.0.1', resolve));
+  const address = articleServer.address();
+  assert.ok(address && typeof address === 'object');
+  const articleUrl = `http://locale-probe.test:${address.port}/article`;
+  const profileDir = path.join(host.scratch, 'ext-profile-' + locale + '-' + randomUUID().slice(0, 6));
+  await mkdir(profileDir, { recursive: true });
+  const context = await chromium.launchPersistentContext(profileDir, {
+    executablePath: host.executable,
+    headless: true,
+    locale,
+    env: { ...process.env, LANG: locale === 'zh-CN' ? 'zh_CN.UTF-8' : 'en_US.UTF-8', LC_ALL: locale === 'zh-CN' ? 'zh_CN.UTF-8' : 'en_US.UTF-8' },
+    viewport: { width: 1280, height: 800 },
+    ignoreDefaultArgs: ['--disable-extensions'],
+    args: ['--lang=' + locale, '--enable-unsafe-extension-debugging', '--no-proxy-server', '--host-resolver-rules=MAP locale-probe.test 127.0.0.1']
+  });
+  try {
+    const cdp = await context.browser()!.newBrowserCDPSession();
+    const { id } = await cdp.send('Extensions.loadUnpacked', { path: extensionPath });
+    await cdp.detach();
+
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.goto(articleUrl, { waitUntil: 'domcontentloaded' });
+    const popup = await openToolbar(page, id);
+    const popupLang = await popup.evaluate(() => document.documentElement.lang, null);
+    assert.equal(popupLang, locale === 'zh-CN' ? 'zh-CN' : 'en');
+    await popup.click('summary');
+    await popup.evaluate(origin => {
+      document.querySelector<HTMLInputElement>('#origin')!.value = origin;
+      document.querySelector('form')!.requestSubmit();
+    }, host.origin);
+    await until(() => popup.evaluate(() => /address was saved|地址已保存/.test(document.querySelector('#message')?.textContent ?? ''), null),
+      'Extension popup did not save origin.');
+    await popup.click('#toggle');
+    await popup.detach();
+
+    // Double-click term on article to open shadow-DOM selection card
+    await page.locator('#term').dblclick();
+    await until(async () => Boolean(await cardElement(page, '.card')), 'Extension selection card did not open.');
+    const cdpCard = await page.context().newCDPSession(page);
+    let cardInfo: { lang: string | null; ariaLabel: string | null; closeAria: string | null; translate: string | null; note: string | null; hint: string | null } | null = null;
+    try {
+      const { root } = await cdpCard.send('DOM.getDocument');
+      const { nodeId } = await cdpCard.send('DOM.querySelector', { nodeId: root.nodeId, selector: '[data-dsh-paper-reader]' });
+      const { node } = await cdpCard.send('DOM.describeNode', { nodeId, pierce: true });
+      const shadow = node.shadowRoots?.[0];
+      assert.ok(shadow, 'Extension card shadow root missing.');
+      const { object } = await cdpCard.send('DOM.resolveNode', { backendNodeId: shadow.backendNodeId });
+      const { result } = await cdpCard.send('Runtime.callFunctionOn', {
+        objectId: object.objectId,
+        returnByValue: true,
+        functionDeclaration: function(this: ShadowRoot) {
+          const el = this.querySelector<HTMLElement>('.card');
+          if (!el) return null;
+          return {
+            lang: el.getAttribute('lang'),
+            ariaLabel: el.getAttribute('aria-label'),
+            closeAria: el.querySelector('[data-do="close"]')?.getAttribute('aria-label') ?? null,
+            translate: el.querySelector('[data-do="translate"]')?.textContent ?? null,
+            note: el.querySelector('[data-do="note"]')?.textContent ?? null,
+            hint: el.querySelector('.answer')?.textContent ?? null
+          };
+        }.toString()
+      });
+      cardInfo = result.value;
+    } finally { await cdpCard.detach(); }
+    assert.ok(cardInfo, 'Extension selection card DOM info missing.');
+
+    if (locale === 'zh-CN') {
+      assert.equal(cardInfo.lang, 'zh-CN');
+      assert.equal(cardInfo.ariaLabel, 'DSH 划词卡片');
+      assert.equal(cardInfo.closeAria, '关闭卡片');
+      assert.equal(cardInfo.translate, '翻译');
+      assert.equal(cardInfo.note, '记入笔记');
+      assert.match(cardInfo.hint ?? '', /DSH 模型/);
+    } else {
+      assert.equal(cardInfo.lang, 'en');
+      assert.equal(cardInfo.ariaLabel, 'DSH selection card');
+      assert.equal(cardInfo.closeAria, 'Close card');
+      assert.equal(cardInfo.translate, 'Translate');
+      assert.equal(cardInfo.note, 'Add to Notes');
+    }
+  } finally {
+    await context.close();
+    articleServer.close();
+    articleServer.closeAllConnections();
+    await rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+const logFile = path.join(os.tmpdir(), 'paper-reader-shortcuts-i18n-' + randomUUID() + '.ndjson');
+await writeFile(logFile, '', { flag: 'wx' });
+try {
+  const fixture = await startPublisherFixture();
+  try {
+    await withHost(async host => {
+      await testF6Shortcuts(host);
+      await testF7AndF8I18nAndTerminology(host);
+      await testExtensionLocale(host, 'zh-CN');
+      await testExtensionLocale(host, 'en-US');
+      console.log('PASS extension locale consistency: zh-CN & en-US popup + shadow-DOM card verified.');
+    }, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + preload].filter(Boolean).join(' '),
+      PAPER_READER_E2E_PUBLISHER_FIXTURE: fixture.origin,
+      PAPER_READER_E2E_PUBLISHER_LOG: logFile
+    });
+  } finally { await fixture.close(); }
+} finally { await rm(logFile, { force: true }); }

@@ -72,7 +72,7 @@ export class SelectionChat {
     this.answerActions = state.answerActions ??= new Map();
     this.modelPicker = questionModelButton(app);
     this.root.id = 'passage-chat';
-    this.root.ariaLabel = 'Selection chat';
+    this.root.ariaLabel = label('Selection chat', '选段讨论');
     this.root.hidden = true;
     this.action.setAttribute('aria-expanded', 'false');
     const close = button('', () => { this.show(false); closeChat(); }, 'icon-btn chat-close');
@@ -80,11 +80,11 @@ export class SelectionChat {
     close.append(icon('close', 14));
     this.heading.append(el('h3', '', label('Reading discussion', '阅读讨论')), this.modelPicker.button, close);
     this.log.setAttribute('role', 'log');
-    this.log.ariaLabel = 'Selection conversation';
+    this.log.ariaLabel = label('Selection chat history', '选段讨论记录');
     this.log.tabIndex = 0;
     this.log.setAttribute('aria-live', 'polite');
     this.quoteBar.setAttribute('role', 'group');
-    this.quoteBar.ariaLabel = 'Selected answer text';
+    this.quoteBar.ariaLabel = label('Selected answer text', '选中的回答文本');
     this.quoteBar.hidden = true;
     this.quoteBar.addEventListener('pointerdown', event => {
       if (event.target instanceof Element && event.target.closest('button')) event.preventDefault();
@@ -107,7 +107,7 @@ export class SelectionChat {
       const targetName = label(targetLanguageLabel(target, false), targetLanguageLabel(target, true));
       if (item.hit.side === 'translation') {
         if (targetLanguageBcp47(target) !== 'en') {
-          this.starters.append(button('Translate to English', () => this.ask({ mode: 'translate', prompt: 'Translate this selection into English.' }), 'chat-starter'));
+          this.starters.append(button(label('Translate to English', '翻译为英文'), () => this.ask({ mode: 'translate', prompt: label('Translate this selection into English.', '将此选段翻译为英文。') }), 'chat-starter'));
           content.append(this.starters);
         }
       } else if (!targetsSimplifiedChinese(target)) {
@@ -290,11 +290,11 @@ export class SelectionChat {
     };
     if (this.disconnected) {
       this.connection.setAttribute('role', 'status');
-      this.connection.append(el('span', '', label('Connect a model to chat about this selection.', '连接模型后即可提问。')), button(label('Connections', '模型设置'), connect, 'text-btn'));
+      this.connection.append(el('span', '', label('Connect a model to chat about this selection.', '连接模型后即可提问。')), button(label('Connections', '连接设置'), connect, 'text-btn'));
     } else if (failure) {
       this.connection.setAttribute('role', 'alert');
       this.connection.append(el('span', '', failure.error), button(label('Retry', '重试'), () => this.ask(failure.request), 'text-btn'));
-      if (!failure.request.savingNotes) this.connection.append(button(label('Connections', '模型设置'), connect, 'text-btn'));
+      if (!failure.request.savingNotes) this.connection.append(button(label('Connections', '连接设置'), connect, 'text-btn'));
     }
     this.renderLog();
     this.renderComposer();
@@ -386,10 +386,11 @@ export class SelectionChat {
     const choices = [...drafts].filter(([key, other]) => key === 'paper' || key === activeDraft || other.text.trim());
     if (choices.length > 1) {
       const switcher = el('select', 'chat-drafts');
-      switcher.ariaLabel = 'Question drafts';
+      switcher.ariaLabel = label('Question drafts', '提问草稿');
       for (const [key, other] of choices) {
-        const title = other.quote ? 'Answer ' + (Math.floor(other.quote.turn / 2) + 1) + ' · ' + summary(other.quote.text) : 'Paper selection';
-        const option = el('option', '', title + (key !== activeDraft && other.text.trim() ? ' (draft)' : ''));
+        const answerNumber = Math.floor((other.quote?.turn ?? 0) / 2) + 1;
+        const title = other.quote ? label('Answer ' + answerNumber, '第 ' + answerNumber + ' 条回答') + ' · ' + summary(other.quote.text) : label('Paper selection', '当前选段');
+        const option = el('option', '', title + (key !== activeDraft && other.text.trim() ? label(' (draft)', '（草稿）') : ''));
         option.value = key;
         switcher.append(option);
       }
@@ -423,7 +424,7 @@ export class SelectionChat {
     const input = el('textarea'), row = el('div', 'chat-input-row');
     input.rows = 2;
     input.maxLength = 16_000;
-    input.ariaLabel = 'Message about this selection';
+    input.ariaLabel = label('Message about this selection', '针对此选段提问');
     input.placeholder = draft.quote ? label('Ask about the quoted answer…', '针对选中的回答提问…') : this.state.turns.length
       ? label('Ask a follow-up…', '继续追问…') : this.item.hit.regionText !== undefined
       ? label('Ask about this screenshot…', '想问这张截图什么？') : label('Ask about this selection…', '想问这段原文什么？');

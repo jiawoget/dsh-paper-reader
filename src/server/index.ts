@@ -61,8 +61,8 @@ async function boundedBody(request:Request, limit:number):Promise<Buffer> {
 
 export function apply(ctx:ReaderHost):void {
   const root = process.env.PAPER_READER_HOME || path.join(process.env.DSH_HOME || path.join(os.homedir(),'.dsh'),'paper-reader');
-  const library = new Library(root);
   const store = new ReaderStore(root);
+  const library = new Library(root, publicResource, id => store.deleteDocument(id));
   const models: {llm?: unknown; attachments?: unknown; sessionController?: unknown; agentDefaultModel?: unknown} = {};
   let listener:WebListener|undefined;
   ctx.inject(['webServer'],child=>{

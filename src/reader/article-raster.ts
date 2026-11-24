@@ -1,4 +1,5 @@
 import { regionCanvas, regionPng } from './region-png.js';
+import { readerLabel as label } from './ui.js';
 
 const svgNamespace = 'http://www.w3.org/2000/svg';
 // Resolved values preserve article zoom, line breaking, table layout and inline formatting in the SVG image.
@@ -102,7 +103,7 @@ function decode(image: HTMLImageElement, signal: AbortSignal): Promise<void> {
 export async function captureArticleArea(root: HTMLElement, area: DOMRect, signal: AbortSignal): Promise<{ image: string; regionText: string }> {
   signal.throwIfAborted();
   if (![area.x, area.y, area.width, area.height].every(Number.isFinite) || area.width <= 0 || area.height <= 0) {
-    throw new Error('Choose an area of the article to capture.');
+    throw new Error(label('Choose an area of the article to capture.', '请先框选要截取的文章区域。'));
   }
   const owner = root.ownerDocument, view = owner.defaultView!;
   const { canvas } = regionCanvas(owner, area.width, area.height);

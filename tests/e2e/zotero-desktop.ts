@@ -144,7 +144,7 @@ async function desktop(): Promise<void> {
         }
         const address = host.origin + '/api/paper-reader/app/index.html?doc=' + doc;
         await page.goto(address);
-        await page.getByRole('button', { name: 'Show notebook' }).click();
+        await page.getByRole('button', { name: 'Show notes' }).click();
         const ref = page.getByRole('tab', { name: 'Reference' });
         await ref.click();
         await page.getByRole('button', { name: 'Connection settings' }).click();

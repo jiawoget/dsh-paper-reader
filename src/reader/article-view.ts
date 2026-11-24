@@ -54,7 +54,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     sheet.className = 'web-reading-sheet';
     sheet.dataset.side = side;
     sheet.style.setProperty('--article-zoom', String(Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
-    sheet.setAttribute('aria-label', side === 'source' ? 'Original article' : 'Article translation');
+    sheet.setAttribute('aria-label', side === 'source' ? label('Original article', '原文文章') : label('Article translation', '文章译文'));
     if (side === 'translation') {
       const bcp47 = targetLanguageBcp47(targetLanguage);
       if (bcp47) sheet.lang = bcp47;
@@ -160,7 +160,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     for (const sheet of [original, translated]) {
       const message = owner.createElement('p');
       message.className = 'web-reading-empty';
-      message.textContent = 'No article text was captured.';
+      message.textContent = label('No article text was captured.', '未能提取文章正文。');
       sheet.append(message);
     }
   }

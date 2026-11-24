@@ -24,7 +24,7 @@ async function reader(host: HostFixture, run: (session: ReaderSession) => Promis
       throw new Error('The DSH reader did not mount. ' + JSON.stringify(reports), { cause: error });
     });
     await pane.getByRole('button', { name: 'Bilingual', exact: true }).click();
-    await pane.getByRole('button', { name: 'Show notebook' }).click();
+    await pane.getByRole('button', { name: 'Show notes' }).click();
     await run({ host, context, page, pane });
   } finally { await browser.close(); }
 }
@@ -171,8 +171,8 @@ async function obsidian({host, page, pane, context}: ReaderSession): Promise<voi
   }
   const close = pane.getByRole('button', {name: 'Close selection', exact: true});
   if (await close.isVisible()) await close.click();
-  await pane.getByRole('button', {name: 'Refresh notebook'}).click();
-  const editor = pane.getByRole('textbox', {name: 'Notebook Markdown', exact: true});
+  await pane.getByRole('button', {name: 'Refresh notes'}).click();
+  const editor = pane.getByRole('textbox', {name: 'Notes Markdown', exact: true});
   const lines = editor.locator('.cm-line');
   const first = editor.locator('[data-note-id="' + ids[0] + '"].cm-line');
   const sibling = editor.locator('[data-note-id="' + ids[1] + '"].cm-line');
@@ -302,7 +302,7 @@ async function obsidian({host, page, pane, context}: ReaderSession): Promise<voi
   await reopened.locator('.cm-line').getByText(annotation, {exact: true}).or(reopened.locator('.cm-line').filter({hasText: annotation})).first().waitFor();
   await reopened.reload();
   await reopened.locator('#original .pdf-quote-mark').first().waitFor();
-  await reopened.getByRole('textbox', {name: 'Notebook Markdown'}).getByText('Retained evidence', {exact: false}).first().waitFor();
+  await reopened.getByRole('textbox', {name: 'Notes Markdown'}).getByText('Retained evidence', {exact: false}).first().waitFor();
   await reopened.close();
   await pane.getByRole('button', {name: 'Next page'}).click();
   await pane.locator('[aria-label="Original, page 7"]').waitFor();

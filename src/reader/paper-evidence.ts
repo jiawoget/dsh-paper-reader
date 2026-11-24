@@ -26,7 +26,7 @@ export async function readPaper(doc: DocumentInfo, pdf?: PdfDocument): Promise<P
 /** Short papers are sent in full. For long documents, search every page and retain distributed context. */
 export function paperEvidence(title: string, pages: Page[], query: string): PaperEvidence {
   const content = pages.filter(p => p.text.trim());
-  if (!content.length) throw Error('This document has no searchable text. Import an OCR copy to chat about its contents.');
+  if (!content.length) throw Error(typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '') ? '这份文档没有可检索文字。请先导入 OCR 副本再进行全文问答。' : 'This document has no searchable text. Import an OCR copy to chat about its contents.');
   const pageCount = pages.at(-1)!.page;
   if (content.length <= 5000 && content.reduce((n, p) => n + p.text.length, 0) <= budget) {
     return { title, pageCount, partial: content.length < pageCount, excerpts: content };

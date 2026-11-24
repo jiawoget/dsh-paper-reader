@@ -21,6 +21,7 @@ import { pageText } from './pdf/reading-text.js';
 import { readOutlinePages, readPdfOutline } from './pdf/outline.js';
 import { sampleDigest } from './pdf/sample.js';
 import { findQuote, listenForSelections, paintRange } from './pdf/selection.js';
+import { readerLabel as label } from './ui.js';
 
 export type { PageView, ReaderBlock, SelectionHit };
 
@@ -252,8 +253,8 @@ function mount(input: MountedPage): PdfPageView {
     if (located?.range && !located.parts && restoreLocatedRange() && !preview) {
       revealLocated(located.entry, Boolean(located.translated));
     }
-    if (!blocks.length) setTranslationState('scanned', 'This page has no selectable text. Run OCR on the PDF to translate it.');
-    else if (blocks.some(b => !b.translation)) setTranslationState('pending', 'Waiting for the page translation…');
+    if (!blocks.length) setTranslationState('scanned', label('This page has no selectable text. Run OCR on the PDF to translate it.', '本页没有可选中文字。请先对 PDF 做 OCR 再翻译。'));
+    else if (blocks.some(b => !b.translation)) setTranslationState('pending', label('Waiting for the page translation…', '正在等待本页译文…'));
     else {
       translationStatus = undefined;
       status.hidden = true;
@@ -643,7 +644,7 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfDocument> {
   let bookmarks: Promise<PdfOutlineEntry[]> | undefined;
   return { pages: pdf.numPages,
     outline() {
-      if (closed) return Promise.reject(new Error('This document is closed.'));
+      if (closed) return Promise.reject(new Error(label('This document is closed.', '文档已关闭。')));
       return bookmarks ??= readPdfOutline(pdf, lifetime.signal).catch(error => { bookmarks = undefined; throw error; });
     },
     outlinePages(onProgress, signal) {
@@ -651,14 +652,14 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfDocument> {
     },
     async cropRegion(pageNumber, anchor) {
       const region = readRegion(anchor);
-      if (!region) throw new Error('Invalid screenshot area.');
+      if (!region) throw new Error(label('Invalid screenshot area.', '截图区域无效。'));
       const page = await pdf.getPage(pageNumber), {width, height} = page.getViewport({scale: 1});
       return cropPdfPage(page, regionBox(region, {x: 0, y: 0, width, height}));
     },
     async textContent(page) { return (await pdf.getPage(page)).getTextContent(); },
     async render(options) {
-      if (closed) throw new Error('This document is closed.');
-      if (!Number.isInteger(options.page) || options.page < 1 || options.page > pdf.numPages) throw new RangeError('Page number is out of range.');
+      if (closed) throw new Error(label('This document is closed.', '文档已关闭。'));
+      if (!Number.isInteger(options.page) || options.page < 1 || options.page > pdf.numPages) throw new RangeError(label('Page number is out of range.', '页码超出范围。'));
       current?.abort();
       for (const host of [options.sourceEl, options.translationEl]) hostOwners.get(host)?.abort();
       const controller = new AbortController();

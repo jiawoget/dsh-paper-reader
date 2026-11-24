@@ -40,7 +40,7 @@
           <div class="reader-mode-switch" role="group" aria-label="Reading mode"><button id="originalMode" type="button" aria-pressed="true">Original</button><button id="parallel" type="button" aria-pressed="false"><span class="mode-wide">Bilingual</span><span class="mode-narrow">Translation</span></button></div>
         </div>
         <button id="captureRegion" class="btn" type="button" aria-pressed="false" hidden></button>
-        <button id="mobileRail" class="icon-btn" aria-label="Show notebook" aria-controls="rail" aria-expanded="false"></button>
+        <button id="mobileRail" class="icon-btn" aria-label="Show notes" aria-controls="rail" aria-expanded="false"></button>
         <button id="more" class="icon-btn" aria-label="More actions" aria-controls="menu" aria-expanded="false"></button>
         <nav id="menu" aria-label="Reader actions" hidden></nav>
         <form id="pageJump" popover aria-label="Go to page">
@@ -59,20 +59,20 @@
       </section>
       <button id="returnDiscussion" class="btn" type="button" hidden></button>
     </section>
-    <div id="notesSplit" class="desk-split" role="separator" tabindex="0" aria-label="Resize notebook" aria-orientation="vertical" aria-controls="rail" title="Resize notebook"></div>
+    <div id="notesSplit" class="desk-split" role="separator" tabindex="0" aria-label="Resize notes" aria-orientation="vertical" aria-controls="rail" title="Resize notes"></div>
     <div id="notebookBackdrop" aria-hidden="true" hidden></div>
-    <aside id="rail" aria-label="Reading notebook">
+    <aside id="rail" aria-label="Reading notes">
       <div class="notebook-titlebar">
-        <h2 id="notebookHandle" tabindex="-1">Notebook</h2>
-        <select id="notebookPose" class="sidebar-position" aria-label="Notebook position"></select>
-        <button id="closeRail" type="button" class="icon-btn" aria-label="Close notebook" title="Close notebook"></button>
+        <h2 id="notebookHandle" tabindex="-1">Notes</h2>
+        <select id="notebookPose" class="sidebar-position" aria-label="Notes position"></select>
+        <button id="closeRail" type="button" class="icon-btn" aria-label="Close notes" title="Close notes"></button>
       </div>
       <header class="rail-head">
         <div role="tablist" aria-label="Reading sidebar"><button id="contentsTab" role="tab" aria-controls="contentsPanel" aria-selected="false" tabindex="-1">Contents</button><button id="notesTab" role="tab" aria-selected="true" aria-controls="railBody">Notes</button><button id="annotationsTab" role="tab" aria-controls="railBody" aria-selected="false" tabindex="-1">Marks</button><button id="refsTab" role="tab" aria-selected="false" aria-controls="railBody" tabindex="-1">Reference</button></div>
         <span id="saveState"></span>
       </header>
       <label class="highlight-preference" for="highlightDisplay"><span>Highlights</span>
-        <select id="highlightDisplay" aria-label="Highlight display"><option value="inline">In notes</option><option value="separate">In Marks only</option></select>
+        <select id="highlightDisplay" aria-label="Highlight display"><option value="inline">In Notes</option><option value="separate">In Marks only</option></select>
       </label>
       <div id="railBody" role="tabpanel" aria-labelledby="notesTab"></div>
       <div id="contentsPanel" role="tabpanel" aria-labelledby="contentsTab" hidden></div>
@@ -80,6 +80,7 @@
   </main>
   <section id="card" aria-label="Selection card" hidden></section>
   <dialog id="dialog" aria-labelledby="dialogTitle"><header><h2 id="dialogTitle"></h2><button id="closeDialog" class="icon-btn" aria-label="Close dialog"></button></header><div id="dialogBody"></div></dialog>
+  <dialog id="shortcutsDialog" aria-labelledby="shortcutsTitle"><header><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button id="closeShortcuts" type="button" class="icon-btn" aria-label="Close keyboard shortcuts"></button></header><div id="shortcutsBody"></div></dialog>
   <div id="toast" role="status" hidden></div>
   <script type="module" src="./app.js"></script>
 </body>

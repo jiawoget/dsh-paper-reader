@@ -1,6 +1,7 @@
 import type { Box, Passage } from './model.js';
 import type { ReadingSide } from '../../shared/types.js';
-import { DEFAULT_TARGET_LANGUAGE } from '../../shared/languages.js';
+import { DEFAULT_TARGET_LANGUAGE, targetLanguageLabel } from '../../shared/languages.js';
+import { readerLabel as label } from '../ui.js';
 
 export function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -25,7 +26,9 @@ export function makeSheet(side: ReadingSide, page: number, window: Box, width: n
   const outer = element('div', 'pdf-sheet');
   outer.dataset.pdfSide = side;
   outer.setAttribute('role', 'group');
-  outer.ariaLabel = (side === 'source' ? 'Original' : targetLanguage) + ', page ' + page;
+  outer.ariaLabel = side === 'source'
+    ? label('Original, page ' + page, '原文，第 ' + page + ' 页')
+    : label(targetLanguageLabel(targetLanguage, false) + ', page ' + page, targetLanguageLabel(targetLanguage, true) + '，第 ' + page + ' 页');
   const scale = element('div', 'pdf-scale-plane');
   const plane = element('div', 'pdf-coordinate-plane');
   place(plane, { x: -window.x, y: -window.y, width, height });
@@ -60,10 +63,14 @@ export function newAnchor(passage: Passage, figure = false): HTMLElement {
   const area = figure ? passage.illustration : passage.box;
   const node = figure ? element('button', 'pdf-figure') : element('div', 'pdf-anchor');
   node.dataset.blockId = passage.id;
-  node.ariaLabel = passage.label;
+  const displayLabel = figure
+    ? passage.label.replace(/^Figure\s+(\d+)$/u, (_, n: string) => label('Figure ' + n, '图 ' + n))
+      .replace(/^Table\s+(\d+)$/u, (_, n: string) => label('Table ' + n, '表 ' + n))
+    : passage.label;
+  node.ariaLabel = displayLabel;
   if (node instanceof HTMLButtonElement) {
     node.type = 'button';
-    node.title = passage.label;
+    node.title = displayLabel;
   } else node.setAttribute('aria-hidden', 'true');
   if (area) place(node, area);
   return node;
@@ -125,7 +132,7 @@ export function cropFigure(canvas: HTMLCanvasElement, rect: Box, pageWidth: numb
 export function paintArtwork(canvas: HTMLCanvasElement, image: HTMLCanvasElement, areas: Box[],
   pageWidth: number, pageHeight: number): void {
   const context = canvas.getContext('2d', { alpha: false });
-  if (!context) throw new Error('The browser could not display the translated page.');
+  if (!context) throw new Error(label('The browser could not display the translated page.', '浏览器无法显示译文页面。'));
   context.drawImage(image, 0, 0);
   const sx = canvas.width / pageWidth, sy = canvas.height / pageHeight;
   context.fillStyle = '#fff';

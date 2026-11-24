@@ -172,7 +172,7 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     await note.fill(keyboardNote);
     await card.getByRole('button', { name: 'Save note', exact: true }).press('Enter');
     await card.getByText('Note saved.', { exact: true }).waitFor();
-    await reader.getByRole('button', { name: 'Show notebook' }).click();
+    await reader.getByRole('button', { name: 'Show notes' }).click();
     const saved = reader.locator('.cm-line[data-note-id]').filter({ hasText: keyboardNote });
     const noteId = await saved.getAttribute('data-note-id');
     assert.ok(noteId);

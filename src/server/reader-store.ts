@@ -461,4 +461,20 @@ export class ReaderStore {
       "SELECT substr(identity,10) AS docId FROM citations WHERE library=? AND itemKey=? AND identity LIKE 'document/%' ORDER BY rowid DESC"
     ).all(library, itemKey).map(row => readColumn(row, 'docId')));
   }
+  deleteDocument(docId: string): void {
+    if (!docId || docId === 'pagedattention') return;
+    const prefix = docId + '\u001f';
+    this.#transaction(true, db => {
+      db.prepare('DELETE FROM entries WHERE docId=?').run(docId);
+      db.prepare('DELETE FROM annotations WHERE docId=?').run(docId);
+      db.prepare('DELETE FROM chat_exchanges WHERE docId=?').run(docId);
+      db.prepare('DELETE FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?').run(docId, prefix.length, prefix);
+      db.prepare('DELETE FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?').run(docId, prefix.length, prefix);
+      db.prepare('DELETE FROM notebooks WHERE docId=? OR substr(docId,1,?)=?').run(docId, prefix.length, prefix);
+      db.prepare('DELETE FROM book_positions WHERE docId=?').run(docId);
+      db.prepare('DELETE FROM pdf_outlines WHERE docId=?').run(docId);
+      db.prepare('DELETE FROM article_captures WHERE docId=?').run(docId);
+      db.prepare('DELETE FROM citations WHERE identity=?').run('document/' + docId);
+    });
+  }
 }

@@ -4,7 +4,7 @@ import type { Passage } from './model.js';
 /** The text view uses the same passage IDs as the original PDF. */
 export function pageText(passages: Passage[], choose?: (passage: Passage, trigger: HTMLButtonElement) => void) {
   const root = el('section', 'pdf-reading-text');
-  root.ariaLabel = 'Page text';
+  root.ariaLabel = readerLabel('Page text', '本页正文');
   root.hidden = true;
   const entries = new Map<string, { row: HTMLElement; text: HTMLElement }>();
   for (const passage of passages) {

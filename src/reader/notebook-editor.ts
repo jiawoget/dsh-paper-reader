@@ -102,9 +102,9 @@ class SourceWidget extends WidgetType {
     const excerpt = el('div', 'notebook-excerpt');
     excerpt.hidden = true;
     if (note.quote || note.context) {
-      const show = el('button', 'notebook-quote-toggle', 'Quote');
+      const show = el('button', 'notebook-quote-toggle', label('Quote', '引文'));
       show.type = 'button';
-      show.setAttribute('aria-label', 'Show quoted passage');
+      show.setAttribute('aria-label', label('Show quoted passage', '显示引文内容'));
       show.setAttribute('aria-expanded', 'false');
       show.onclick = () => {
         excerpt.hidden = !excerpt.hidden;
@@ -117,8 +117,8 @@ class SourceWidget extends WidgetType {
     }
     const remove = el('button', 'notebook-remove');
     remove.type = 'button';
-    remove.title = 'Delete linked note';
-    remove.setAttribute('aria-label', 'Delete linked note');
+    remove.title = label('Delete linked note', '删除关联笔记');
+    remove.setAttribute('aria-label', label('Delete linked note', '删除关联笔记'));
     remove.append(icon('close', 12));
     remove.onclick = () => {
       const contents = view.state.doc.toString();
@@ -205,7 +205,7 @@ export function foldedSources(controls: SourceControls): Extension {
     }
     try { notebookBlocks(tr.newDoc.toString()); }
     catch {
-      queueMicrotask(() => toast('Edit the note text or use Delete linked note beside its source link.'));
+      queueMicrotask(() => toast(label('Edit the note text or use Delete linked note beside its source link.', '请直接编辑笔记正文，或点击出处旁的「删除关联笔记」。')));
       return [];
     }
     return tr;
