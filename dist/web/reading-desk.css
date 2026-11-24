@@ -1,4 +1,4 @@
-#reader, #card {
+:root {
   --paper: #fff;
   --desk-shell: #eef1f6;
   --desk-ink: #242738;
@@ -7,8 +7,74 @@
   --line: #d4d9e4;
   --muted: #555970;
   color: var(--desk-ink);
+  background: var(--desk-shell);
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
 }
+#reader, #card, #menu, dialog {
+  color: var(--desk-ink);
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+.trail { color: var(--muted); font-size: 12px; }
+#saveState { font-size: 12px; color: var(--muted); }
+#saveState::before { background: #62707d; }
+#saveState.exported::before { background: #247a4d; }
+.source-chip { font-size: 12px; }
+@media (max-width: 1380px) { #saveState { font-size: 11px; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+:root[data-theme="dark"] {
+  --paper: #1d202b;
+  --desk-shell: #141720;
+  --desk-ink: #e7e9f2;
+  --purple: #bda2f5;
+  --lavender: #2d2542;
+  --line: #313649;
+  --muted: #a4a9be;
+}
+:root[data-theme="dark"] :is(#card, #menu, dialog, dialog > header, .btn, .field input, .field select, .field textarea, .question input, .search, #loading, #card .word-head, .notebook-writing-area, #rail:has(.reader-notebook), .paper-chat) {
+  background: var(--paper);
+  color: var(--desk-ink);
+  border-color: var(--line);
+}
+:root[data-theme="dark"] :is(.btn:hover, #menu button:hover, .doc-row:hover, .icon-btn:hover, .toolbar button:hover) {
+  background: var(--lavender);
+}
+:root[data-theme="dark"] .btn.primary {
+  background: #6c46b2;
+  border-color: #7d58c4;
+  color: #fff;
+}
+:root[data-theme="dark"] :is(.notebook-writing-area .cm-editor, .notebook-writing-area .md-title, .notebook-writing-area .md-heading, .quote) {
+  color: var(--desk-ink);
+}
+:root[data-theme="dark"] .notebook-writing-area .md-markup { color: #9c95ad; }
+:root[data-theme="dark"] .notebook-writing-area .cm-focused .cm-activeLine { background: #262235; }
+:root[data-theme="dark"] .notebook-writing-area .cm-focused .cm-selectionBackground { background: #463569; }
+:root[data-theme="dark"] .notebook-writing-area .md-code { background: #292d3d; }
+:root[data-theme="dark"] :is(.source-chip, .notebook-passage-link, .tag) {
+  background: #302845;
+  color: #d6c3fa;
+}
+:root[data-theme="dark"] .lane > div:not(:empty) {
+  background: #fff;
+  color: #242738;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 35%);
+}
+:root[data-theme="dark"] .lane > div:has(.article-body) {
+  background: var(--paper);
+  color: var(--desk-ink);
+}
+:root[data-theme="dark"] .notebook-footer,
+:root[data-theme="dark"] .notebook-guide,
+:root[data-theme="dark"] dialog > header { border-color: var(--line); }
+:root[data-theme="dark"] :is(.notebook-footer, .notebook-location, .notebook-guide > summary, .notebook-quote-toggle, .notebook-remove, .field, .section-title) {
+  color: var(--muted);
+}
+:root[data-theme="dark"] #saveState::before { background: #9aa3b8; }
+:root[data-theme="dark"] #saveState.exported::before,
+:root[data-theme="dark"] .notebook-status[data-saved="true"]::before { background: #4cc38a; }
+:root[data-theme="dark"] .notebook-status::before { background: #e0b354; }
 
 #reader {
   --rail-width: clamp(255px, 21vw, 390px);
