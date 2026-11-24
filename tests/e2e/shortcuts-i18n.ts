@@ -59,9 +59,7 @@ const ZH_ENGLISH_ALLOWLIST = new Set([
   'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown',
   'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
   'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
-  'block', 'tables', 'table', 'figure', 'parallel', 'sampling', 'cache', 'access', 'left', 'column',
-  'section', 'decoding', 'sequence', 'batching', 'memory', 'two', 'requests', 'scenarios', 'other',
-  'one', 'for', 'the', 'and', 'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
+  'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
   'woosuk', 'et', 'al', 'key', 'value', 'kv'
 ]);
 
@@ -93,7 +91,7 @@ async function openReaderPage(context: BrowserContext, host: HostFixture, query 
 
 async function collectChromeStrings(page: Page): Promise<{ text: string; source: string }[]> {
   return page.evaluate(() => {
-    const excluded = '.pdf-sheet, .web-reading-sheet, .cm-content, .quote, .selection-excerpt blockquote, .selection-heading h2, #docTitle, #docMeta, #railBody h1, .list-row strong, .toc-entry, .toc-fold, .paper-answer, .selection-answer, .library-row-text strong, .library-row-text small, .doc-row strong, .doc-row small, #sourceInfo, .selection-location';
+    const excluded = '.pdf-sheet, .pdf-reading-text p, .pdf-reading-text h2, .meaning, #card blockquote, .web-reading-sheet, .cm-content, .quote, .selection-excerpt blockquote, .selection-heading h2, #docTitle, #docMeta, #railBody h1, .list-row strong, .toc-entry, .toc-fold, .paper-answer, .selection-answer, .library-row-text strong, .library-row-text small, .doc-row strong, .doc-row small, #sourceInfo';
     const items: { text: string; source: string }[] = [];
     const seen = new Set<string>();
     const elements = document.querySelectorAll<HTMLElement>('body *');
@@ -476,11 +474,38 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Paper chat');
     await zhPage.locator('.paper-chat-toggle').click();
 
-    // Selection card + selection notes + selection chat (unconfigured)
+    // Selection card + selection notes + selection chat (unconfigured) + Active passage & Page text sampleAreas zh-CN checks
     await zhPage.locator('#closeRail').click();
-    await zhPage.locator('#original .pdf-native-text [data-block-id="block-tables"]').filter({ hasText: 'block tables' }).first().click();
+    await zhPage.locator('#parallel').click();
+    await zhPage.locator('#translationMode').selectOption('passage');
+    const translationInfo = (await zhPage.locator('#translationInfo').innerText()).trim();
+    assert.equal(translationInfo, '左栏 · 块表', `Expected localized #translationInfo in Active passage mode, got: ${translationInfo}`);
+    await zhPage.locator('#translationMode').selectOption('page');
+    await zhPage.locator('#originalMode').click();
+
+    // Open Page text (#readText) and verify every .passage-pick[aria-label] & #card .selection-location has zero English leaks
+    await zhPage.locator('#readText').click();
+    const pickLabels = await zhPage.locator('.passage-pick').evaluateAll(els => els.map(el => el.getAttribute('aria-label') || ''));
+    assert.ok(pickLabels.length >= 6, `Expected passage-pick buttons in #readText, got ${pickLabels.length}`);
+    for (const pickLabel of pickLabels) {
+      assert.doesNotMatch(pickLabel, /\b(?:Figure|Left column|Section|Block tables|Batching|Decoding|Parallel|Memory)\b/i,
+        `Untranslated sampleAreas label in .passage-pick[aria-label]: ${pickLabel}`);
+    }
+    assert.ok(pickLabels.some(l => l.includes('图 6')));
+    assert.ok(pickLabels.some(l => l.includes('左栏 · 块表')));
+    assert.ok(pickLabels.some(l => l.includes('第 4.3 节 · 并行缓存访问')));
+    assert.ok(pickLabels.some(l => l.includes('第 4.4 节 · 并行采样')));
+
     const card = zhPage.locator('#card');
+    await zhPage.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段 · 图 6$/ }).click();
     await card.waitFor({ state: 'visible' });
+    assert.equal((await card.locator('.selection-location').innerText()).trim(), '第 6 页 · 图 6');
+    await zhPage.keyboard.press('Escape');
+
+    await zhPage.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段 · 左栏 · 块表$/ }).click();
+    await card.waitFor({ state: 'visible' });
+    assert.equal((await card.locator('.selection-location').innerText()).trim(), '第 6 页 · 左栏 · 块表');
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Selection card');
     await card.getByRole('button', { name: '记笔记', exact: true }).click();
     await card.getByRole('textbox', { name: '笔记内容', exact: true }).waitFor();
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Selection notes');
@@ -489,6 +514,7 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Selection chat');
     await zhPage.keyboard.press('Escape');
     await zhPage.keyboard.press('Escape');
+    await zhPage.locator('#readText').click();
 
     // All 4 modals in zh-CN: Library (+ invalid URL error), Connections, Vocabulary & history, Shortcuts
     await zhPage.locator('#library').click();
@@ -507,6 +533,23 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     await modal.waitFor({ state: 'visible' });
     // T2-F8-04: Obsidian 笔记库 preserved distinctly
     await modal.getByLabel('Obsidian 笔记库文件夹', { exact: true }).waitFor();
+    // Invalid custom targetLanguage validation toasts must render localized Chinese (zero English leak)
+    const zhLangSelect = modal.getByRole('combobox', { name: '翻译目标语言', exact: true });
+    await zhLangSelect.selectOption('__custom__');
+    const zhCustomInput = modal.getByLabel('自定义目标语言', { exact: true });
+    await zhCustomInput.fill('   ');
+    await modal.getByRole('button', { name: '保存连接设置', exact: true }).click();
+    const zhToast = zhPage.locator('#toast');
+    await zhToast.waitFor({ state: 'visible' });
+    assert.equal((await zhToast.innerText()).trim(), '请输入翻译目标语言。');
+    await zhCustomInput.evaluate(el => {
+      const input = el as HTMLInputElement;
+      input.removeAttribute('maxlength');
+      input.value = 'A'.repeat(65);
+    });
+    await modal.getByRole('button', { name: '保存连接设置', exact: true }).click();
+    await zhToast.waitFor({ state: 'visible' });
+    assert.equal((await zhToast.innerText()).trim(), '翻译目标语言最多 64 个字符。');
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Connections modal');
     await zhPage.locator('#closeDialog').click();
 
@@ -528,11 +571,14 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     assert.deepEqual(zhGuards.consoleErrors, []);
     await zhCtx.close();
 
-    // 2. T2-F7-02: Bare 'zh' activates Chinese UI
+    // 2. T2-F7-02: Bare 'zh' activates Chinese UI (including localized sampleAreas labels)
     const bareZhCtx = await browser.newContext({ locale: 'zh', viewport: { width: 1280, height: 800 } });
     const bareZhPage = await openReaderPage(bareZhCtx, host);
     assert.equal(await bareZhPage.evaluate(() => document.documentElement.lang), 'zh-CN');
     assert.equal(await bareZhPage.locator('#annotationsTab').innerText(), '标记');
+    await bareZhPage.locator('#parallel').click();
+    await bareZhPage.locator('#translationMode').selectOption('passage');
+    assert.equal((await bareZhPage.locator('#translationInfo').innerText()).trim(), '左栏 · 块表');
     await bareZhCtx.close();
 
     // 3. T2-F7-03: Non-Chinese locale ('ja-JP') defaults cleanly to English with zero Chinese leakage in chrome

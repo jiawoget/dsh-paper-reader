@@ -39,7 +39,18 @@ export function icon(name: Glyph, size = 16): SVGSVGElement {
   for (const [key,val] of Object.entries({width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':name === 'more'?3.5:1.65,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':true})) svg.setAttribute(key,String(val));
   const line=document.createElementNS(ns,'path'); line.setAttribute('d',paths[name]); svg.append(line); return svg;
 }
-export const message = (error:unknown) => error instanceof Error ? error.message : readerLabel('The request failed.', '请求失败。');
+const localizedErrors: Record<string, string> = {
+  'Enter a target language.': '请输入翻译目标语言。',
+  'Target language must be a non-empty string.': '请输入有效的翻译目标语言。',
+  'Target language must be at most 64 characters.': '翻译目标语言最多 64 个字符。',
+  'Target language contains invalid control characters.': '翻译目标语言包含无效控制字符。'
+};
+export const message = (error: unknown) => {
+  if (!(error instanceof Error)) return readerLabel('The request failed.', '请求失败。');
+  return Object.hasOwn(localizedErrors, error.message)
+    ? readerLabel(error.message, localizedErrors[error.message])
+    : error.message;
+};
 export function webPageError(error: unknown): string {
   const detail = message(error);
   const code = detail.match(/website returned HTTP (\d+)/);

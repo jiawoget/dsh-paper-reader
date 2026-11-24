@@ -387,8 +387,10 @@ class NotebookEditor {
       this.book = saved;
       this.draft = {revision: saved.revision, original: saved.markdown, text: this.draft.text};
       this.reviewed = '';
-      if (!this.disposed) this.view.dispatch({effects: refreshSources.of()});
-      this.remember();
+      if (!this.disposed) {
+        this.view.dispatch({effects: refreshSources.of()});
+        this.remember();
+      }
     } catch (error) { this.failure = message(error); }
     finally { this.saving = false; }
     if (!this.current) return;

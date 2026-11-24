@@ -1,7 +1,7 @@
 import type { ChatSource, DocumentInfo, NotebookSnapshot, OpenDocument, PageView, ReaderState, SourceRecord, ZoteroItem } from '../shared/types.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import type { PaperAnnotation } from '../shared/annotations.js';
-import { DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGE_MAX_LENGTH, TARGET_LANGUAGE_PRESETS, findTargetLanguagePreset } from '../shared/languages.js';
+import { DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGE_MAX_LENGTH, TARGET_LANGUAGE_PRESETS, findTargetLanguagePreset, parseTargetLanguage } from '../shared/languages.js';
 import { buildCitationMetadata, buildCiteKey, formatBibTeX, formatRIS } from '../shared/citation-export.js';
 import { chapterPassageLabel } from '../shared/notebook-structure.js';
 import { readSelectionRange, readTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
@@ -132,6 +132,10 @@ export function settingsDialog(app:ReaderPort,focusVault:boolean|'zotero'=false,
     event.preventDefault();save.disabled=true;
     try{
       const targetLanguage=langSelect.value===CUSTOM_LANGUAGE ? customLang.input.value : langSelect.value;
+      if(!returnToLibrary){
+        const parsedLanguage=parseTargetLanguage(targetLanguage);
+        if(!parsedLanguage.ok) throw new Error(parsedLanguage.error);
+      }
       await api('settings.save',{...(!returnToLibrary && {baseUrl:base.input.value,model:model.input.value,apiKey:key.input.value,targetLanguage,vaultPath:vault.input.value,clearApiKey:clearModel.checked}),...zoteroSettings()});
       await app.refresh();
       if(byId('refsTab').getAttribute('aria-selected')==='true')app.repaintNotes();

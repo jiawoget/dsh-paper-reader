@@ -22,7 +22,7 @@ export function trackBookPlace(docId: string, page: number, resume?: BookPlace):
     translation: [...translation.querySelectorAll<HTMLElement>('.web-reading-row')]
   };
   let side: BookPlace['side'] = resume?.side || 'source';
-  let last = resume, dirty = false, pending = 0, alignedTop = 0;
+  let last = resume, dirty = false, pending = 0, alignedTop = 0, disposed = false;
   let aligning = Boolean(resume?.anchor), userMoved = false;
 
   function surface() {
@@ -34,6 +34,7 @@ export function trackBookPlace(docId: string, page: number, resume?: BookPlace):
     return {scroller, line, blocks:rows[side]};
   }
   function capture() {
+    if (disposed) return;
     const {scroller, line, blocks} = surface();
     if (!blocks.length || !blocks[0].isConnected || !blocks[0].getClientRects().length) return;
     let anchor = '', fraction = 0;
@@ -53,12 +54,13 @@ export function trackBookPlace(docId: string, page: number, resume?: BookPlace):
     try { localStorage.setItem(key(docId), JSON.stringify(last)); } catch { /* The host still stores this position. */ }
   }
   function flush() {
+    if (disposed) return;
     window.clearTimeout(pending);
     if (!aligning) capture();
     if (!last || !dirty) return;
     const place = last;
     dirty = false;
-    void api('book.progress.save', { docId, place }, true).catch(() => { if (last === place) dirty = true; });
+    void api('book.progress.save', { docId, place }, true).catch(() => { if (!disposed && last === place) dirty = true; });
   }
   function align() {
     if (!aligning || !resume) return;
@@ -73,6 +75,7 @@ export function trackBookPlace(docId: string, page: number, resume?: BookPlace):
   const resize = new ResizeObserver(align);
   function stopAligning() { aligning = false; resize.disconnect(); }
   function scroll(event: Event) {
+    if (disposed) return;
     if (aligning && Math.abs(surface().scroller.scrollTop - alignedTop) <= 1) return;
     stopAligning();
     side = event.currentTarget === translation || !rows.source[0]?.getClientRects().length ? 'translation' : 'source';
@@ -99,5 +102,12 @@ export function trackBookPlace(docId: string, page: number, resume?: BookPlace):
   if (aligning) { align(); resize.observe(byId('original')); resize.observe(translation); }
   else flush();
   const settled = window.setTimeout(stopAligning, 3000);
-  return (save = true) => { if (save) flush(); events.abort(); resize.disconnect(); window.clearTimeout(settled); };
+  return (save = true) => {
+    window.clearTimeout(pending);
+    if (save) flush();
+    disposed = true;
+    events.abort();
+    resize.disconnect();
+    window.clearTimeout(settled);
+  };
 }

@@ -42,7 +42,7 @@ export function clearDocumentStorage(docId: string): void {
     const mdPrefix = mdExact + '/';
     const annExact = 'reader.annotation-drafts.' + docId;
     const qPrefix = 'reader.question-draft.' + encodeURIComponent(docId) + '/';
-    const snPrefix = 'reader.selection-note-draft.' + docId + ':';
+    const snPrefix = 'reader.selection-note-draft.[' + JSON.stringify(docId) + ',';
     for (let i = 0; i < sessionStorage.length; i++) {
       const key = sessionStorage.key(i);
       if (key && (key === mdExact || key.startsWith(mdPrefix) || key === annExact || key.startsWith(qPrefix) || key.startsWith(snPrefix))) {
@@ -133,9 +133,15 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
         renameBtn.ariaLabel = renameBtn.title = t('Rename document', '重命名文档');
         const delBtn = button(confirmingId === doc.id ? t('Delete', '确认删除') : '', async () => {
           if (confirmingId !== doc.id) { confirmingId = doc.id; render(); return; }
-          await api('library.delete', { id: doc.id });
           const wasActive = app.doc.id === doc.id;
-          app.discardDocument?.(doc.id);
+          if (wasActive) app.discardDocument?.(doc.id);
+          try {
+            await api('library.delete', { id: doc.id });
+          } catch (error) {
+            if (wasActive) await app.navigate(doc.id, app.page).catch(() => {});
+            throw error;
+          }
+          if (!wasActive) app.discardDocument?.(doc.id);
           clearDocumentStorage(doc.id);
           const index = docs.indexOf(doc);
           if (index >= 0) docs.splice(index, 1);

@@ -393,7 +393,7 @@ for (const mobile of mode) await withHost(async host => {
 
       if (await page.getByRole('button', { name: '读正文', exact: true }).isVisible())
         await activate(page.getByRole('button', { name: '读正文', exact: true }), mobile);
-      const text = page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*Parallel sampling/ });
+      const text = page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*并行采样/ });
       await activate(text, mobile);
       const card = page.locator('#card');
       await card.getByRole('button', { name: '接着问', exact: true }).waitFor();

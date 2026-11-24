@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
 import { withHost, type HostFixture } from './host.js';
 
 const appPath = '/api/paper-reader/app/index.html';
+const preload = new URL('./book-reading-preload.ts', import.meta.url).href;
 
 async function rpc(context: BrowserContext, host: HostFixture, op: string, payload: Record<string, unknown> = {}) {
   return context.request.post(host.origin + '/api/paper-reader/action', {
@@ -27,7 +31,12 @@ function countRows(db: DatabaseSync, sql: string, ...params: (string | number)[]
   return Number(row.n);
 }
 
-await withHost(async host => {
+const logFile = path.join(os.tmpdir(), 'paper-reader-collections-hygiene-' + randomUUID() + '.ndjson');
+await writeFile(logFile, '', { flag: 'wx' });
+try {
+  const fixture = await startPublisherFixture();
+  try {
+    await withHost(async host => {
   const browser = await chromium.launch({ executablePath: host.executable });
   try {
     const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
@@ -196,6 +205,7 @@ await withHost(async host => {
         localStorage.setItem('reader.focus.' + id + '.1', 'p1-b1');
         localStorage.setItem('reader.book-position.' + id, JSON.stringify({ page: 1, anchor: 'p1', fraction: 0, side: 'source', updated: 1 }));
         localStorage.setItem('reader.zotero.user:1:' + id, 'ITEMKEY');
+        sessionStorage.setItem('reader.selection-note-draft.' + JSON.stringify([id, 1, 'p1', 'quote']), 'unsaved selection note');
       }
     }, { idA: docA.id, idB: docB.id });
 
@@ -249,17 +259,22 @@ await withHost(async host => {
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=?', docB.id), 1);
     } finally { db.close(); }
 
-    // localStorage hygiene & Doc B isolation (T1-F9-05 & T2-F9-06)
+    // localStorage & sessionStorage hygiene + Doc B isolation (T1-F9-05 & T2-F9-06)
     const storageAudit = await page.evaluate(({ idA, idB }) => {
       const keys = Object.keys(localStorage);
+      const sessionKeys = Object.keys(sessionStorage);
       return {
         remainingA: keys.filter(k => k.includes(idA)),
         remainingB: keys.filter(k => k.includes(idB)),
+        remainingSessionA: sessionKeys.filter(k => k.includes(idA)),
+        remainingSessionB: sessionKeys.filter(k => k.includes(idB)),
         lastDoc: localStorage.getItem('reader.last-document')
       };
     }, { idA: docA.id, idB: docB.id });
     assert.deepEqual(storageAudit.remainingA, [], 'All localStorage keys for deleted Doc A must be purged.');
     assert.ok(storageAudit.remainingB.length >= 6, 'Control Doc B localStorage keys must remain intact.');
+    assert.deepEqual(storageAudit.remainingSessionA, [], 'All sessionStorage draft keys (including selection-note-draft JSON key) for Doc A must be purged.');
+    assert.ok(storageAudit.remainingSessionB.some(k => k.startsWith('reader.selection-note-draft.[')), 'Control Doc B selection-note-draft sessionStorage key must remain intact.');
     assert.equal(storageAudit.lastDoc, 'pagedattention');
 
     // T2-F9-04: Delete last user-imported document (Doc B) -> pagedattention remains with NO delete button
@@ -270,6 +285,65 @@ await withHost(async host => {
     await dialog.locator('.doc-row').filter({ hasText: 'PagedAttention.pdf' }).waitFor();
     assert.equal(await dialog.getByRole('button', { name: /Delete document/ }).count(), 0, 'Bundled sample must never have a delete button.');
     await page.locator('#closeDialog').click();
+
+    // --- Block 3: Active OpenStax book delete regression (prevents book_positions SQLite resurrection) ---
+    for (const suppressScrollend of [false, true]) {
+      const openBookRes = await rpc(context, host, 'web.open', { url: bookRoot + sections.start.slug });
+      assert.equal(openBookRes.status(), 200);
+      const { doc: bookDoc } = await openBookRes.json() as { doc: { id: string; title: string } };
+      await page.goto(host.origin + appPath + '?doc=' + bookDoc.id + '&page=2', { waitUntil: 'domcontentloaded' });
+      await page.locator('#loading').waitFor({ state: 'hidden' });
+
+      // Scroll into paragraph so book_positions is recorded in SQLite before deletion
+      await page.evaluate(({ id, suppress }) => {
+        const scroller = document.getElementById('paperScroll')!;
+        if (suppress) {
+          scroller.addEventListener('scrollend', event => event.stopImmediatePropagation(), { capture: true });
+        }
+        scroller.scrollTop = 320;
+        sessionStorage.setItem('reader.selection-note-draft.' + JSON.stringify([id, 2, 'p-3', 'book quote']), 'draft note');
+      }, { id: bookDoc.id, suppress: suppressScrollend });
+      await page.waitForTimeout(350);
+
+      const dbBefore = new DatabaseSync(path.join(host.scratch, 'reader', 'reader.sqlite'), { readOnly: true });
+      try {
+        assert.equal(countRows(dbBefore, 'SELECT COUNT(*) AS n FROM book_positions WHERE docId=?', bookDoc.id), 1,
+          'Expected initial book_positions row before deleting active book.');
+      } finally { dbBefore.close(); }
+
+      // Open Library -> On this device -> click Delete to reveal Confirm delete
+      await page.locator('#library').click();
+      await dialog.waitFor({ state: 'visible' });
+      await dialog.getByRole('tab', { name: 'On this device', exact: true }).click();
+      const bookRow = dialog.locator('.library-device-item').filter({ hasText: bookDoc.title });
+      await bookRow.getByRole('button', { name: 'Delete document', exact: true }).click();
+
+      // Nudge scrollTop within the same paragraph (arms the 200 ms pending debounce timer & scrollend) and delete immediately!
+      await page.evaluate(() => {
+        const scroller = document.getElementById('paperScroll')!;
+        scroller.scrollTop += 3;
+      });
+      await bookRow.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+      await page.waitForURL(url => url.searchParams.get('doc') === 'pagedattention');
+      await page.locator('#loading').waitFor({ state: 'hidden' });
+      await page.locator('#closeDialog').click();
+
+      // Wait well past the 200 ms debounce window to prove no stale save resurrects book_positions
+      await page.waitForTimeout(600);
+      const dbAfter = new DatabaseSync(path.join(host.scratch, 'reader', 'reader.sqlite'), { readOnly: true });
+      try {
+        assert.equal(countRows(dbAfter, 'SELECT COUNT(*) AS n FROM book_positions WHERE docId=?', bookDoc.id), 0,
+          `Active OpenStax book delete (suppressScrollend=${suppressScrollend}) must NOT resurrect book_positions!`);
+      } finally { dbAfter.close(); }
+
+      const bookStorage = await page.evaluate(id => ({
+        local: Object.keys(localStorage).filter(k => k.includes(id)),
+        session: Object.keys(sessionStorage).filter(k => k.includes(id))
+      }), bookDoc.id);
+      assert.deepEqual(bookStorage.local, [], `Deleted book localStorage keys must be empty (suppressScrollend=${suppressScrollend}).`);
+      assert.deepEqual(bookStorage.session, [], `Deleted book sessionStorage keys must be empty (suppressScrollend=${suppressScrollend}).`);
+    }
+    console.log('PASS F9 (active OpenStax book delete): 0 book_positions resurrection with normal scrollend and suppressed scrollend + 0 localStorage/sessionStorage orphans.');
 
     // T2-F9-05: RPC boundary responses (400 sample, 404 traversal/malformed, 200 { deleted: false } nonexistent)
     assert.equal((await rpc(context, host, 'library.delete', { id: 'pagedattention' })).status(), 400);
@@ -285,4 +359,10 @@ await withHost(async host => {
     await context.close();
     console.log('PASS F9 (library.delete cascade): SQLite 10-table purge, zero active-doc resurrection, localStorage cleanup, Doc B isolation, and RPC boundaries.');
   } finally { await browser.close(); }
-});
+    }, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + preload].filter(Boolean).join(' '),
+      PAPER_READER_E2E_PUBLISHER_FIXTURE: fixture.origin,
+      PAPER_READER_E2E_PUBLISHER_LOG: logFile
+    });
+  } finally { await fixture.close(); }
+} finally { await rm(logFile, { force: true }); }

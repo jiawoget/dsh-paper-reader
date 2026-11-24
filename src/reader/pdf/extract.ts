@@ -87,16 +87,21 @@ function prose(lines: Line[]): string {
     .replace(/\s+/g, ' ').replace(/([1-3])\s*○/g, (_, digit: string) => '①②③'[Number(digit) - 1]).trim();
 }
 
+function isChineseUi(): boolean {
+  return typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');
+}
+
 function annotated(runs: Run[], translations: Readonly<Record<string, string>>): PageLayout {
+  const zh = isChineseUi();
   return {
     registered: true,
     window: sampleWindow,
-    passages: sampleAreas.map(area => {
+    passages: sampleAreas.map(({ labelZh, ...area }) => {
       const r = area.box;
       const matches = runs.filter(s => s.baseX >= r.x - 1 && s.baseX <= r.x + r.width + 1
         && s.baseY >= r.y && s.baseY < r.y + r.height);
       const text = prose(readLines(matches)), translation = translations[area.id];
-      return { ...area, translation, text, sentencePairs: alignSample(area.id, text, translation),
+      return { ...area, label: zh ? labelZh : area.label, translation, text, sentencePairs: alignSample(area.id, text, translation),
         indices: matches.map(s => s.index), fontSize: 10.4 };
     })
   };
@@ -193,12 +198,16 @@ function displayedMath(line: Line): boolean {
 
 function identifyCaptions(lines: Line[], view: Viewport, size: number, graphics?: PageGraphics, tables: Box[] = []): Map<Line, FigureCaption> {
   const result = new Map<Line, FigureCaption>();
+  const zh = isChineseUi();
   const proseLines = lines.filter(line => line.text.length >= 18 && line.size >= size * 0.83);
   for (const [index, caption] of lines.entries()) {
     const match = caption.text.match(captionStart);
     if (!match) continue;
     const isTable = /^(Table|\u8868)/i.test(match[1]);
-    const entry: FigureCaption = { id: (isTable ? 'table-' : 'figure-') + match[2], label: (isTable ? 'Table ' : 'Figure ') + match[2] };
+    const entry: FigureCaption = {
+      id: (isTable ? 'table-' : 'figure-') + match[2],
+      label: (isTable ? (zh ? '表 ' : 'Table ') : (zh ? '图 ' : 'Figure ')) + match[2]
+    };
     if (graphics) {
       const printedCaption = [caption];
       for (let i = index + 1; i < lines.length && !captionStart.test(lines[i].text)
@@ -249,7 +258,7 @@ function automatic(lines: Line[], view: Viewport, page: number, graphics?: PageG
     const text = prose(rows);
     const id = caption && !used.has(caption.id) ? caption.id : `p${page}-b${index + 1}`;
     used.add(id);
-    const zh = typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');
+    const zh = isChineseUi();
     return { id, text, role, label: caption?.label ?? (role === 'heading' ? text : zh ? `第 ${page} 页 · 第 ${index + 1} 段` : `Page ${page} · Paragraph ${index + 1}`),
       illustration: caption?.illustration, indices: rows.flatMap(line => line.runs.map(r => r.index)), fontSize: rows[0].size,
       box: box(Math.max(0, area.x - 0.6), Math.max(0, area.y - 0.8), area.width + 1.2, area.height + 1.8) };
@@ -285,8 +294,12 @@ export function extractLayout(content: TextContent, view: Viewport, page: number
     for (let i = 0; i < ranges.length; i += 2) {
       for (let r = ranges[i]; r <= ranges[i + 1]; r++) indices.push(r);
     }
-    const zh = typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');
-    const label = role === 'caption' ? text.split('.')[0] : role === 'heading' ? text : zh ? `第 ${page} 页 · 第 ${index + 1} 段` : `Page ${page} · Paragraph ${index + 1}`;
+    const zh = isChineseUi();
+    const captionMatch = role === 'caption' ? /^(Figure|Fig\.?|Table)\s*(\d+[a-z]?)/i.exec(text) : null;
+    const captionLabel = captionMatch
+      ? (/^Table/i.test(captionMatch[1]) ? (zh ? '表 ' : 'Table ') : (zh ? '图 ' : 'Figure ')) + captionMatch[2]
+      : text.split('.')[0];
+    const label = role === 'caption' ? captionLabel : role === 'heading' ? text : zh ? `第 ${page} 页 · 第 ${index + 1} 段` : `Page ${page} · Paragraph ${index + 1}`;
     return { id, role, box: box(...bounds), fontSize, indices, text, label, translation: translations[id],
       illustration: picture && box(...picture) };
   });

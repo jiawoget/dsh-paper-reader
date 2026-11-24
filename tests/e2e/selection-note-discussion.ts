@@ -360,7 +360,7 @@ for (const mobile of devices) await withHost(async host => {
       checkNotes(await ask(page, model, '删除一条后，这个框还剩哪些笔记？', mobile), [revisedNote]);
 
       await page.getByRole('button', { name: '读正文', exact: true }).click();
-      await page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*Parallel cache access/ }).click();
+      await page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*并行缓存访问/ }).click();
       await page.locator('#card').getByRole('button', { name: '接着问', exact: true }).click();
       const mixed = await ask(page, model, '也看看这段原文，按前一张截图的笔记解释。', mobile);
       checkNotes(mixed, []);

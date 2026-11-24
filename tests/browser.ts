@@ -200,6 +200,7 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
           needsScroll: el.classList.contains('needs-scroll')
         };
       }));
+    assert.ok(compactFit.some(b => b.role === 'paragraph'), 'Expected translated paragraphs at compact scale.');
     assert.ok(compactFit.filter(b => b.role === 'paragraph').every(b => b.visualFont >= 11.5),
       'Compact bilingual translated paragraphs must keep the >= 11.5px visual readability floor.');
     assert.ok(compactFit.filter(b => b.overflows).every(b => b.needsScroll),
