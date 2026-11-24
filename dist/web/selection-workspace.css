@@ -159,7 +159,16 @@
 #card .chat-input-row { align-items: flex-end; }
 #card .chat-input-row textarea { flex: 1; max-height: 23vh; }
 #card .chat-input-row .btn, #card .answer-actions .btn { font-size: 12px; padding: 5px 8px; }
-#card .chat-drafts { color: var(--purple); max-width: 100%; min-width: 0; font-size: 12px; }
+#card .chat-drafts {
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--purple);
+  font-size: 12px;
+}
 #card .chat-notice[role="status"] { background: var(--surface-tint); color: var(--desk-ink); }
 #card .answer-notebook, #card .answer-selection {
   display: flex;

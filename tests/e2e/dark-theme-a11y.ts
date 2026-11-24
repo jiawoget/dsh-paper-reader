@@ -910,7 +910,39 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await chatStarter.waitFor({ state: 'visible' });
       await assertDarkSurface(chatStarter, '#card .chat-starter', 0.08);
       await assertContrast(chatStarter, '#card .chat-starter', 4.5);
-      await assertBorderContrastBothThemes(page, bilingualCard.locator('.chat-composer textarea'), '#card .chat-composer textarea');
+      const composer = bilingualCard.locator('.chat-composer textarea');
+      await assertBorderContrastBothThemes(page, composer, '#card .chat-composer textarea');
+      // Naturally trigger multi-draft switcher (#card select.chat-drafts) and verify Dark & Light border (>= 3.0:1) and text (>= 4.5:1) contrast.
+      await composer.fill('Summarize the KV block mapping.');
+      await composer.press('Enter');
+      const firstAnswer = bilingualCard.locator('.selection-answer').first();
+      await firstAnswer.waitFor({ state: 'visible' });
+      await composer.fill('Unsent draft on memory fragmentation.');
+      await firstAnswer.evaluate(el => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        const text = walker.nextNode() as Text | null;
+        if (!text || text.data.trim().length < 4) throw new Error('Missing answer text node for follow-up quote');
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, Math.min(11, text.data.length));
+        const sel = window.getSelection()!;
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+      await bilingualCard.getByRole('group', { name: 'Selected answer text' }).getByRole('button', { name: 'Ask follow-up', exact: true }).click();
+      const chatDrafts = bilingualCard.locator('select.chat-drafts');
+      await chatDrafts.waitFor({ state: 'visible' });
+      await assertDarkSurface(chatDrafts, '#card select.chat-drafts', 0.08);
+      assert.equal((await measureLocator(chatDrafts)).colorScheme, 'dark');
+      await assertContrast(chatDrafts, '#card select.chat-drafts text (dark)', 4.5);
+      await assertBorderContrastBothThemes(page, chatDrafts, '#card select.chat-drafts');
+      await page.emulateMedia({ colorScheme: 'light' });
+      try {
+        await assertContrast(chatDrafts, '#card select.chat-drafts text (light)', 4.5);
+      } finally {
+        await page.emulateMedia({ colorScheme: 'dark' });
+      }
       await page.keyboard.press('Escape');
       if (await bilingualCard.isVisible()) await page.keyboard.press('Escape');
       await bilingualCard.waitFor({ state: 'hidden' });
@@ -1231,7 +1263,7 @@ try {
     PAPER_READER_E2E_PUBLISHER_FIXTURE: publisher.origin,
     PAPER_READER_E2E_PUBLISHER_LOG: publisherLog,
     NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import', new URL('./book-reading-preload.ts', import.meta.url).href].filter(Boolean).join(' ')
-  });
+  }, { modelFixture: true });
 } finally {
   await publisher.close();
   await rm(publisherLog, { force: true });
