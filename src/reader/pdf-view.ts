@@ -6,6 +6,7 @@ import type { PdfOutlineEntry, PdfOutlinePage } from '../shared/pdf-outline.js';
 import { clipToText, textRange } from './quote-range.js';
 import { ambiguousQuote, restoreSelection } from './saved-selection.js';
 import { annotationLayoutChanged, withAnnotationSurface } from './annotation-layer.js';
+import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47, targetsSimplifiedChinese } from '../shared/languages.js';
 import { translationQualityError } from '../shared/translation-quality.js';
 import { extractLayout } from './pdf/extract.js';
 import { pageGraphics, taggedArtwork } from './pdf/graphics.js';
@@ -38,6 +39,8 @@ export interface PdfRenderOptions {
   /** A scale of one fits the available pane width. */
   zoom?: number;
   translationVisible?: boolean;
+  targetLanguage?: string;
+  targetLanguageLabel?: string;
   focusMode?: TranslationFocus;
   focusId?: string;
   onFocus?: (id: string, label: string) => void;
@@ -112,6 +115,9 @@ function mount(input: MountedPage): PdfPageView {
   const { source, target, layout, options, raster, nativeLayer, nativeContainer,
     controller, pageWidth, pageHeight } = input;
   const { signal } = controller;
+  const targetLanguage = options.targetLanguage || DEFAULT_TARGET_LANGUAGE;
+  const chineseTarget = targetsSimplifiedChinese(targetLanguage);
+  const targetBcp47 = targetLanguageBcp47(targetLanguage) ?? null;
   let focus: PdfFocus | undefined;
   const byId = new Map([...layout.passages, ...(layout.sourceOnly ?? [])].map(p => [p.id, p]));
   const placed = new Map<string, PlacedPassage>();
@@ -119,7 +125,7 @@ function mount(input: MountedPage): PdfPageView {
   target.plane.append(raster.artwork);
   for (const p of byId.values()) {
     const sourceAnchor = newAnchor(p), targetAnchor = newAnchor(p);
-    const translated = translatedText(p);
+    const translated = translatedText(p, targetBcp47);
     translated.hidden = true;
     if (layout.registered && options.page !== 6 && p.role === 'paragraph') {
       // The final line of a passage may end well before the typeset column margin.
@@ -220,7 +226,7 @@ function mount(input: MountedPage): PdfPageView {
     for (const record of blocks) {
       const entry = placed.get(record.id)!;
       const supplied = map[record.id]?.trim();
-      const value = entry.passage.translation || (supplied && !translationQualityError(record.text, supplied) ? supplied : undefined);
+      const value = entry.passage.translation || (supplied && (!chineseTarget || !translationQualityError(record.text, supplied)) ? supplied : undefined);
       const changed = value && (entry.translated.hidden || entry.translated.textContent !== value);
       entry.passage.translation = record.translation = value;
       entry.translated.hidden = !value;
@@ -446,7 +452,7 @@ function mount(input: MountedPage): PdfPageView {
     annotationLayoutChanged(source.outer);
   }
   focus = new PdfFocus(layout, placed, source, target, options.focusMode ?? 'page', options.focusId,
-    (id, label) => options.onFocus?.(id, label), repaint, signal);
+    (id, label) => options.onFocus?.(id, label), repaint, signal, options.targetLanguageLabel ?? targetLanguage);
   function setTextView(enabled: boolean): void {
     if (signal.aborted || enabled === !reading.root.hidden || (enabled && !reading.entries.size)) return;
     const scroller = options.sourceEl.closest<HTMLElement>('#paperScroll');
@@ -577,8 +583,10 @@ async function renderPdfPage(pdf: PDFDocumentProxy, options: PdfRenderOptions, d
   const page = await pdf.getPage(options.page);
   signal.throwIfAborted();
   const viewport = page.getViewport({ scale: 1 });
+  const targetLanguage = options.targetLanguage || DEFAULT_TARGET_LANGUAGE;
+  const chineseTarget = targetsSimplifiedChinese(targetLanguage);
   const [content, imported, operators, tagged] = await Promise.all([page.getTextContent(),
-    digest === sampleDigest ? sampleTranslations(options.page) : Promise.resolve({}),
+    digest === sampleDigest && chineseTarget ? sampleTranslations(options.page) : Promise.resolve({}),
     digest === sampleDigest ? undefined : page.getOperatorList(),
     // Damaged optional structure tags can still accompany an otherwise readable page.
     digest === sampleDigest ? undefined : taggedArtwork(page).catch(() => undefined)]);
@@ -586,7 +594,7 @@ async function renderPdfPage(pdf: PDFDocumentProxy, options: PdfRenderOptions, d
   const layout = extractLayout(content, viewport, options.page, digest, imported, operators && pageGraphics(operators, viewport), tagged);
   const raster = new PageRaster(page, layout.passages.map(p => p.box), viewport.width, viewport.height, signal);
   const source = makeSheet('source', options.page, layout.window, viewport.width, viewport.height);
-  const target = makeSheet('translation', options.page, layout.window, viewport.width, viewport.height);
+  const target = makeSheet('translation', options.page, layout.window, viewport.width, viewport.height, targetLanguage);
   const nativeContainer = element('div', 'pdf-native-text pdf-text-preview');
   const nativeLayer = new TextLayer({ textContentSource: content, container: nativeContainer, viewport });
   nativeContainer.style.setProperty('--total-scale-factor', String(viewport.userUnit));

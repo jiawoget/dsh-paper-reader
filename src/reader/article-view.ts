@@ -1,5 +1,6 @@
 import type { DocumentInfo, PageView, ReaderBlock, ReadingSide, RegionAction, SelectionHit, SelectionSegment } from '../shared/types.js';
 import type { SavedSelectionRange, TranslatedLocator } from '../shared/source-link.js';
+import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47 } from '../shared/languages.js';
 import { articleUrl, type ArticleBlock } from '../shared/web-article.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { articleContent, rangeInArticle, selectedArticleText, unchangedArticleBlock } from './article-content.js';
@@ -15,6 +16,7 @@ interface ArticleOptions {
   sourceEl: HTMLElement;
   translationEl: HTMLElement;
   translations?: Record<string, string>;
+  targetLanguage?: string;
   zoom?: number;
   onSelect: (hit: SelectionHit) => void;
   onRegion?: RegionAction;
@@ -29,7 +31,7 @@ interface ParagraphPair {
   translation: HTMLElement;
 }
 
-export function renderArticle({ doc, sourceEl, translationEl, translations = {}, zoom = 1, onSelect, onRegion,
+export function renderArticle({ doc, sourceEl, translationEl, translations = {}, targetLanguage = DEFAULT_TARGET_LANGUAGE, zoom = 1, onSelect, onRegion,
   canContinueRegion, onAmbiguousQuote, onNavigateAnchor, onBookSection }: ArticleOptions): PageView {
   const owner = sourceEl.ownerDocument;
   const paneWindow = owner.defaultView!;
@@ -53,6 +55,11 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     sheet.dataset.side = side;
     sheet.style.setProperty('--article-zoom', String(Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
     sheet.setAttribute('aria-label', side === 'source' ? 'Original article' : 'Article translation');
+    if (side === 'translation') {
+      const bcp47 = targetLanguageBcp47(targetLanguage);
+      if (bcp47) sheet.lang = bcp47;
+      sheet.dir = 'auto';
+    }
     if (originalUrl) {
       const link = owner.createElement('a');
       link.className = 'web-reading-source'; link.href = originalUrl.href;

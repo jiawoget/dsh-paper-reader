@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { DEFAULT_TARGET_LANGUAGE, parseTargetLanguage } from '../shared/languages.js';
 import type { ChatExchange, Collection, JournalNote, NotebookSnapshot, Operations, QuestionModel, Settings, ZoteroStatus, ZoteroItem as ReaderZoteroItem } from '../shared/types.js';
 
 export class ServiceError extends Error {
@@ -54,12 +55,18 @@ export function pageNumber(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) throw new ServiceError(400, 'The page number must be a positive integer.');
   return value;
 }
+export function readTargetLanguage(value: unknown): string {
+  const parsed = parseTargetLanguage(value);
+  if (!parsed.ok) throw new ServiceError(400, parsed.error);
+  return parsed.value;
+}
 
 export interface PrivateSettings {
   questionModel?: QuestionModel;
   model: string;
   baseUrl: string;
   apiKey: string;
+  targetLanguage: string;
   vaultPath: string;
   zoteroLibraryId: string;
   zoteroLibraryType: 'user' | 'group';
@@ -67,7 +74,8 @@ export interface PrivateSettings {
   zoteroMode?: 'web' | 'desktop';
 }
 export const initialSettings: Readonly<PrivateSettings> = {
-  baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '', vaultPath: '',
+  baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '',
+  targetLanguage: DEFAULT_TARGET_LANGUAGE, vaultPath: '',
   zoteroLibraryId: '', zoteroLibraryType: 'user', zoteroApiKey: ''
 };
 export function zoteroModeFor(settings: PrivateSettings): 'desktop' | 'web' {
@@ -99,9 +107,11 @@ export function mergeSettings(current: PrivateSettings, input: Input): PrivateSe
   if (zoteroMode !== 'web' && zoteroMode !== 'desktop') throw new ServiceError(400, 'Choose a Zotero connection.');
   if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, 'The Zotero library ID must be a positive integer.');
   const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
+  const targetLanguage = input.targetLanguage === undefined ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
   return {
     questionModel: input.questionModel === undefined ? current.questionModel : readQuestionModel(input.questionModel),
     model, baseUrl, apiKey: updatedSecret(sameOrigin ? current.apiKey : '', input.apiKey, input.clearApiKey),
+    targetLanguage,
     vaultPath: vault ? path.resolve(vault) : '', zoteroLibraryType: type, zoteroLibraryId: id, zoteroMode,
     zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
   };

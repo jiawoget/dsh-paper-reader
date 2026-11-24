@@ -1,6 +1,7 @@
 import type { ChatSource, DocumentInfo, NotebookSnapshot, OpenDocument, PageView, ReaderState, SourceRecord, ZoteroItem } from '../shared/types.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import type { PaperAnnotation } from '../shared/annotations.js';
+import { DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGE_MAX_LENGTH, TARGET_LANGUAGE_PRESETS, findTargetLanguagePreset } from '../shared/languages.js';
 import { chapterPassageLabel } from '../shared/notebook-structure.js';
 import { readSelectionRange, readTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
 import { notebookEditor } from './notebook.js';
@@ -31,6 +32,7 @@ export interface ReaderPort {
 }
 const close = () => byId<HTMLDialogElement>('dialog').close();
 const rule = () => el('hr','rule');
+const CUSTOM_LANGUAGE = '__custom__';
 
 export function settingsDialog(app:ReaderPort,focusVault:boolean|'zotero'=false,returnToLibrary?:()=>void):void {
   const data=app.state.settings;
@@ -39,6 +41,35 @@ export function settingsDialog(app:ReaderPort,focusVault:boolean|'zotero'=false,
   const base=inputField('API base URL',data.baseUrl,'url');
   const model=inputField('Model',data.model);
   const key=inputField('API key','', 'password',data.hasApiKey?'Key saved':'Optional for local models');
+  const currentLang=data.targetLanguage || DEFAULT_TARGET_LANGUAGE;
+  const matchedPreset=findTargetLanguagePreset(currentLang);
+  const langRow=el('label','field'), langSelect=el('select');
+  for(const preset of TARGET_LANGUAGE_PRESETS){
+    const option=el('option','',label(preset.labelEn,preset.labelZh));
+    option.value=preset.id;
+    langSelect.append(option);
+  }
+  const customOption=el('option','',label('Custom…','自定义…'));
+  customOption.value=CUSTOM_LANGUAGE;
+  langSelect.append(customOption);
+  langSelect.value=matchedPreset ? matchedPreset.id : CUSTOM_LANGUAGE;
+  langSelect.ariaLabel=label('Translation language','翻译目标语言');
+  langRow.append(el('span','',label('Translation language','翻译目标语言')),langSelect);
+  const customLang=inputField(
+    label('Custom target language','自定义目标语言'),
+    matchedPreset ? '' : currentLang,
+    'text',
+    label('e.g. Portuguese, Italian, Arabic','例如：葡萄牙语、意大利语、阿拉伯语')
+  );
+  customLang.input.maxLength=TARGET_LANGUAGE_MAX_LENGTH;
+  const switchLanguage=()=>{
+    const custom=langSelect.value===CUSTOM_LANGUAGE;
+    customLang.row.hidden=!custom;
+    customLang.input.required=custom;
+    customLang.input.disabled=!custom;
+  };
+  langSelect.onchange=switchLanguage;
+  switchLanguage();
   const vault=inputField('Obsidian vault folder',data.vaultPath,'text','Absolute path to your vault');
   const id=inputField(label('Zotero library ID','Zotero 资料库 ID'),data.zoteroLibraryId);
   id.input.inputMode='numeric';id.input.pattern='[1-9][0-9]*';id.input.maxLength=24;
@@ -83,6 +114,7 @@ export function settingsDialog(app:ReaderPort,focusVault:boolean|'zotero'=false,
   mode.onchange=switchMode;switchMode();
   for(const field of [mode,select,id.input,zotKey.input,clearZot])field.addEventListener('input',()=>{testVersion++;testResult.textContent='';});
   if(!returnToLibrary)form.append(el('h3','','Language model'),el('p','hint',status),base.row,model.row,key.row,clearField(clearModel,'Remove saved model key',data.hasApiKey),
+    langRow,customLang.row,
     rule(),el('h3','','Obsidian'),vault.row,el('p','hint',label('Choose a vault from the Obsidian desktop app. Paper Reader keeps each book’s chapter notes together in a folder.', '选择 Obsidian 桌面应用中的仓库。Paper Reader 会将同一本书的章节笔记放在一个文件夹中。')),
     rule(),el('h3','','Zotero'));
   form.append(modeRow,desktopHint,webFields,testLine,rule());
@@ -93,7 +125,8 @@ export function settingsDialog(app:ReaderPort,focusVault:boolean|'zotero'=false,
   form.onsubmit=async event=>{
     event.preventDefault();save.disabled=true;
     try{
-      await api('settings.save',{...(!returnToLibrary && {baseUrl:base.input.value,model:model.input.value,apiKey:key.input.value,vaultPath:vault.input.value,clearApiKey:clearModel.checked}),...zoteroSettings()});
+      const targetLanguage=langSelect.value===CUSTOM_LANGUAGE ? customLang.input.value : langSelect.value;
+      await api('settings.save',{...(!returnToLibrary && {baseUrl:base.input.value,model:model.input.value,apiKey:key.input.value,targetLanguage,vaultPath:vault.input.value,clearApiKey:clearModel.checked}),...zoteroSettings()});
       await app.refresh();
       if(byId('refsTab').getAttribute('aria-selected')==='true')app.repaintNotes();
       if(returnToLibrary){if(form.isConnected && byId<HTMLDialogElement>('dialog').open)returnToLibrary();}

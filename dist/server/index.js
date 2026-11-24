@@ -12,6 +12,44 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+// src/shared/languages.ts
+var DEFAULT_TARGET_LANGUAGE = "Simplified Chinese";
+var TARGET_LANGUAGE_MAX_LENGTH = 64;
+var TARGET_LANGUAGE_PRESETS = [
+  { id: "Simplified Chinese", labelEn: "Simplified Chinese", labelZh: "\u7B80\u4F53\u4E2D\u6587", bcp47: "zh-CN", slug: "" },
+  { id: "Traditional Chinese", labelEn: "Traditional Chinese", labelZh: "\u7E41\u4F53\u4E2D\u6587", bcp47: "zh-TW", slug: "zh-tw" },
+  { id: "English", labelEn: "English", labelZh: "\u82F1\u8BED", bcp47: "en", slug: "en" },
+  { id: "Japanese", labelEn: "Japanese", labelZh: "\u65E5\u8BED", bcp47: "ja", slug: "ja" },
+  { id: "Korean", labelEn: "Korean", labelZh: "\u97E9\u8BED", bcp47: "ko", slug: "ko" },
+  { id: "French", labelEn: "French", labelZh: "\u6CD5\u8BED", bcp47: "fr", slug: "fr" },
+  { id: "German", labelEn: "German", labelZh: "\u5FB7\u8BED", bcp47: "de", slug: "de" },
+  { id: "Spanish", labelEn: "Spanish", labelZh: "\u897F\u73ED\u7259\u8BED", bcp47: "es", slug: "es" }
+];
+var simplifiedChinesePattern = /^(?:simplified chinese|chinese(?:\s*\(simplified\))?|zh(?:[-_](?:cn|hans)(?:[-_]cn)?)?)$/i;
+var traditionalChinesePattern = /^(?:traditional chinese|chinese(?:\s*\(traditional\))?|zh[-_](?:tw|hk|mo|hant)(?:[-_](?:tw|hk|mo))?)$/i;
+var controlChars = /[\u0000-\u001f\u007f]/;
+function targetsSimplifiedChinese(language) {
+  return simplifiedChinesePattern.test(language.trim());
+}
+function findTargetLanguagePreset(language) {
+  const trimmed = language.trim();
+  if (!trimmed) return void 0;
+  if (targetsSimplifiedChinese(trimmed)) return TARGET_LANGUAGE_PRESETS[0];
+  if (traditionalChinesePattern.test(trimmed)) return TARGET_LANGUAGE_PRESETS[1];
+  const lower = trimmed.toLowerCase();
+  return TARGET_LANGUAGE_PRESETS.find((preset) => preset.id.toLowerCase() === lower);
+}
+function parseTargetLanguage(value) {
+  if (typeof value !== "string") return { ok: false, error: "Target language must be a non-empty string." };
+  if (controlChars.test(value)) return { ok: false, error: "Target language contains invalid control characters." };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: false, error: "Enter a target language." };
+  if (trimmed.length > TARGET_LANGUAGE_MAX_LENGTH || value.length > 256) {
+    return { ok: false, error: "Target language must be at most 64 characters." };
+  }
+  return { ok: true, value: trimmed };
+}
+
 // src/shared/openstax.ts
 function bookSlug(value) {
   return typeof value === "string" && /^[\p{L}\p{N}][\p{L}\p{N}_-]{0,239}$/u.test(value);
@@ -70,9 +108,6 @@ function hasDecoderRepetition(result, source2 = "") {
 function translationQualityError(source2, result) {
   if (hasDecoderRepetition(result, source2)) return "The model returned repeated text. Retry the page translation.";
   if (isUntranslatedEnglish(source2, result)) return "The model returned the original English passage. Retry the page translation.";
-}
-function targetsSimplifiedChinese(language) {
-  return /^(?:simplified chinese|chinese(?:\s*\(simplified\))?|zh(?:[-_](?:cn|hans)(?:[-_]cn)?)?)$/i.test(language.trim());
 }
 
 // src/shared/web-article.ts
@@ -532,6 +567,15 @@ var sample = {
   defaultPage: 6
 };
 var hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+function translationCacheSlug(targetLanguage = DEFAULT_TARGET_LANGUAGE) {
+  const parsed = parseTargetLanguage(targetLanguage);
+  if (!parsed.ok) fail(parsed.error, 400);
+  const preset = findTargetLanguagePreset(parsed.value);
+  if (preset) return preset.slug;
+  const normalized = parsed.value.normalize("NFC").toLowerCase();
+  const ascii = normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+  return "custom-" + (ascii ? ascii + "-" : "") + hash(normalized).slice(0, 16);
+}
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -819,26 +863,29 @@ var Library = class {
       this.imageJobs.delete(file);
     }
   }
-  pageFile(id, page) {
+  pageFile(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
     if (!validDocId(id) || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 1e5) fail("Invalid document or page number.");
-    return path.join(this.translationDir, id, page + ".json");
+    const slug = translationCacheSlug(targetLanguage);
+    return slug ? path.join(this.translationDir, id, slug, page + ".json") : path.join(this.translationDir, id, page + ".json");
   }
-  async translations(id, page) {
-    const file = this.pageFile(id, page);
+  async translations(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
+    const file = this.pageFile(id, page, targetLanguage);
+    const chinese = typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
     try {
       const data = JSON.parse(await readFile(file, "utf8"));
       if (!isRecord(data) || !Object.values(data).every((v) => typeof v === "string")) fail("The translation cache is damaged.", 500);
       const translations = data;
-      if (typeof id === "string" && /^(?:web|book)-/.test(id)) return translations;
+      if (typeof id === "string" && /^(?:web|book)-/.test(id) || !chinese) return translations;
       return Object.fromEntries(Object.entries(translations).filter(([, text2]) => !hasDecoderRepetition(text2)));
     } catch (error) {
       if (isFsError(error, "ENOENT")) return {};
       throw error;
     }
   }
-  async translate(id, page, input, translate) {
+  async translate(id, page, input, translate, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
     const doc = await this.get(id);
-    const file = this.pageFile(id, page);
+    const file = this.pageFile(id, page, targetLanguage);
+    const checkChineseQuality = doc.kind === "pdf" && typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
     if (!Array.isArray(input) || !input.length || input.length > 4e3) fail("No translatable paragraphs or page too long.");
     const seen = /* @__PURE__ */ new Set();
     const blocks3 = input.map((b) => {
@@ -849,15 +896,15 @@ var Library = class {
     const previous = this.jobs.get(file);
     const job = (async () => {
       if (previous) await previous.catch(() => void 0);
-      const result = await this.translations(id, page);
-      const pending = blocks3.filter((b) => !result[b.id]?.trim() || doc.kind === "pdf" && translationQualityError(b.text, result[b.id]));
+      const result = await this.translations(id, page, targetLanguage);
+      const pending = blocks3.filter((b) => !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
       await mkdir(path.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i, i + 8);
         const translated = await translate(batch, doc.kind);
         for (const { id: key2, text: text2 } of batch) {
           if (!translated[key2]?.trim()) fail("The model omitted a paragraph. Retry to resume the translation.", 502);
-          const problem = doc.kind === "pdf" && translationQualityError(text2, translated[key2]);
+          const problem = checkChineseQuality && translationQualityError(text2, translated[key2]);
           if (problem) fail(problem, 502);
           result[key2] = translated[key2];
         }
@@ -1075,10 +1122,16 @@ function pageNumber(value) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new ServiceError(400, "The page number must be a positive integer.");
   return value;
 }
+function readTargetLanguage(value) {
+  const parsed = parseTargetLanguage(value);
+  if (!parsed.ok) throw new ServiceError(400, parsed.error);
+  return parsed.value;
+}
 var initialSettings = {
   baseUrl: "https://api.deepseek.com",
   model: "deepseek-flash",
   apiKey: "",
+  targetLanguage: DEFAULT_TARGET_LANGUAGE,
   vaultPath: "",
   zoteroLibraryId: "",
   zoteroLibraryType: "user",
@@ -1109,11 +1162,13 @@ function mergeSettings(current, input) {
   if (zoteroMode !== "web" && zoteroMode !== "desktop") throw new ServiceError(400, "Choose a Zotero connection.");
   if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, "The Zotero library ID must be a positive integer.");
   const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
+  const targetLanguage = input.targetLanguage === void 0 ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
   return {
     questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
     model,
     baseUrl,
     apiKey: updatedSecret(sameOrigin ? current.apiKey : "", input.apiKey, input.clearApiKey),
+    targetLanguage,
     vaultPath: vault ? path2.resolve(vault) : "",
     zoteroLibraryType: type,
     zoteroLibraryId: id,
@@ -2805,6 +2860,7 @@ var ReaderModel = class {
       model: settings.model,
       baseUrl: settings.baseUrl,
       hasApiKey: Boolean(settings.apiKey),
+      targetLanguage: settings.targetLanguage,
       questionModel: settings.questionModel,
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind,
@@ -2890,7 +2946,7 @@ var ReaderModel = class {
   async passage(settings, input, streamOptions) {
     const mode = input.mode;
     if (mode !== "translate" && mode !== "explain" && mode !== "followup") throw new ServiceError(400, "Choose translate, explain or followup.");
-    const target = single(input.targetLanguage ?? "Simplified Chinese", "target language", 64, true);
+    const target = input.targetLanguage === void 0 ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
     const attachments = hostAttachments(this.#ctx);
     const image = input.image === void 0 ? void 0 : await readRegionImage(input.image, attachments);
     if (!image && input.regionText !== void 0) throw new ServiceError(400, "The screenshot is missing. Select the area again.");
@@ -2974,7 +3030,7 @@ var ReaderModel = class {
       ids.add(id);
       return { id, text: stringValue(block.text, "selected passage", 24e3, true) };
     });
-    const target = single(input.targetLanguage ?? "Simplified Chinese", "target language", 64, true);
+    const target = input.targetLanguage === void 0 ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
     const chinesePdf = input.documentKind !== "web" && targetsSimplifiedChinese(target);
     let raw;
     try {
@@ -3870,6 +3926,7 @@ async function boundedBody(request, limit) {
 function apply(ctx) {
   const root = process.env.PAPER_READER_HOME || path10.join(process.env.DSH_HOME || path10.join(os.homedir(), ".dsh"), "paper-reader");
   const library = new Library(root);
+  const store = new ReaderStore(root);
   const models = {};
   let listener;
   ctx.inject(["webServer"], (child) => {
@@ -3899,10 +3956,10 @@ function apply(ctx) {
     };
   });
   ctx.inject(["attachments"], (child) => {
-    const store = child.attachments;
-    models.attachments = store;
+    const store2 = child.attachments;
+    models.attachments = store2;
     return () => {
-      if (models.attachments === store) delete models.attachments;
+      if (models.attachments === store2) delete models.attachments;
     };
   });
   const service = createServices({ root, ctx: models });
@@ -3979,14 +4036,18 @@ function apply(ctx) {
         return json(await openWebArticle(library, input.url));
       case "book.section":
         return json({ doc: await library.bookSection(input.docId, input.page) });
-      case "translation.get":
-        return json({ translations: await library.translations(input.docId, input.page) });
-      case "translation.page":
+      case "translation.get": {
+        const targetLanguage = input.targetLanguage === void 0 ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
+        return json({ translations: await library.translations(input.docId, input.page, targetLanguage) });
+      }
+      case "translation.page": {
+        const targetLanguage = input.targetLanguage === void 0 ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
         return json({ translations: await library.translate(input.docId, input.page, input.blocks, async (blocks3, documentKind) => {
-          const result = await service("ai.blocks", { blocks: blocks3, documentKind });
+          const result = await service("ai.blocks", { blocks: blocks3, documentKind, targetLanguage });
           if (!isRecord(result) || !isRecord(result.translations) || !Object.values(result.translations).every((v) => typeof v === "string")) fail("The model returned an invalid translation.", 502);
           return result.translations;
-        }) });
+        }, targetLanguage) });
+      }
       case "ai":
       case "chat.ask": {
         const op = body.op;

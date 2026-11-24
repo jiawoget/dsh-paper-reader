@@ -1,5 +1,6 @@
 import type { Box, Passage } from './model.js';
 import type { ReadingSide } from '../../shared/types.js';
+import { DEFAULT_TARGET_LANGUAGE } from '../../shared/languages.js';
 
 export function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -19,11 +20,11 @@ export interface Sheet {
   resize(): void;
 }
 
-export function makeSheet(side: ReadingSide, page: number, window: Box, width: number, height: number): Sheet {
+export function makeSheet(side: ReadingSide, page: number, window: Box, width: number, height: number, targetLanguage = DEFAULT_TARGET_LANGUAGE): Sheet {
   const outer = element('div', 'pdf-sheet');
   outer.dataset.pdfSide = side;
   outer.setAttribute('role', 'group');
-  outer.ariaLabel = (side === 'source' ? 'Original' : 'Simplified Chinese') + ', page ' + page;
+  outer.ariaLabel = (side === 'source' ? 'Original' : targetLanguage) + ', page ' + page;
   const scale = element('div', 'pdf-scale-plane');
   const plane = element('div', 'pdf-coordinate-plane');
   place(plane, { x: -window.x, y: -window.y, width, height });
@@ -62,9 +63,9 @@ export function newAnchor(passage: Passage, figure = false): HTMLElement {
   return node;
 }
 
-export function translatedText(passage: Passage): HTMLDivElement {
+export function translatedText(passage: Passage, lang: string | null = 'zh-CN'): HTMLDivElement {
   const node = element('div', 'pdf-translated-text');
-  node.lang = 'zh-CN';
+  if (lang) node.lang = lang;
   node.dir = 'auto';
   node.dataset.blockId = passage.id;
   node.dataset.role = passage.role;

@@ -34,7 +34,7 @@ export class PdfFocus {
   private effective: TranslationFocus = 'page';
   constructor(private layout: PageLayout, private entries: Map<string, FocusEntry>, private source: Sheet,
     private target: Sheet, mode: TranslationFocus, initial: string | undefined, private changed: (id: string, label: string) => void,
-    private repaint: (refit: boolean) => void, signal: AbortSignal) {
+    private repaint: (refit: boolean) => void, signal: AbortSignal, private targetLabel = 'Simplified Chinese') {
     this.columns = columns(layout);
     this.mode = mode;
     this.id = initial && layout.passages.some(p => p.id === initial) ? initial :
@@ -68,7 +68,7 @@ export class PdfFocus {
     this.id = id;
     if (this.mode === 'page') {
       this.target.outer.dataset.activeBlock = id;
-      this.changed(id, 'Simplified Chinese');
+      this.changed(id, this.targetLabel);
       return;
     }
     this.apply();
@@ -89,7 +89,7 @@ export class PdfFocus {
       for (const node of [placed.source, placed.target, placed.translated]) node.classList.toggle('is-reading', active);
     }
     this.target.setWindow(column ? { ...page, x: column.left, width: column.right - column.left } : page);
-    let label = 'Simplified Chinese';
+    let label = this.targetLabel;
     if (this.mode === 'column' && column) label = this.columns.length === 1 ? 'Single printed column' :
       this.columns.length === 2 ? (index === 0 ? 'Left printed column' : 'Right printed column') : 'Printed column ' + (index + 1);
     else if (this.effective === 'passage' && entry) label = entry.passage.label;

@@ -1,5 +1,6 @@
 import type { ChatSource, Operations, ReadingSide } from '../shared/types.js';
 import { maxPreviousMaterials } from '../shared/types.js';
+import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47, targetLanguageLabel, targetsSimplifiedChinese } from '../shared/languages.js';
 import { answerMarkdown, selectedAnswer } from './answer-markdown.js';
 import { AnswerNotebookAction } from './answer-notebook.js';
 import { readQuestions, saveQuestions, type AnswerQuote, type MessageDraft } from './discussion-drafts.js';
@@ -101,9 +102,22 @@ export class SelectionChat {
         return this.notes.show();
       }, 'text-btn chat-write-note'));
     }
-    if (item.hit.side === 'translation' && item.hit.regionText === undefined) {
-      this.starters.append(button('Translate to English', () => this.ask({ mode: 'translate', prompt: 'Translate this selection into English.' }), 'chat-starter'));
-      content.append(this.starters);
+    if (item.hit.regionText === undefined) {
+      const target = this.app.state.settings.targetLanguage || DEFAULT_TARGET_LANGUAGE;
+      const targetName = label(targetLanguageLabel(target, false), targetLanguageLabel(target, true));
+      if (item.hit.side === 'translation') {
+        if (targetLanguageBcp47(target) !== 'en') {
+          this.starters.append(button('Translate to English', () => this.ask({ mode: 'translate', prompt: 'Translate this selection into English.' }), 'chat-starter'));
+          content.append(this.starters);
+        }
+      } else if (!targetsSimplifiedChinese(target)) {
+        this.starters.append(button(
+          label('Translate to ' + targetName, '翻译为' + targetName),
+          () => this.ask({ mode: 'translate', prompt: label('Translate this selection into ' + targetName + '.', '将此选段翻译为' + targetName + '。') }),
+          'chat-starter'
+        ));
+        content.append(this.starters);
+      }
     }
     content.append(this.log, this.quoteBar, this.connection, this.form);
     const signal = this.events.signal;
@@ -475,11 +489,12 @@ export class SelectionChat {
         readerNotes: readerNoteTexts(notesForRecordedSource(savedNotes, source)),
         image: isScreenshotAnchor(source.anchor) ? await this.app.discussionScreenshot(source) : undefined
       })));
+      const target = this.app.state.settings.targetLanguage || DEFAULT_TARGET_LANGUAGE;
       request.payload ??= { mode: request.mode, text: item.selection, context: context.join('\n\n'),
         ...(item.hit.regionText !== undefined && { image: item.hit.image, regionText: item.hit.regionText }),
         previousMaterial, readerNotes: readerNoteTexts(notesForSelection(savedNotes, item)),
         question: request.mode === 'followup' ? request.prompt : undefined, answerQuote: request.quote?.text, history,
-        targetLanguage: request.mode === 'translate' && item.hit.side === 'translation' ? 'English' : undefined,
+        targetLanguage: request.mode === 'translate' && item.hit.side === 'translation' ? 'English' : target,
         record: { docId: item.source.docId, requestId: request.requestId, thread: this.thread,
           question: request.prompt, source: chatSource(item), answerQuote: request.quote?.text, answerTurn: request.quote?.turn } };
       const controller = request.controller = new AbortController();
