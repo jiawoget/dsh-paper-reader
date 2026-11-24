@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isObject, ServiceError } from './service-types.js';
@@ -29,12 +28,9 @@ function workerEnvironment(): NodeJS.ProcessEnv {
     if (process.env[key]) environment[key] = process.env[key];
   }
   if (process.platform === 'win32') {
-    const installed = path.join(homedir(), '.cache', 'codex-runtimes', 'codex-primary-runtime', 'dependencies', 'native', 'libheif', 'libheif', 'bin');
-    for (const directory of [process.env.PAPER_READER_MT_RUNTIME_DIR, installed]) {
-      if (directory && path.isAbsolute(directory) && existsSync(path.join(directory, 'msvcp140.dll'))) {
-        environment.PATH = (environment.PATH ?? '') + path.delimiter + directory;
-        break;
-      }
+    const runtimeDir = process.env.PAPER_READER_MT_RUNTIME_DIR;
+    if (runtimeDir && path.isAbsolute(runtimeDir) && existsSync(path.join(runtimeDir, 'msvcp140.dll'))) {
+      environment.PATH = (environment.PATH ?? '') + path.delimiter + runtimeDir;
     }
   }
   return environment;

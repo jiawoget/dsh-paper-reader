@@ -2385,10 +2385,10 @@ function requestDocument(records, input, sources) {
   return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries("note", docId, chapter)) }, sources, false);
 }
 var PaperNotebooks = class {
-  constructor(database, library, launch) {
+  constructor(database, library, launch2) {
     this.database = database;
     this.library = library;
-    this.launch = launch;
+    this.launch = launch2;
   }
   database;
   library;
@@ -2511,32 +2511,60 @@ var PaperNotebooks = class {
 // src/server/obsidian-desktop.ts
 import { spawn } from "node:child_process";
 import { statSync as statSync2 } from "node:fs";
+import { homedir } from "node:os";
 import path7 from "node:path";
-function installedObsidian() {
-  if (process.platform !== "win32") return;
-  const directories = [process.env.LOCALAPPDATA && path7.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
-  const executable = directories.filter((dir) => Boolean(dir && path7.isAbsolute(dir))).map((dir) => path7.join(dir, "Obsidian", "Obsidian.exe")).find((file) => {
-    try {
-      return statSync2(file, { throwIfNoEntry: false })?.isFile();
-    } catch {
-      return false;
-    }
-  });
-  if (!executable) return;
-  return (uri) => new Promise((resolve, reject) => {
-    const child = spawn(executable, [uri], { shell: false, detached: true, stdio: "ignore", windowsHide: false });
-    child.once("error", () => reject(new ServiceError(503, "Windows could not start Obsidian. Open the notebook link with the Obsidian app.")));
+var isFile = (file) => {
+  try {
+    return Boolean(statSync2(file, { throwIfNoEntry: false })?.isFile());
+  } catch {
+    return false;
+  }
+};
+var isDir = (file) => {
+  try {
+    return Boolean(statSync2(file, { throwIfNoEntry: false })?.isDirectory());
+  } catch {
+    return false;
+  }
+};
+var onPath = (name2) => (process.env.PATH ?? "").split(path7.delimiter).filter((dir) => path7.isAbsolute(dir)).map((dir) => path7.join(dir, name2)).find(isFile);
+function launch(command, args, errorMessage) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { shell: false, detached: true, stdio: "ignore", windowsHide: false });
+    child.once("error", () => reject(new ServiceError(503, errorMessage)));
     child.once("spawn", () => {
       child.unref();
       resolve();
     });
   });
 }
+function installedObsidian() {
+  if (process.platform === "win32") {
+    const directories = [process.env.LOCALAPPDATA && path7.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
+    const executable = directories.filter((dir) => Boolean(dir && path7.isAbsolute(dir))).map((dir) => path7.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
+    if (!executable) return;
+    return (uri) => launch(executable, [uri], "Windows could not start Obsidian. Open the notebook link with the Obsidian app.");
+  }
+  if (process.platform === "darwin") {
+    if (!["/Applications/Obsidian.app", path7.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
+    return (uri) => launch("/usr/bin/open", ["-a", "Obsidian", uri], "macOS could not start Obsidian. Open the notebook link with the Obsidian app.");
+  }
+  if (process.platform === "linux") {
+    const opener = onPath("xdg-open");
+    const present = Boolean(onPath("obsidian") || [
+      "/opt/Obsidian/obsidian",
+      "/var/lib/flatpak/exports/bin/md.obsidian.Obsidian",
+      path7.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
+    ].some(isFile));
+    if (!opener || !present) return;
+    return (uri) => launch(opener, [uri], "Could not start Obsidian via xdg-open. Open the notebook link with the Obsidian app.");
+  }
+  return;
+}
 
 // src/server/local-translation.ts
 import { execFile } from "node:child_process";
 import { existsSync as existsSync2, statSync as statSync3 } from "node:fs";
-import { homedir } from "node:os";
 import path9 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -2579,12 +2607,9 @@ function workerEnvironment() {
     if (process.env[key2]) environment[key2] = process.env[key2];
   }
   if (process.platform === "win32") {
-    const installed = path9.join(homedir(), ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "native", "libheif", "libheif", "bin");
-    for (const directory of [process.env.PAPER_READER_MT_RUNTIME_DIR, installed]) {
-      if (directory && path9.isAbsolute(directory) && existsSync2(path9.join(directory, "msvcp140.dll"))) {
-        environment.PATH = (environment.PATH ?? "") + path9.delimiter + directory;
-        break;
-      }
+    const runtimeDir = process.env.PAPER_READER_MT_RUNTIME_DIR;
+    if (runtimeDir && path9.isAbsolute(runtimeDir) && existsSync2(path9.join(runtimeDir, "msvcp140.dll"))) {
+      environment.PATH = (environment.PATH ?? "") + path9.delimiter + runtimeDir;
     }
   }
   return environment;
