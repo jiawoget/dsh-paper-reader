@@ -116,6 +116,13 @@ export function extractArticle<N>(root: N, tree: ArticleTree<N>, address: string
     if (name === 'base' && !documentBase) documentBase = articleUrl(attr(node, 'href') || '', address)?.href;
     if (name === 'title' && !pageTitle) pageTitle = clean(tree.text(node));
     if (name === 'meta') { collectMeta(node); return; }
+    if (name === 'head') {
+      for (const child of children(node)) {
+        const childName = tag(child);
+        if (childName === 'base' || childName === 'title' || childName === 'meta') find(child, depth + 1, storyPart);
+      }
+      return;
+    }
     if (excluded(node)) return;
     if (researchBlog) {
       const names = classes(node);

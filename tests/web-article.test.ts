@@ -3,10 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { parse } from 'parse5';
+import { htmlTree } from '../src/server/article-dom.js';
 import { Library } from '../src/server/library.js';
 import { publicAddress, publicResource } from '../src/server/public-resource.js';
 import { parseWebArticle } from '../src/server/web-article.js';
 import { buildCitationMetadata, formatBibTeX, formatRIS } from '../src/shared/citation-export.js';
+import { extractArticle } from '../src/shared/web-article.js';
 
 test('HTML and saved webpages keep quote anchors, publication structure and relative figure links', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'dsh-web-article-'));
@@ -131,4 +134,61 @@ test('parseWebArticle extracts academic HTML meta tags and persists sanitized ci
   assert.equal(fallback.doi, undefined);
   assert.equal(fallback.publisher, 'Royal Society');
   assert.equal(fallback.abstract, 'Fallback abstract from OpenGraph.');
+});
+
+test('extractArticle extracts head bibliographic meta tags under browser-like invisible callback and excludes template/noscript', () => {
+  const url = 'https://journal.example.org/papers/extension-meta';
+  const html = `<!doctype html><html><head>
+    <base href="https://journal.example.org/assets/">
+    <title>Journal Site</title>
+    <meta name="citation_title" content="Structured Attention for Long Contexts">
+    <meta name="citation_author" content="Van der Waals, Johannes Diderik">
+    <meta name="citation_author" content="AT&amp;T Research">
+    <meta name="citation_journal_title" content="Journal of Machine Reading">
+    <meta name="citation_publication_date" content="2024/05/12">
+    <meta name="citation_publisher" content="Academic Press">
+    <meta name="citation_doi" content="https://doi.org/10.1000/jmr.2024.09">
+    <meta name="citation_abstract" content="Abstract captured in browser DOM.">
+    <template><meta name="citation_title" content="Template Poison"><meta name="citation_author" content="Template Author"></template>
+    <noscript><meta name="citation_title" content="Noscript Poison"><meta name="citation_publisher" content="Noscript Press"></noscript>
+  </head><body>
+    <template><meta name="citation_doi" content="10.9999/template"></template>
+    <noscript><meta name="citation_doi" content="10.9999/noscript"></noscript>
+    <article><h1>Structured Attention</h1><p>Body paragraph with sufficient text.</p><img src="fig.png" alt="Figure"></article>
+  </body></html>`;
+
+  const hiddenHeadTags = new Set(['head', 'meta', 'title', 'base', 'style', 'script']);
+  const browserLikeTree = {
+    ...htmlTree,
+    invisible: (node: Parameters<typeof htmlTree.tag>[0]) => hiddenHeadTags.has(htmlTree.tag(node))
+  };
+
+  const serverArticle = parseWebArticle(html, url);
+  const extensionArticle = extractArticle(parse(html, { scriptingEnabled: false }), browserLikeTree, url, '').article;
+
+  assert.equal(extensionArticle.paperTitle, serverArticle.paperTitle);
+  assert.equal(extensionArticle.authors, serverArticle.authors);
+  assert.equal(extensionArticle.venue, serverArticle.venue);
+  assert.equal(extensionArticle.year, serverArticle.year);
+  assert.equal(extensionArticle.doi, serverArticle.doi);
+  assert.equal(extensionArticle.publisher, serverArticle.publisher);
+  assert.equal(extensionArticle.abstract, serverArticle.abstract);
+  assert.equal(extensionArticle.paperTitle, 'Structured Attention for Long Contexts');
+  assert.equal(extensionArticle.authors, 'Van der Waals, Johannes Diderik; AT&T Research');
+  assert.equal(extensionArticle.articleLayout?.['p-3']?.image?.url, 'https://journal.example.org/assets/fig.png');
+
+  const excludedMetaHtml = `<!doctype html><html><head>
+    <template><meta name="citation_title" content="Template Title"><meta name="citation_doi" content="10.1000/tpl"></template>
+    <noscript><meta name="citation_author" content="Noscript Author"><meta name="citation_publisher" content="Noscript Press"></noscript>
+  </head><body>
+    <template><meta name="citation_venue" content="Template Venue"></template>
+    <noscript><meta name="citation_abstract" content="Noscript Abstract"></noscript>
+    <article><h1>Visible Heading</h1><p>Visible content.</p></article>
+  </body></html>`;
+  const excludedResult = extractArticle(parse(excludedMetaHtml, { scriptingEnabled: false }), browserLikeTree, url, '').article;
+  assert.equal(excludedResult.paperTitle, undefined);
+  assert.equal(excludedResult.authors, undefined);
+  assert.equal(excludedResult.doi, undefined);
+  assert.equal(excludedResult.publisher, undefined);
+  assert.equal(excludedResult.abstract, undefined);
 });

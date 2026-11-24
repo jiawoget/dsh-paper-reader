@@ -26,6 +26,23 @@ function assertBalancedBraces(bibtex: string): void {
   assert.equal(depth, 0, `Unbalanced braces (final depth=${depth}) in:\n${bibtex}`);
 }
 
+function assertLatexBalancedBraces(bibtex: string): void {
+  let depth = 0;
+  for (let i = 0; i < bibtex.length; i++) {
+    const ch = bibtex[i];
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      assert.ok(depth >= 0, `Unbalanced LaTeX closing brace at index ${i} in:\n${bibtex}`);
+    }
+  }
+  assert.equal(depth, 0, `Unbalanced LaTeX braces (final depth=${depth}) in:\n${bibtex}`);
+}
+
 test('bundled pagedattention exports complete BibTeX and RIS with arXiv eprint and deterministic citekey', () => {
   const meta = buildCitationMetadata(sample);
   assert.equal(meta.title, sample.paperTitle);
@@ -304,4 +321,76 @@ test('T1-F3-06 & T2-F3-08: Zotero merge enriches sparse PDFs and preserves local
   assert.equal(merged.doi, '10.1000/local.doi');
   assert.equal(merged.url, 'https://arxiv.org/abs/2309.06180');
   assert.equal(merged.arxivId, '2309.06180');
+});
+
+test('regression: capitalized nobiliary particles and institutional ampersands are preserved by parseAuthors', () => {
+  assert.deepEqual(parseAuthors('Van der Waals, Johannes Diderik'), ['Van der Waals, Johannes Diderik']);
+  assert.deepEqual(parseAuthors('De la Cruz, Maria Elena'), ['De la Cruz, Maria Elena']);
+  assert.deepEqual(parseAuthors('Von Neumann, John Louis'), ['Von Neumann, John Louis']);
+  assert.deepEqual(parseAuthors('AT&T Research'), ['AT&T Research']);
+  assert.deepEqual(parseAuthors('Smith, Alice & Doe, Bob'), ['Smith, Alice', 'Doe, Bob']);
+  assert.deepEqual(parseAuthors('Alice Smith, & Bob Jones'), ['Alice Smith', 'Bob Jones']);
+});
+
+test('regression: BibTeX and RIS neutralize trailing backslashes and Unicode line separators in URL/DOI/eprint and text', () => {
+  const bib = formatBibTeX({
+    title: 'Test\u2028Title\u2029Line\u0085End',
+    url: 'https://example.org/path\\\u2028a\u2029b\u0085c',
+    doi: '10.1000/foo\\}\\}\u2028x\u2029y\u0085z',
+    arxivId: '2309.06180\\\u2028\u2029\u0085',
+    year: '2025'
+  });
+  assertBalancedBraces(bib);
+  assertLatexBalancedBraces(bib);
+  assert.equal(/[\u0085\u2028\u2029]/.test(bib), false, bib);
+  assert.ok(bib.includes('  title = {Test Title Line End},'), bib);
+  assert.ok(bib.includes('  doi = {10.1000/fooxyz},'), bib);
+  assert.ok(bib.includes('  url = {https://example.org/path%5Cabc},'), bib);
+  assert.ok(bib.includes('  eprint = {2309.06180},'), bib);
+
+  const ris = formatRIS({
+    title: 'Before\u0085ER  - \u2028AU  - Fake\u2029End',
+    url: 'https://example.org/a\u0085b\u2028c\u2029d'
+  });
+  assert.equal(/[\u0085\u2028\u2029]/.test(ris), false, ris);
+  const lines = ris.split('\n');
+  assert.deepEqual(lines, [
+    'TY  - GEN',
+    'TI  - Before ER - AU - Fake End',
+    'UR  - https://example.org/a b c d',
+    'ER  - '
+  ]);
+});
+
+test('regression: extractArxivId rejects non-HTTP schemes and spoofed DOI domains while keeping valid variants', () => {
+  assert.equal(extractArxivId('ftp://evil.com/10.48550/arXiv.2401.12345', undefined), undefined);
+  assert.equal(extractArxivId(undefined, 'https://evil.com/10.48550/arXiv.2401.12345'), undefined);
+  assert.equal(extractArxivId('https://evil.com/10.48550/arXiv.2401.12345', undefined), undefined);
+  assert.equal(extractArxivId('https://doi.org/https://doi.org/10.48550/arXiv.2401.12345', undefined), undefined);
+
+  assert.equal(extractArxivId('https://dx.doi.org/10.48550/arXiv.2401.12345'), '2401.12345');
+  assert.equal(extractArxivId(undefined, 'https://doi.org/10.48550/arXiv.2401.12345'), '2401.12345');
+  assert.equal(extractArxivId(undefined, 'https://dx.doi.org/10.48550/arXiv.2401.12345v2'), '2401.12345');
+  assert.equal(extractArxivId(undefined, 'doi:10.48550/arXiv.2401.12345'), '2401.12345');
+  assert.equal(extractArxivId('doi:10.48550/arXiv.2401.12345'), '2401.12345');
+  assert.equal(extractArxivId('10.48550/arXiv.2401.12345'), '2401.12345');
+});
+
+test('regression: control-character-only title falls back to Untitled and empty optional fields are omitted', () => {
+  const ctrlOnly: CitationMetadata = {
+    title: '\x00\x07\x1b',
+    authors: ['\x07', '\u2028'],
+    venue: '\x07',
+    publisher: '\u2029',
+    abstract: '\u0085'
+  };
+  const bib = formatBibTeX(ctrlOnly);
+  assertBalancedBraces(bib);
+  assert.match(bib, /^@misc\{ref[a-f0-9]{8},\n  title = \{Untitled\}\n\}$/);
+
+  const ris = formatRIS(ctrlOnly);
+  assert.equal(ris, 'TY  - GEN\nTI  - Untitled\nER  - ');
+
+  const mixedAuthorsBib = formatBibTeX({ title: 'Valid Title', authors: ['\x07', 'Alice Smith'] });
+  assert.ok(mixedAuthorsBib.includes('  author = {Alice Smith}\n}'), mixedAuthorsBib);
 });

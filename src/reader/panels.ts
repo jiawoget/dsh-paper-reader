@@ -302,20 +302,23 @@ export function referencePanel(app:ReaderPort,parent:HTMLElement):void {
   };
   const copyCitation=async(format:'bibtex'|'ris')=>{
     if(!zoteroSettled)await waitForZotero();
+    if(!exportSection.isConnected || app.doc.id!==doc.id)return;
     const {content}=buildCitationPayload(format);
     const copied=await copyText(content);
+    if(!exportSection.isConnected || app.doc.id!==doc.id)return;
     const feedback=copied
       ? (format==='bibtex'?label('BibTeX copied to clipboard.','BibTeX 已复制到剪贴板。'):label('RIS copied to clipboard.','RIS 已复制到剪贴板。'))
       : label('Clipboard access was blocked. Use Download instead.','剪贴板权限受限，请改用下载按钮。');
-    if(exportStatus.isConnected)exportStatus.textContent=feedback;
+    exportStatus.textContent=feedback;
     toast(feedback);
   };
   const downloadCitation=async(format:'bibtex'|'ris')=>{
     if(!zoteroSettled)await waitForZotero();
+    if(!exportSection.isConnected || app.doc.id!==doc.id)return;
     const {content,filename}=buildCitationPayload(format);
     downloadFile(filename,content,format==='bibtex'?'application/x-bibtex;charset=utf-8':'application/x-research-info-systems;charset=utf-8');
     const feedback=label(`Downloaded ${filename}.`,`已下载 ${filename}。`);
-    if(exportStatus.isConnected)exportStatus.textContent=feedback;
+    exportStatus.textContent=feedback;
     toast(feedback);
   };
   exportActions.append(

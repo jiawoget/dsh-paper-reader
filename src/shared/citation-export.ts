@@ -19,11 +19,11 @@ const ARXIV_NEW = '\\d{4}\\.\\d{4,5}';
 const ARXIV_OLD = '[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}';
 const ARXIV_ID_SOURCE = `(?:${ARXIV_NEW}|${ARXIV_OLD})`;
 const ARXIV_PATH_RE = new RegExp(`^\\/(?:abs|pdf|html|e-print|format)\\/(${ARXIV_ID_SOURCE})(?:v\\d+)?(?:\\.pdf)?\\/?$`, 'i');
-const ARXIV_DOI_RE = new RegExp(`(?:^|\\/|doi:\\s*)10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, 'i');
+const ARXIV_DOI_RE = new RegExp(`^(?:https?:\\/\\/(?:dx\\.)?doi\\.org\\/|doi:\\s*)?10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, 'i');
 const ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`, 'i');
 const YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
 const NAME_SUFFIX_RE = /^(?:jr\.?|sr\.?|ii|iii|iv|v|ph\.?d\.?|m\.?d\.?)$/i;
-const NOBILIARY_PARTICLE_RE = /^(?:van|von|de|del|della|di|da|du|la|le|der|den|ter|ten|dos|das)\b/;
+const NOBILIARY_PARTICLE_RE = /^(?:van|von|de|del|della|di|da|du|la|le|der|den|ter|ten|dos|das)\b/i;
 const CONFERENCE_VENUE_RE = /\b(?:sosp|osdi|nsdi|sigcomm|sigmod|vldb|icml|neurips|nips|iclr|cvpr|iccv|eccv|acl|emnlp|naacl|aaai|ijcai|chi|uist|pldi|popl|icse|fse|ase|ccs|ndss|usenix|eurosys|asplos|isca|micro|hpca|sc|kdd|www|icde|pods|stoc|focs|soda|crypto|eurocrypt|proc(?:eedings)?|conf(?:erence)?|symp(?:osium)?|workshop|colloquium|congress)\b/i;
 const TITLE_STOPWORDS = new Set([
   'a', 'an', 'the', 'of', 'on', 'in', 'for', 'to', 'and', 'or', 'with',
@@ -84,7 +84,7 @@ const ZOTERO_RIS_TYPES: Record<string, string> = {
 function nonEmpty(value?: string | null): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return trimmed && normalizeInline(trimmed) ? trimmed : undefined;
 }
 
 function cleanDoi(value?: string | null): string | undefined {
@@ -122,7 +122,7 @@ function fnv1aHex(seed: string): string {
 }
 
 function normalizeInline(value: string): string {
-  return value.replace(/[\r\n\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function escapeBibTeX(value: string): string {
@@ -131,15 +131,16 @@ function escapeBibTeX(value: string): string {
 
 function sanitizeBibTeXUrl(value: string): string {
   return value
-    .replace(/[\r\n\t\u0000-\u001f\u007f]+/g, '')
+    .replace(/[\r\n\t\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, '')
     .trim()
+    .replace(/\\/g, '%5C')
     .replace(/\{/g, '%7B')
     .replace(/\}/g, '%7D');
 }
 
 function sanitizeBibTeXIdentifier(value: string): string {
   return value
-    .replace(/[\r\n\t\u0000-\u001f\u007f{}]+/g, '')
+    .replace(/[\r\n\t\u0000-\u001f\u007f\u0085\u2028\u2029{}\\]+/g, '')
     .trim();
 }
 
@@ -171,7 +172,7 @@ export function parseAuthors(raw?: string): string[] {
     segments = source.split(/\s*、\s*/);
   } else {
     segments = source
-      .split(/\s*,\s+and\s+|\s+and\s+|\s*&\s*/i)
+      .split(/\s*,\s+and\s+|\s+and\s+|\s*,\s*&\s+|\s+&\s+/i)
       .flatMap(segment => splitCommaAuthors(segment.trim()));
   }
 
@@ -204,10 +205,13 @@ export function extractArxivId(url?: string, doi?: string): string | undefined {
         if (match) return match[1].toLowerCase();
       }
       if (/^(?:dx\.)?doi\.org$/i.test(parsed.hostname)) {
-        const match = ARXIV_DOI_RE.exec(parsed.pathname);
-        if (match) return match[1].toLowerCase();
+        const doiPath = parsed.pathname.slice(1);
+        if (doiPath.startsWith('10.')) {
+          const match = ARXIV_DOI_RE.exec(doiPath);
+          if (match) return match[1].toLowerCase();
+        }
       }
-    } else {
+    } else if (!parsed || parsed.protocol === 'arxiv:' || parsed.protocol === 'doi:') {
       const bare = ARXIV_BARE_RE.exec(rawUrl);
       if (bare) return bare[1].toLowerCase();
       const doiInUrl = ARXIV_DOI_RE.exec(rawUrl);
@@ -301,39 +305,40 @@ function resolveBibTeXType(meta: CitationMetadata): string {
 function formatBibTeXAuthors(authors?: string[]): string | undefined {
   if (!authors?.length) return undefined;
   const formatted = authors
-    .map(author => nonEmpty(author))
-    .filter((author): author is string => Boolean(author))
+    .map(author => normalizeInline(author ?? ''))
+    .filter(Boolean)
     .map(author => {
       if (/\s+et\s+al\.?$/i.test(author)) {
         const base = author.replace(/\s+et\s+al\.?$/i, '').trim();
         return base ? `${escapeBibTeX(base)} and others` : 'others';
       }
       return escapeBibTeX(author);
-    });
+    })
+    .filter(Boolean);
   return formatted.length ? formatted.join(' and ') : undefined;
 }
 
 export function formatBibTeX(meta: CitationMetadata): string {
   const type = resolveBibTeXType(meta);
   const key = buildCiteKey(meta);
-  const title = escapeBibTeX(nonEmpty(meta.title) ?? 'Untitled');
+  const title = escapeBibTeX(meta.title ?? '') || 'Untitled';
   const fields: [string, string][] = [['title', title]];
 
   const author = formatBibTeXAuthors(meta.authors);
   if (author) fields.push(['author', author]);
 
-  const venue = nonEmpty(meta.venue);
+  const venue = meta.venue ? escapeBibTeX(meta.venue) : '';
   if (venue) {
     const fieldName =
       type === 'inproceedings' || type === 'incollection' ? 'booktitle' :
       type === 'article' ? 'journal' :
       type === 'techreport' ? 'institution' :
       type === 'phdthesis' ? 'school' : 'howpublished';
-    fields.push([fieldName, escapeBibTeX(venue)]);
+    fields.push([fieldName, venue]);
   }
 
-  const publisher = nonEmpty(meta.publisher);
-  if (publisher) fields.push(['publisher', escapeBibTeX(publisher)]);
+  const publisher = meta.publisher ? escapeBibTeX(meta.publisher) : '';
+  if (publisher) fields.push(['publisher', publisher]);
 
   const year = extractYear(meta.year);
   if (year) fields.push(['year', year]);
@@ -359,8 +364,8 @@ export function formatBibTeX(meta: CitationMetadata): string {
     }
   }
 
-  const abstract = nonEmpty(meta.abstract);
-  if (abstract) fields.push(['abstract', escapeBibTeX(abstract)]);
+  const abstract = meta.abstract ? escapeBibTeX(meta.abstract) : '';
+  if (abstract) fields.push(['abstract', abstract]);
 
   const body = fields.map(([name, value]) => `  ${name} = {${value}}`).join(',\n');
   return `@${type}{${key},\n${body}\n}`;
@@ -380,7 +385,7 @@ export function formatRIS(meta: CitationMetadata): string {
   const type = resolveRISType(meta);
   const lines: string[] = [
     `TY  - ${type}`,
-    `TI  - ${normalizeInline(nonEmpty(meta.title) ?? 'Untitled')}`
+    `TI  - ${normalizeInline(meta.title ?? '') || 'Untitled'}`
   ];
 
   for (const author of meta.authors ?? []) {

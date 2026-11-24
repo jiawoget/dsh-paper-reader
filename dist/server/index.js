@@ -181,6 +181,13 @@ function extractArticle(root, tree, address2, fallbackTitle, picked) {
       collectMeta(node);
       return;
     }
+    if (name2 === "head") {
+      for (const child of children(node)) {
+        const childName = tag(child);
+        if (childName === "base" || childName === "title" || childName === "meta") find2(child, depth + 1, storyPart);
+      }
+      return;
+    }
     if (excluded(node)) return;
     if (researchBlog) {
       const names = classes(node);
