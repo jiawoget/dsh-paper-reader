@@ -104,8 +104,8 @@ async function decode(source: string, model: TranslationPipeline, terms: readonl
   if (!/[A-Za-z]{2}/.test(source)) return simplify(source);
   // A padded batch can continue past a shorter row's EOS in the JS Marian pipeline.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const options = attempt === 0 ? undefined : model.model._prepare_generation_config(null, { no_repeat_ngram_size: 3 });
-    const [row] = (await model(source, options)).flat();
+    const options = attempt === 0 ? undefined : { no_repeat_ngram_size: 3 };
+    const [row] = await model(source, options);
     let target = simplify(row?.translation_text.trim() ?? '');
     for (const term of terms) {
       const variant = residualForms.get(term.target);
