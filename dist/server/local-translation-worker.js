@@ -138,8 +138,8 @@ async function translatePassage(source, model) {
 async function decode(source, model, terms = []) {
   if (!/[A-Za-z]{2}/.test(source)) return simplify(source);
   for (let attempt = 0; attempt < 2; attempt++) {
-    const options = attempt === 0 ? void 0 : model.model._prepare_generation_config(null, { no_repeat_ngram_size: 3 });
-    const [row] = (await model(source, options)).flat();
+    const options = attempt === 0 ? void 0 : { no_repeat_ngram_size: 3 };
+    const [row] = await model(source, options);
     let target = simplify(row?.translation_text.trim() ?? "");
     for (const term of terms) {
       const variant = residualForms.get(term.target);
