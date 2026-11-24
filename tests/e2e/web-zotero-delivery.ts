@@ -99,14 +99,14 @@ function note(panel: Page, text: string) {
 }
 
 async function showNote(page: Page, text: string): Promise<void> {
-  const show = page.getByRole('button', { name: 'Show notebook', exact: true });
+  const show = page.getByRole('button', { name: 'Show notes', exact: true });
   if (await show.isVisible()) await show.click();
   await page.getByRole('tab', { name: 'Notes', exact: true }).click();
   await note(page, text).waitFor();
 }
 
 async function savePassageNote(page: Page, scope: Locator, quote: string, text: string, section?: string): Promise<void> {
-  const rail = page.getByRole('button', { name: 'Close notebook', exact: true });
+  const rail = page.getByRole('button', { name: 'Close notes', exact: true });
   if (await rail.isVisible()) await rail.click();
   await scope.scrollIntoViewIfNeeded();
   await scope.evaluate((element, value) => {
@@ -307,7 +307,7 @@ async function liveArticleAcceptance(): Promise<void> {
       await originalBlog.locator('.is-located').filter({ hasText: blog.quote }).waitFor();
       await screenshot(host, reader, 'live-go-blog-note-desktop');
       await reader.setViewportSize(mobileViewport);
-      await reader.getByRole('button', { name: 'Close notebook', exact: true }).click();
+      await reader.getByRole('button', { name: 'Close notes', exact: true }).click();
       await goToSection(reader, blog.section);
       await fitViewport(reader, originalBlog);
       await screenshot(host, reader, 'live-go-blog-390');

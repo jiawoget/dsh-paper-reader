@@ -49,9 +49,9 @@ export class SelectionNotes {
   constructor(private app: ReaderPort, private item: SelectionContext, private state: NoteState,
     private changed: () => void) {
     this.draftKey = 'reader.selection-note-draft.' + selectionKey(item);
-    this.action.title = 'Write directly in the paper notebook';
+    this.action.title = readerLabel('Write directly in Notes', '直接写入本篇笔记');
     this.state.draft ??= this.restoreDraft();
-    this.root.ariaLabel = 'Notes for this selection';
+    this.root.ariaLabel = readerLabel('Notes for this selection', '当前选区笔记');
     this.root.tabIndex = -1;
     this.root.append(this.savedList, this.composer);
     this.problem.setAttribute('role', 'alert');
@@ -204,7 +204,7 @@ export class SelectionNotes {
     this.savedList.replaceChildren();
     if (saved.length) {
       const header = el('div', 'saved-note-heading');
-      header.append(icon('check', 14), el('h3', '', saved.length === 1 ? 'Saved note' : 'Saved notes'));
+      header.append(icon('check', 14), el('h3', '', saved.length === 1 ? readerLabel('Saved note', '已保存的笔记') : readerLabel('Saved notes', '已保存的笔记')));
       this.savedList.append(header);
       for (const note of saved) {
         const row = el('article', 'selection-saved-note');
@@ -212,7 +212,7 @@ export class SelectionNotes {
         const body = el('div', 'selection-prose');
         body.dir = 'auto';
         body.innerHTML = answerMarkdown(note.text);
-        const edit = button('Edit', () => this.begin(note), 'text-btn', 'edit');
+        const edit = button(readerLabel('Edit', '编辑'), () => this.begin(note), 'text-btn', 'edit');
         edit.disabled = Boolean(draft);
         row.append(body, edit);
         this.savedList.append(row);
@@ -223,9 +223,9 @@ export class SelectionNotes {
     this.composer.replaceChildren();
     if (saved.length) {
       const footer = el('div', 'selection-note-footer');
-      const status = el('span', 'selection-status', saved.some(note => note.id === this.state.lastSaved) ? 'Note saved.' : '');
+      const status = el('span', 'selection-status', saved.some(note => note.id === this.state.lastSaved) ? readerLabel('Note saved.', '笔记已保存。') : '');
       status.setAttribute('role', 'status');
-      footer.append(status, button('Add another note', () => this.begin(), 'text-btn', 'plus'));
+      footer.append(status, button(readerLabel('Add another note', '再记一条'), () => this.begin(), 'text-btn', 'plus'));
       this.composer.append(footer);
     }
   }
@@ -233,8 +233,8 @@ export class SelectionNotes {
     const field = el('label', 'selection-note-field'), editor = el('textarea');
     const caption = el('span');
     field.append(caption, editor);
-    editor.ariaLabel = 'Your note';
-    editor.placeholder = 'Write a thought or save the paper quotation.';
+    editor.ariaLabel = readerLabel('Your note', '笔记内容');
+    editor.placeholder = readerLabel('Write a thought or save the paper quotation.', '记录想法，或直接保存所选引文。');
     editor.rows = 3;
     editor.value = draft.text;
     const submit = button('', () => this.save(draft), 'btn primary');
@@ -247,14 +247,14 @@ export class SelectionNotes {
       draft.start = editor.selectionStart;
       draft.end = editor.selectionEnd;
       this.persistDraft();
-      submit.textContent = draft.text.trim() ? 'Save note' : 'Save quote';
+      submit.textContent = draft.text.trim() ? readerLabel('Save note', '保存笔记') : readerLabel('Save quote', '保存引文');
     };
     editor.onkeydown = event => {
       if (event.key === 'Tab') remember();
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); submit.click(); }
     };
     const footer = el('div', 'selection-note-footer');
-    const cancel = button('Cancel', () => { this.clearDraft(); this.render(); }, 'text-btn');
+    const cancel = button(readerLabel('Cancel', '取消'), () => { this.clearDraft(); this.render(); }, 'text-btn');
     footer.append(cancel, submit);
     this.composer.replaceChildren(field, this.problem, footer);
     editor.setSelectionRange(draft.start, draft.end);
@@ -264,9 +264,9 @@ export class SelectionNotes {
     // Saved notes can change during a gesture. Keep the live editor, its focus, IME composition, and native undo history.
     if (this.editing?.draft !== draft) this.editing = this.createEditor(draft);
     const { editor, caption, submit, cancel } = this.editing;
-    caption.textContent = draft.base ? 'Edit notebook entry' : 'Write in your paper notebook';
+    caption.textContent = draft.base ? readerLabel('Edit note', '编辑笔记') : readerLabel('Write in Notes', '写入本篇笔记');
     editor.disabled = cancel.disabled = Boolean(draft.saving);
-    submit.textContent = draft.saving ? 'Saving…' : draft.text.trim() ? 'Save note' : 'Save quote';
+    submit.textContent = draft.saving ? readerLabel('Saving…', '保存中…') : draft.text.trim() ? readerLabel('Save note', '保存笔记') : readerLabel('Save quote', '保存引文');
     submit.disabled = Boolean(draft.saving || draft.conflict);
     this.problem.replaceChildren();
     this.problem.hidden = !draft.error;
@@ -275,11 +275,11 @@ export class SelectionNotes {
       alert.textContent = draft.error;
       if (draft.conflict) {
         const { latest } = draft.conflict;
-        if (latest) alert.append(el('blockquote', '', latest.text), button('Use saved note', () => {
+        if (latest) alert.append(el('blockquote', '', latest.text), button(readerLabel('Use saved note', '采用已保存版本'), () => {
           this.clearDraft();
           this.render();
         }, 'text-btn'));
-        alert.append(button(latest ? 'Keep my draft' : 'Keep as a new note', () => {
+        alert.append(button(latest ? readerLabel('Keep my draft', '保留我的草稿') : readerLabel('Keep as a new note', '另存为新笔记'), () => {
           draft.base = latest;
           draft.additional = true;
           draft.error = draft.conflict = undefined;

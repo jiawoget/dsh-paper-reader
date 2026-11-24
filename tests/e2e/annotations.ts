@@ -62,7 +62,7 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     await page.locator('#notebookPose').selectOption('left');
     assert.equal(await reader.getAttribute('data-notebook-pose'),'left');
     await rail.getByRole('button',{name:'Save',exact:true}).click();
-    await rail.getByRole('heading',{name:'Annotations',exact:true}).waitFor();
+    await rail.getByRole('heading',{name:'Marks',exact:true}).waitFor();
     assert.equal((await marks())[0].color,'green');
     await capture('Docked notebook');
     await rail.locator('.annotation-entry').first().click();
@@ -76,7 +76,7 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     assert.equal(await comment.inputValue(),'Trace the mapping before comparing throughput.');
     await rail.getByRole('button',{name:'Keep my draft'}).click();
     await rail.getByRole('button',{name:'Save',exact:true}).click();
-    await rail.getByRole('heading',{name:'Annotations',exact:true}).waitFor();
+    await rail.getByRole('heading',{name:'Marks',exact:true}).waitFor();
     await page.locator('#closeRail').click();
 
     async function pin(text:string,figure:string){
@@ -109,7 +109,7 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     await page.locator('#mobileRail').click();await marksTab.click();
     const cite=async(value:string)=>{
       await rail.locator('.annotation-entry').filter({hasText:value}).click();
-      await rail.getByRole('button',{name:'Cite in notebook'}).click();
+      await rail.getByRole('button',{name:'Cite in Notes'}).click();
       await rail.locator('.notebook-passage-link').last().waitFor();
     };
     await cite(first);

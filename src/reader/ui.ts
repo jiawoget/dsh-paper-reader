@@ -29,7 +29,8 @@ const paths = {
   arrow:'M6 18 18 6M7 6h11v11', plus:'M12 4v16M4 12h16', check:'m4 12 5 5L20 6',
   settings:'M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M9 15v6', import:'M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5',
   clock:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M12 6v6l4 2', refresh:'M20 12a8 8 0 1 1-2.3-5.6L20 9m0-5v5h-5', globe:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18z',
-  folder:'M3 6h7l2 2h9v12H3z', popout:'M13 3h8v8M21 3 10 14M9 6H4v14h15v-5'
+  folder:'M3 6h7l2 2h9v12H3z', popout:'M13 3h8v8M21 3 10 14M9 6H4v14h15v-5',
+  keyboard:'M3 6h18v12H3zM7 10h.1M11 10h.1M15 10h.1M17 10h.1M7 14h10'
 } as const;
 export type Glyph = keyof typeof paths;
 export function icon(name: Glyph, size = 16): SVGSVGElement {
@@ -38,22 +39,57 @@ export function icon(name: Glyph, size = 16): SVGSVGElement {
   for (const [key,val] of Object.entries({width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':name === 'more'?3.5:1.65,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':true})) svg.setAttribute(key,String(val));
   const line=document.createElementNS(ns,'path'); line.setAttribute('d',paths[name]); svg.append(line); return svg;
 }
-export const message = (error:unknown) => error instanceof Error ? error.message : 'The request failed.';
+const localizedErrors: Record<string, string> = {
+  'Enter a target language.': '请输入翻译目标语言。',
+  'Target language must be a non-empty string.': '请输入有效的翻译目标语言。',
+  'Target language must be at most 64 characters.': '翻译目标语言最多 64 个字符。',
+  'Target language contains invalid control characters.': '翻译目标语言包含无效控制字符。'
+};
+export const message = (error: unknown) => {
+  if (!(error instanceof Error)) return readerLabel('The request failed.', '请求失败。');
+  return Object.hasOwn(localizedErrors, error.message)
+    ? readerLabel(error.message, localizedErrors[error.message])
+    : error.message;
+};
 export function webPageError(error: unknown): string {
   const detail = message(error);
   const code = detail.match(/website returned HTTP (\d+)/);
   if (code) return readerLabel(detail, '网站返回 HTTP ' + code[1] + '。可以打开原网页，再用浏览器扩展阅读。');
+  if (/valid http or https|Invalid URL/i.test(detail))
+    return readerLabel(detail, '请输入有效的 http 或 https 网页地址。');
   if (/public webpage address|resolve to a public website/.test(detail)) return readerLabel(detail, '这个地址需要从浏览器打开。请在原网页上使用阅读器扩展。');
   if (/not be reached|No visible article text|did not return a readable|does not return an HTML/.test(detail))
     return readerLabel(detail, '未能读取正文。请打开原网页，再用浏览器扩展阅读。');
   if (/too large|too long/.test(detail)) return readerLabel(detail, '这篇文章超过了阅读器可以打开的大小。');
   return detail;
 }
+export function zoteroStatusText(detail: string): string {
+  const exact: Record<string, string> = {
+    'Desktop library connected · filing authorized': '已连接本机 Zotero · 已授权写入',
+    'Desktop library connected · confirm changes in Zotero': '已连接本机 Zotero · 写入时需在 Zotero 确认',
+    'Desktop library connected · read and link items': '已连接本机 Zotero · 仅读取与关联',
+    'Public web library connected · read and link items': '已连接公开网页资料库 · 仅读取与关联',
+    'Web library connected · read and write': '已连接网页资料库 · 可读取和写入',
+    'Web library connected · read only': '已连接网页资料库 · 仅只读',
+    'Web library connected · filing permission checked on save': '已连接网页资料库 · 保存时校验写入权限',
+    'Enter a Zotero library ID for this Web connection.': '请填写网页资料库的 Zotero 资料库 ID。',
+    'Could not connect to Zotero.': '无法连接 Zotero。'
+  };
+  if (Object.hasOwn(exact, detail)) return readerLabel(detail, exact[detail]);
+  if (/Open Zotero on this computer/i.test(detail)) return readerLabel(detail, '请在这台电脑上打开 Zotero，再重新测试连接。');
+  if (/Allow other applications|enable the local API/i.test(detail)) return readerLabel(detail, '请在 Zotero 的「设置 → 高级」中启用本机 API 并允许其他应用通信，再重试。');
+  if (/requires a Zotero API key/i.test(detail)) return readerLabel(detail, '此资料库需要具有读取权限的 Zotero API 密钥。请在连接设置中填写。');
+  if (/Enter a Zotero library ID/i.test(detail)) return readerLabel(detail, '请在连接设置中填写 Zotero 资料库 ID，或切换为本机 Zotero。');
+  if (/library changed|another library|library has changed/i.test(detail)) return readerLabel(detail, '当前打开的 Zotero 资料库已切换。请测试连接后重新查找条目。');
+  if (/Add a Zotero API key with write access/i.test(detail)) return readerLabel(detail, '请在连接设置中填写具有写入权限的 Zotero API 密钥以保存条目。');
+  if (/declined the change/i.test(detail)) return readerLabel(detail, 'Zotero 拒绝了本次修改。准备好授权后再点击保存。');
+  return detail;
+}
 let timer: ReturnType<typeof setTimeout> | undefined;
 export function toast(text:string, action?:{label:string; run:()=>unknown}):void {
   const node=byId('toast');
-  const dialog=byId<HTMLDialogElement>('dialog');
-  (dialog.open ? dialog : document.body).append(node);
+  const openDialog=document.querySelector<HTMLDialogElement>('dialog[open]');
+  (openDialog ?? document.body).append(node);
   clearTimeout(timer); node.textContent=text; node.hidden=false;
   if(action) node.append(button(action.label,async()=>{node.hidden=true;await action.run();},'toast-action'));
   timer=setTimeout(()=>{node.hidden=true;},action?10000:5500);
@@ -92,7 +128,7 @@ export async function responseJson<T>(response:Response):Promise<T> {
   const body:unknown=await response.json().catch(()=>null);
   if(!response.ok || body === null) {
     const error = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string' ? body.error : undefined;
-    throw new Error(error || (response.status===401 ? 'Open the signed-in DSH tab in this browser first.' : 'Request failed (HTTP '+response.status+').'));
+    throw new Error(error || (response.status===401 ? readerLabel('Open the signed-in DSH tab in this browser first.', '请先在此浏览器中打开已登录的 DSH 标签页。') : readerLabel('Request failed (HTTP '+response.status+').', '请求失败（HTTP '+response.status+'）。')));
   }
   return body as T;
 }
@@ -131,7 +167,7 @@ export async function apiStream<K extends 'ai'|'chat.ask'>(op:K, payload:Operati
     }
   } finally { reader.releaseLock(); }
   if (finalText !== undefined) return { text: finalText };
-  throw new Error('The response ended unexpectedly.');
+  throw new Error(readerLabel('The response ended unexpectedly.', '响应意外中断。'));
 }
 export function sourceUrl(id:string,page:number,anchor=''):string {
   const address=new URL('index.html',location.href);

@@ -688,13 +688,15 @@ async function writeOnce(file, bytes) {
 }
 var pictureType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
 var Library = class {
-  constructor(root, readBook = publicResource) {
+  constructor(root, readBook = publicResource, onDelete) {
     this.readBook = readBook;
+    this.onDelete = onDelete;
     this.directory = path.join(root, "documents");
     this.translationDir = path.join(root, "translations");
     this.imageDir = path.join(root, "article-images");
   }
   readBook;
+  onDelete;
   directory;
   translationDir;
   imageDir;
@@ -775,6 +777,7 @@ var Library = class {
       rm(path.join(this.translationDir, id), { recursive: true, force: true }),
       rm(path.join(this.imageDir, id), { recursive: true, force: true })
     ]);
+    this.onDelete?.(id);
     return { id, deleted: existed };
   }
   bookJob(key2, start) {
@@ -2002,6 +2005,22 @@ var ReaderStore = class {
       "SELECT substr(identity,10) AS docId FROM citations WHERE library=? AND itemKey=? AND identity LIKE 'document/%' ORDER BY rowid DESC"
     ).all(library, itemKey).map((row) => readColumn(row, "docId")));
   }
+  deleteDocument(docId) {
+    if (!docId || docId === "pagedattention") return;
+    const prefix2 = docId + "";
+    this.#transaction(true, (db) => {
+      db.prepare("DELETE FROM entries WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM annotations WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM chat_exchanges WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
+      db.prepare("DELETE FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
+      db.prepare("DELETE FROM notebooks WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
+      db.prepare("DELETE FROM book_positions WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM pdf_outlines WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM article_captures WHERE docId=?").run(docId);
+      db.prepare("DELETE FROM citations WHERE identity=?").run("document/" + docId);
+    });
+  }
 };
 
 // src/server/vault-markdown.ts
@@ -2575,6 +2594,7 @@ function requestDocument(records, input, sources) {
   const doc = { docId, title, sourceUrl: sourceUrl2, chapter };
   return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries("note", docId, chapter)) }, sources, false);
 }
+var storedDocId = /^(?:pdf|web|book)-[a-f0-9]{64}$/;
 var PaperNotebooks = class {
   constructor(database, library, launch2) {
     this.database = database;
@@ -2586,7 +2606,7 @@ var PaperNotebooks = class {
   launch;
   async sources(id, fallback) {
     let metadata;
-    if (typeof id === "string" && (id === "pagedattention" || /^(?:pdf|web|book)-[a-f0-9]{64}$/.test(id))) {
+    if (typeof id === "string" && (id === "pagedattention" || storedDocId.test(id))) {
       try {
         metadata = await this.library.get(id);
       } catch (error) {
@@ -2601,6 +2621,9 @@ var PaperNotebooks = class {
   }
   async read(input) {
     const sources = await this.sources(input.docId, input.sourceUrl);
+    if (typeof input.docId === "string" && storedDocId.test(input.docId) && !sources.doc) {
+      throw new ServiceError(404, "This document has not been imported.");
+    }
     return this.database.withNotebook((records) => {
       const book = requestDocument(records, input, sources);
       const { docId, chapter } = book.local;
@@ -2612,6 +2635,9 @@ var PaperNotebooks = class {
     const markdown2 = stringValue(input.markdown, "notebook Markdown", 4e6, false, true);
     if (typeof input.markdown !== "string") throw new ServiceError(400, "The full Markdown text is required.");
     const sources = await this.sources(input.docId, input.sourceUrl);
+    if (typeof input.docId === "string" && storedDocId.test(input.docId) && !sources.doc) {
+      throw new ServiceError(404, "This document has not been imported.");
+    }
     return this.database.withNotebook((records) => {
       const book = requestDocument(records, input, sources);
       if (input.expectedRevision !== revision(book)) throw new ServiceError(409, "The notebook changed. Compare the latest Markdown with your draft before saving.");
@@ -3909,7 +3935,10 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "outline.get": (input) => outlines.get(input),
     "outline.generate": (input) => outlines.generate(input),
     "book.progress.get": (input) => ({ place: database.bookPosition(input.docId) }),
-    "book.progress.save": (input) => ({ place: database.saveBookPosition(input.docId, input.place) }),
+    "book.progress.save": async (input) => {
+      await documents.get(input.docId);
+      return { place: database.saveBookPosition(input.docId, input.place) };
+    },
     state: async () => {
       const { settings, ...entries } = database.state();
       return { ...entries, settings: await model.publicSettings(settings) };
@@ -4026,8 +4055,8 @@ async function boundedBody(request, limit) {
 }
 function apply(ctx) {
   const root = process.env.PAPER_READER_HOME || path10.join(process.env.DSH_HOME || path10.join(os.homedir(), ".dsh"), "paper-reader");
-  const library = new Library(root);
   const store = new ReaderStore(root);
+  const library = new Library(root, publicResource, (id) => store.deleteDocument(id));
   const models = {};
   let listener;
   ctx.inject(["webServer"], (child) => {

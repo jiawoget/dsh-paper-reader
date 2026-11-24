@@ -65,8 +65,8 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
     const bilingual = pane.getByRole('button', { name: 'Bilingual', exact: true });
     assert.equal(await originalMode.getAttribute('aria-pressed'), 'true');
     assert.equal(await pane.locator('#translated').isVisible(), false);
-    await pane.getByRole('button', { name: 'Show notebook', exact: true }).click();
-    await pane.getByRole('textbox', { name: 'Notebook Markdown' }).waitFor();
+    await pane.getByRole('button', { name: 'Show notes', exact: true }).click();
+    await pane.getByRole('textbox', { name: 'Notes Markdown' }).waitFor();
     await bilingual.click();
     await pane.getByRole('combobox', { name: 'Translation scope' }).selectOption('page');
     await pane.locator('#translated .pdf-translated-text').first().waitFor();
@@ -179,18 +179,42 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
     await deep.goto(recorded.href);
     await deep.locator('#original .pdf-quote-mark').first().waitFor();
     await deep.reload();
-    const showNotebook = deep.getByRole('button', { name: 'Show notebook', exact: true });
-    if (await showNotebook.isVisible()) await showNotebook.click();
+    const showNotes = deep.getByRole('button', { name: 'Show notes', exact: true });
+    if (await showNotes.isVisible()) await showNotes.click();
     await deep.locator('.notebook-source .source-chip').first().waitFor();
     await deep.close();
     await pane.locator('#toast').waitFor({ state: 'hidden' });
     await pane.locator('#railBody').evaluate(el => { el.scrollTop = 0; });
     await dragWord(page, term, 'block tables');
     await card.getByRole('heading', { name: 'block tables', exact: true }).waitFor();
+    // At compact bilingual scale (< 1.125 inside the DSH shell with Notes open), M4's readability floor
+    // keeps translated prose >= 11.5px visual size with explicit .needs-scroll vertical scrolling.
+    const compactFit = await pane.locator('#translated .pdf-translated-text').evaluateAll(elements =>
+      elements.filter((el): el is HTMLElement => el instanceof HTMLElement && !el.hidden && el.offsetWidth > 0).map(el => {
+        const rect = el.getBoundingClientRect();
+        const cssFont = parseFloat(getComputedStyle(el).fontSize) || 0;
+        return {
+          id: el.dataset.blockId, role: el.dataset.role,
+          visualFont: cssFont * (rect.width / el.offsetWidth),
+          overflows: el.scrollHeight - el.clientHeight > 2,
+          needsScroll: el.classList.contains('needs-scroll')
+        };
+      }));
+    assert.ok(compactFit.some(b => b.role === 'paragraph'), 'Expected translated paragraphs at compact scale.');
+    assert.ok(compactFit.filter(b => b.role === 'paragraph').every(b => b.visualFont >= 11.5),
+      'Compact bilingual translated paragraphs must keep the >= 11.5px visual readability floor.');
+    assert.ok(compactFit.filter(b => b.overflows).every(b => b.needsScroll),
+      'Any compact overflowing translated block must enable .needs-scroll.');
+    // At full-scale desktop sheet width (sheetScale >= 1.125), every curated translation fits with zero nested scrollbar.
+    await pane.getByRole('combobox', { name: 'Zoom' }).selectOption('2');
+    await pane.locator('.pages[style*="200%"]').waitFor();
+    await pane.locator('#translated .pdf-sheet').evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
     const clipped = await pane.locator('#translated .pdf-translated-text').evaluateAll(elements =>
       elements.filter(el => el instanceof HTMLElement && (el.offsetWidth - el.clientWidth > 2 || el.scrollHeight - el.clientHeight > 2))
         .map(el => (el as HTMLElement).dataset.blockId));
     assert.deepEqual(clipped, [], 'Every curated translation must fit without a nested scrollbar.');
+    await pane.getByRole('combobox', { name: 'Zoom' }).selectOption('1');
+    await pane.locator('.pages[style*="100%"]').waitFor();
     await closePassage(card);
 
     const fixture = await browserContext.newPage();

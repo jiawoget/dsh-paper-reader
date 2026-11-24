@@ -201,7 +201,7 @@ await withHost(async host => {
       const citation = await box(link), writingArea = await box(rail.locator('.cm-scroller'));
       assert.ok(citation.y >= writingArea.y - 1 && citation.y + citation.height <= writingArea.y + writingArea.height + 1,
         'The inserted passage link should be visible in the notebook.');
-      assert.ok(await focused(rail.getByRole('textbox', { name: 'Notebook Markdown', exact: true })));
+      assert.ok(await focused(rail.getByRole('textbox', { name: 'Notes Markdown', exact: true })));
       await capture(page, '16-insert-passage-link');
       await rail.locator('.notebook-status[data-saved="true"]').waitFor();
       assert.ok((await snapshot(page, host)).markdown.includes(figureQuote));
@@ -281,7 +281,7 @@ await withHost(async host => {
       assert.equal(await draft.inputValue(), followup);
       await capture(page, '12-discussion-floating');
 
-      await chat.getByRole('button', { name: 'Add to notebook', exact: true }).click();
+      await chat.getByRole('button', { name: 'Add to Notes', exact: true }).click();
       await chat.getByText('Added', { exact: true }).waitFor();
       await chat.getByRole('button', { name: 'View', exact: true }).click();
       await pose(page, 'float');
@@ -313,7 +313,7 @@ await withHost(async host => {
     await scenario('notebook', async page => {
       await open(page, host);
       const card = page.locator('#card'), rail = page.locator('#rail');
-      const position = page.getByRole('combobox', { name: 'Notebook position', exact: true });
+      const position = page.getByRole('combobox', { name: 'Notes position', exact: true });
       const display = page.getByRole('combobox', { name: 'Highlight display', exact: true });
       const notes = rail.getByRole('tab', { name: 'Notes', exact: true });
       const marks = rail.getByRole('tab', { name: 'Marks', exact: true });
@@ -390,10 +390,10 @@ await withHost(async host => {
       await position.selectOption('right');
       await pose(page, 'right');
       const width = (await box(rail)).width;
-      await page.getByRole('separator', { name: 'Resize notebook', exact: true }).press('ArrowLeft');
+      await page.getByRole('separator', { name: 'Resize notes', exact: true }).press('ArrowLeft');
       assert.ok((await box(rail)).width > width, 'The right sidebar should resize from the keyboard.');
       await comment.press('Control+Enter');
-      await rail.getByRole('heading', { name: 'Annotations', exact: true }).waitFor();
+      await rail.getByRole('heading', { name: 'Marks', exact: true }).waitFor();
       await notes.click();
       await display.selectOption('inline');
       await highlight.getByText(markComment, { exact: true }).waitFor();
@@ -413,7 +413,7 @@ await withHost(async host => {
       const edit = highlight.getByRole('button', { name: 'Edit highlight', exact: true });
       await edit.press('Enter');
       assert.equal(await comment.inputValue(), markComment);
-      await rail.getByRole('button', { name: 'Close annotation', exact: true }).press('Enter');
+      await rail.getByRole('button', { name: 'Close mark', exact: true }).press('Enter');
       await edit.waitFor();
       assert.ok(await focused(edit), 'Closing inline editing should return focus to its highlight.');
       assert.deepEqual(await snapshot(page, host), baseline, 'Changing highlight display and annotation comments must not write Markdown.');
@@ -450,7 +450,7 @@ await withHost(async host => {
         }));
       }, host.origin);
       await open(page, host);
-      const position = page.getByRole('combobox', { name: '笔记本位置', exact: true });
+      const position = page.getByRole('combobox', { name: '笔记位置', exact: true });
       await pose(page, 'float');
       const initial = await box(page.locator('#rail'));
       assert.ok(Math.abs(initial.x - 97) <= 1 && Math.abs(initial.y - 73) <= 1);

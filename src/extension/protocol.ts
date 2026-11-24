@@ -3,13 +3,21 @@ import type { Operations } from '../shared/types.js';
 const allowedHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
 export const defaultOrigin = 'http://127.0.0.1:29812';
 
+export function extChinese(): boolean {
+  return typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');
+}
+
+export function extLabel(english: string, chinese: string): string {
+  return extChinese() ? chinese : english;
+}
+
 export function localOrigin(value: string = defaultOrigin): string {
   let url: URL;
   try { url = new URL(value.trim()); }
-  catch { throw new Error('Enter the full address of your local DSH, such as ' + defaultOrigin); }
+  catch { throw new Error(extLabel('Enter the full address of your local DSH, such as ' + defaultOrigin, '请输入本机 DSH 的完整地址，例如 ' + defaultOrigin)); }
   if (!allowedHosts.has(url.hostname) || !['http:', 'https:'].includes(url.protocol) ||
       url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('Enter an HTTP or HTTPS origin on localhost, 127.0.0.1, or [::1].');
+    throw new Error(extLabel('Enter an HTTP or HTTPS origin on localhost, 127.0.0.1, or [::1].', '请输入 localhost、127.0.0.1 或 [::1] 的 HTTP/HTTPS 地址。'));
   }
   return url.origin;
 }
@@ -37,7 +45,7 @@ export type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
 
 export async function askWorker<T>(message: WorkerRequest): Promise<T> {
   const reply: Envelope<T> | undefined = await chrome.runtime.sendMessage(message);
-  if (!reply) throw new Error('The extension did not respond. Reopen its menu and try again.');
+  if (!reply) throw new Error(extLabel('The extension did not respond. Reopen its menu and try again.', '扩展没有响应，请重新打开扩展菜单重试。'));
   if (!reply.ok) throw new Error(reply.error);
   return reply.data;
 }

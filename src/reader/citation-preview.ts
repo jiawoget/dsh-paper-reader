@@ -1,6 +1,6 @@
 import { bibliography, citationGroups, type CitationGroup } from './bibliography.js';
 import type { PdfDocument } from './pdf-view.js';
-import { el } from './ui.js';
+import { el, readerLabel as t } from './ui.js';
 
 const prose = '.selection-prose, .selection-excerpt blockquote, .selection-counterpart p, .selection-main .meaning, .selection-main .selection-context';
 const pdfText = '.pdf-native-text, .pdf-translated-text';
@@ -40,8 +40,8 @@ export function installCitationPreviews(currentPaper: () => PdfDocument | undefi
     if (!target || !paper || !target.node.isConnected) { active = undefined; popup.hidden = true; return; }
     target.node.setAttribute('aria-describedby', popup.id);
     target.node.classList.add('citation-active');
-    const heading = el('header', '', target.group.numbers.length === 1 ? 'Reference' : 'References');
-    popup.replaceChildren(heading, el('p', 'citation-lookup', 'Looking up the bibliography…'));
+    const heading = el('header', '', target.group.numbers.length === 1 ? t('Reference', '参考文献') : t('References', '参考文献'));
+    popup.replaceChildren(heading, el('p', 'citation-lookup', t('Looking up the bibliography…', '正在查找参考文献…')));
     popup.hidden = false;
     positionPopup();
     void bibliography(paper).then(index => {
@@ -50,16 +50,16 @@ export function installCitationPreviews(currentPaper: () => PdfDocument | undefi
       for (const number of target.group.numbers) {
         const record = index.get(number), row = el('li');
         row.append(el('span', 'citation-index', '[' + number + ']'),
-          el('span', record?.title ? '' : 'citation-entry', record?.title ?? record?.entry ?? 'No matching bibliography entry.'));
+          el('span', record?.title ? '' : 'citation-entry', record?.title ?? record?.entry ?? t('No matching bibliography entry.', '未找到对应的参考文献条目。')));
         list.append(row);
       }
       popup.replaceChildren(heading, list);
       positionPopup();
     }).catch(() => {
-      if (active === target) { popup.replaceChildren(heading, el('p', '', 'Could not read the bibliography.')); positionPopup(); }
+      if (active === target) { popup.replaceChildren(heading, el('p', '', t('Could not read the bibliography.', '无法读取参考文献列表。'))); positionPopup(); }
     });
   }
-  function label(group: CitationGroup): string { return (group.numbers.length === 1 ? 'Reference ' : 'References ') + group.numbers.join(', '); }
+  function label(group: CitationGroup): string { return (group.numbers.length === 1 ? t('Reference ', '参考文献 ') : t('References ', '参考文献 ')) + group.numbers.join(', '); }
   function markProse(root: Element): void {
     if (!currentPaper()) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);

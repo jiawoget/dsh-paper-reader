@@ -216,7 +216,7 @@ async function vocabulary(page: Page) {
   const row=modal.locator('.list-row').filter({hasText:/block tables/i});
   assert.equal(await row.count(), 1);
   await row.getByRole('button',{name:'Remove',exact:true}).click(); await modal.getByText('No matching entries.').waitFor();
-  await modal.getByRole('button',{name:'History',exact:true}).click(); await query.fill('block tables');
+  await modal.getByRole('tab',{name:'History',exact:true}).click(); await query.fill('block tables');
   assert.equal(await row.count(), 1); await row.getByRole('button',{name:'PagedAttention.pdf',exact:true}).click();
   await loaded(page);
   await page.locator('#original .pdf-quote-mark').first().waitFor();

@@ -70,7 +70,7 @@ export class Library {
   private readonly imageJobs = new Map<string, Promise<ArticleImage>>();
   private readonly jobs = new Map<string, Promise<Record<string,string>>>();
   private readonly bookJobs = new Map<string, Promise<DocumentInfo>>();
-  constructor(root: string, private readonly readBook: ReadBookResource = publicResource) {
+  constructor(root: string, private readonly readBook: ReadBookResource = publicResource, private readonly onDelete?: (id: string) => void) {
     this.directory = path.join(root, 'documents');
     this.translationDir = path.join(root, 'translations');
     this.imageDir = path.join(root, 'article-images');
@@ -141,6 +141,7 @@ export class Library {
       rm(path.join(this.translationDir, id), { recursive: true, force: true }),
       rm(path.join(this.imageDir, id), { recursive: true, force: true })
     ]);
+    this.onDelete?.(id);
     return { id, deleted: existed };
   }
   private bookJob(key: string, start: () => Promise<DocumentInfo>): Promise<DocumentInfo> {

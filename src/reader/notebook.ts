@@ -110,9 +110,9 @@ class NotebookEditor {
 
     const tools = el('div', 'notebook-toolbar');
     const bold = button('B', () => wrapSelection(this.view, '**'), 'notebook-format notebook-bold');
-    bold.setAttribute('aria-label', 'Bold'); bold.title = 'Bold (Ctrl+B)';
+    bold.setAttribute('aria-label', label('Bold', '加粗')); bold.title = label('Bold (Ctrl+B)', '加粗 (Ctrl+B)');
     const italic = button('I', () => wrapSelection(this.view, '*'), 'notebook-format notebook-italic');
-    italic.setAttribute('aria-label', 'Italic'); italic.title = 'Italic (Ctrl+I)';
+    italic.setAttribute('aria-label', label('Italic', '斜体')); italic.title = label('Italic (Ctrl+I)', '斜体 (Ctrl+I)');
     this.toggle = button('Markdown', () => {
       this.sourceMode = !this.sourceMode;
       const state = this.view.state, head = state.selection.main.head;
@@ -122,11 +122,11 @@ class NotebookEditor {
     }, 'notebook-format notebook-source-mode');
     this.toggle.title = label('Show Markdown source', '显示 Markdown 源码');
     const refresh = button('', () => this.app.refresh(), 'notebook-format', 'refresh');
-    refresh.setAttribute('aria-label', 'Refresh notebook'); refresh.title = 'Refresh notebook';
-    this.saveButton = el('button', 'notebook-save', 'Save');
+    refresh.setAttribute('aria-label', label('Refresh notes', '刷新笔记')); refresh.title = label('Refresh notes', '刷新笔记');
+    this.saveButton = el('button', 'notebook-save', label('Save', '保存'));
     this.saveButton.type = 'button';
     this.saveButton.onclick = () => void this.save();
-    this.saveButton.title = 'Save notebook (Ctrl+S)';
+    this.saveButton.title = label('Save notes (Ctrl+S)', '保存笔记 (Ctrl+S)');
     tools.append(bold, italic, this.toggle, refresh, this.saveButton);
     const mount = el('div', 'notebook-writing-area');
     const footer = el('footer', 'notebook-footer');
@@ -144,7 +144,7 @@ class NotebookEditor {
     footer.append(location, this.status);
     if (book.chapterTitle) {
       const chapter = el('header', 'notebook-chapter');
-      chapter.append(el('span', '', label('Chapter notebook', '章节笔记')), el('strong', '', book.chapterTitle));
+      chapter.append(el('span', '', label('Chapter notes', '章节笔记')), el('strong', '', book.chapterTitle));
       this.root.append(chapter);
     }
     this.root.append(tools, this.issue, mount, this.guide, footer);
@@ -198,7 +198,7 @@ class NotebookEditor {
     const normalized = text.replace(/\r\n?/g, '\n');
     return EditorState.create({doc: text, selection: {anchor: Math.min(this.visibleCursor(normalized, cursor), normalized.length)}, extensions: [
       history(), markdown(), markdownColors, this.mode.of(this.displayMode()), EditorView.lineWrapping, this.selection.of(this.selectionExtension()), highlightActiveLine(),
-      EditorView.contentAttributes.of({'aria-label': 'Notebook Markdown', 'aria-multiline': 'true', spellcheck: 'true'}),
+      EditorView.contentAttributes.of({'aria-label': label('Notes Markdown', '笔记 Markdown'), 'aria-multiline': 'true', spellcheck: 'true'}),
       EditorView.domEventHandlers({ focus: () => { this.hasCaret = true; } }),
       keymap.of([
         {key: 'Mod-s', run: () => { void this.save(); return true; }},
@@ -276,7 +276,7 @@ class NotebookEditor {
     const url = new URL(source.sourceUrl), page = Number(url.searchParams.get('page'));
     const sourceChapter = this.app.doc.book?.sections[page - 1]?.chapterId;
     if (source.docId !== this.docId || !this.current || (sourceChapter && sourceChapter !== this.chapterId) || this.app.notebookError || this.conflict) {
-      throw Error(this.app.notebookError || 'Open Notes and review the current notebook before inserting.');
+      throw Error(this.app.notebookError || label('Open Notes and review the current notes before inserting.', '请先打开「笔记」并核对当前内容后再插入。'));
     }
     const state = this.view.state, markdown = state.doc.toString();
     const definitions = passageDefinitions(markdown);
@@ -291,7 +291,7 @@ class NotebookEditor {
     const range = { from: at, to: at + inserted.length, text: inserted };
     this.view.dispatch({ changes: { from: at, insert: inserted }, selection: { anchor: range.to },
       annotations: isolateHistory.of('full'), userEvent: 'input.paste' });
-    if (this.view.state.sliceDoc(range.from, range.to) !== inserted) throw Error('Choose a writing position in Notes and try again.');
+    if (this.view.state.sliceDoc(range.from, range.to) !== inserted) throw Error(label('Choose a writing position in Notes and try again.', '请在「笔记」中选择插入位置后重试。'));
     return this.trackAnswer(range);
   }
 
@@ -305,7 +305,7 @@ class NotebookEditor {
       undo: async () => {
         if (!removed) {
           if (!current() || this.view.state.sliceDoc(range.from, range.to) !== range.text) {
-            throw Error('This excerpt was edited. Open Notes to review it.');
+            throw Error(label('This excerpt was edited. Open Notes to review it.', '该摘录已被修改，请打开「笔记」查看。'));
           }
           this.removeExcerpt(range);
           removed = true;
@@ -313,7 +313,7 @@ class NotebookEditor {
         await this.flush();
       },
       reveal: () => {
-        if (!this.current) throw Error('Reopen this notebook to view the excerpt.');
+        if (!this.current) throw Error(label('Reopen Notes to view the excerpt.', '请重新打开「笔记」以查看此摘录。'));
         this.app.showNotebook();
         if (!current()) return;
         const start = Math.min(range.to, range.from + range.text.indexOf('>'));
@@ -339,10 +339,10 @@ class NotebookEditor {
 
   private async flush(): Promise<void> {
     if (this.activeWrite) await this.activeWrite;
-    if (!this.current) throw Error('Reopen this notebook to save your edits.');
+    if (!this.current) throw Error(label('Reopen Notes to save your edits.', '请重新打开「笔记」以保存修改。'));
     if (this.dirty) await this.save();
     if (this.app.notebookError || this.conflict || this.failure) {
-      throw Error(this.app.notebookError || this.failure || 'Review the conflicting versions in Notes.');
+      throw Error(this.app.notebookError || this.failure || label('Review the conflicting versions in Notes.', '请在「笔记」中核对冲突版本。'));
     }
   }
 
@@ -387,8 +387,10 @@ class NotebookEditor {
       this.book = saved;
       this.draft = {revision: saved.revision, original: saved.markdown, text: this.draft.text};
       this.reviewed = '';
-      if (!this.disposed) this.view.dispatch({effects: refreshSources.of()});
-      this.remember();
+      if (!this.disposed) {
+        this.view.dispatch({effects: refreshSources.of()});
+        this.remember();
+      }
     } catch (error) { this.failure = message(error); }
     finally { this.saving = false; }
     if (!this.current) return;
@@ -453,9 +455,9 @@ class NotebookEditor {
   private updateControls(): void {
     const conflict = this.conflict;
     this.toggle.setAttribute('aria-pressed', String(this.sourceMode));
-    const location = this.book.path || this.book.vaultPending ? label('Obsidian vault','Obsidian 仓库') : label('Connect Obsidian','连接 Obsidian');
+    const location = this.book.path || this.book.vaultPending ? label('Obsidian vault','Obsidian 笔记库') : label('Connect Obsidian','连接 Obsidian');
     this.locationButton.replaceChildren(icon('folder', 13), location);
-    this.locationButton.title = this.book.path || (this.book.vaultPending ? label('Obsidian vault settings', 'Obsidian 仓库设置') : 'Connect this notebook to an Obsidian vault');
+    this.locationButton.title = this.book.path || (this.book.vaultPending ? label('Obsidian vault settings', 'Obsidian 笔记库设置') : label('Connect these notes to an Obsidian vault', '将笔记连接到 Obsidian 笔记库'));
     this.locationButton.setAttribute('aria-label', location);
     this.fileLink.hidden = !this.chapterId || !this.book.uri || Boolean(this.app.notebookError);
     if (!this.fileLink.hidden && this.book.uri) this.fileLink.href = this.book.uri;
@@ -464,8 +466,8 @@ class NotebookEditor {
     this.saveButton.disabled = this.saving || !!this.app.notebookError || (!this.dirty && this.book.localConflict === undefined) ||
       (conflict && this.reviewed !== this.book.revision);
     this.status.textContent = this.app.notebookError ? label('File unavailable','无法读取文件') : this.saving ? label('Saving…','保存中…') : conflict ? label('Review changes','核对修改') :
-      this.failure ? label('Save failed','保存失败') : this.dirty ? label('Unsaved changes','尚未保存') : this.book.path ? label('Saved to vault','已存入仓库') :
-        this.book.vaultPending ? label('First edit saves to vault', '写下笔记时存入仓库') : label('Saved locally','已保存到本机');
+      this.failure ? label('Save failed','保存失败') : this.dirty ? label('Unsaved changes','尚未保存') : this.book.path ? label('Saved to vault','已存入笔记库') :
+        this.book.vaultPending ? label('First edit saves to vault', '写下笔记时存入笔记库') : label('Saved locally','已保存到本机');
     this.status.dataset.saved = String(!this.app.notebookError && !this.saving && !conflict && !this.failure && !this.dirty);
     const issueKey = JSON.stringify([this.app.notebookError, this.failure, conflict && this.book.revision, this.reviewed]);
     if (this.issue.dataset.key === issueKey) return;
@@ -473,24 +475,25 @@ class NotebookEditor {
     this.issue.replaceChildren();
     if (conflict) {
       this.issue.append(el('p', '', this.book.localConflict !== undefined ?
-        'The vault and reader have different copies. Compare both before saving.' : 'The file changed while you were writing. Your draft is here.'));
+        label('The vault and reader have different copies. Compare both before saving.', 'Obsidian 笔记库与阅读器中的副本不一致，请先对比再保存。') :
+        label('The file changed while you were writing. Your draft is here.', '编辑期间文件已发生变化，当前草稿仍保留在此。')));
       if (this.reviewed !== this.book.revision) {
-        this.issue.append(button('Compare latest', () => {
+        this.issue.append(button(label('Compare latest', '对比最新版本'), () => {
           this.reviewed = this.book.revision;
           this.updateControls();
         }, 'text-btn'));
       } else {
         const details = el('details', 'notebook-comparison');
         details.open = true;
-        details.append(el('summary', '', 'Latest saved Markdown'), el('pre', 'notebook-latest', this.book.markdown));
+        details.append(el('summary', '', label('Latest saved Markdown', '最新保存的 Markdown')), el('pre', 'notebook-latest', this.book.markdown));
         this.issue.append(details);
         if (this.book.localConflict !== undefined) {
           const local = el('details', 'notebook-comparison');
-          local.append(el('summary', '', 'Last reader copy'), el('pre', 'notebook-latest', this.book.localConflict));
+          local.append(el('summary', '', label('Last reader copy', '阅读器上次副本')), el('pre', 'notebook-latest', this.book.localConflict));
           this.issue.append(local);
         }
-        this.issue.append(el('p', '', 'Combine the text you want to keep in the editor, then save the merged draft.'));
-        if (this.book.localConflict === undefined) this.issue.append(button('Use saved file', () => {
+        this.issue.append(el('p', '', label('Combine the text you want to keep in the editor, then save the merged draft.', '请在编辑器中合并要保留的内容，然后保存合并草稿。')));
+        if (this.book.localConflict === undefined) this.issue.append(button(label('Use saved file', '改用已保存文件'), () => {
           this.draft = {revision: this.book.revision, original: this.book.markdown, text: this.book.markdown};
           this.reviewed = this.failure = '';
           this.loadFile(this.book.markdown);
@@ -503,16 +506,38 @@ class NotebookEditor {
     this.issue.hidden = !this.issue.childNodes.length;
   }
 
-  destroy(): void {
+  destroy(remember = true): void {
     this.disposed = true;
     clearTimeout(this.timer);
     clearInterval(this.poll);
     window.removeEventListener('pagehide', this.rememberOnExit);
     this.reducedMotion.removeEventListener('change', this.onMotionChange);
-    this.remember();
+    if (remember) this.remember();
     this.view.destroy();
     this.root.remove();
   }
+}
+
+export function discardNotebook(app: ReaderPort, docId: string): void {
+  const editor = editors.get(app);
+  if (editor && editor.docId === docId) {
+    editor.destroy(false);
+    editors.delete(app);
+  }
+  const prefix = docId + '/';
+  for (const key of [...pendingDrafts.keys()]) {
+    if (key === docId || key.startsWith(prefix)) pendingDrafts.delete(key);
+  }
+  try {
+    const exact = draftKey(docId);
+    const keyPrefix = exact + '/';
+    const keys: string[] = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key && (key === exact || key.startsWith(keyPrefix))) keys.push(key);
+    }
+    for (const key of keys) sessionStorage.removeItem(key);
+  } catch { /* sessionStorage may be unavailable. */ }
 }
 
 export async function leaveNotebook(app: ReaderPort, docId: string, chapterId?: string): Promise<void> {
@@ -532,7 +557,7 @@ export async function insertNotebookPassage(app: ReaderPort, source: SourceRecor
   app.showNotebook();
   if (!app.notebook) await app.refresh();
   const editor = editors.get(app);
-  if (!editor?.belongsTo(source.docId, app.doc.book?.sections[source.page - 1]?.chapterId)) throw Error('Open the source notebook to insert its passage link.');
+  if (!editor?.belongsTo(source.docId, app.doc.book?.sections[source.page - 1]?.chapterId)) throw Error(label('Open the source document’s notes to insert its passage link.', '请先打开来源文档的笔记再插入出处链接。'));
   editor.insertPassage(source, selected);
 }
 

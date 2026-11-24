@@ -58,8 +58,8 @@ await withHost(async host => {
       const run = page.locator('#original .pdf-native-text [data-block-id="figure-6"]').filter({ hasText: 'Block table' }).first();
       await run.waitFor();
       if (!mobile) {
-        await page.getByRole('button', { name: '打开笔记本' }).click();
-        await page.getByRole('textbox', { name: 'Notebook Markdown' }).click();
+        await page.getByRole('button', { name: '打开笔记' }).click();
+        await page.getByRole('textbox', { name: '笔记 Markdown' }).click();
         await page.keyboard.press('Home');
         for (const _ of '先读图。') await page.keyboard.press('ArrowRight');
         await page.locator('#closeRail').click();
@@ -156,8 +156,8 @@ await withHost(async host => {
       await page.locator('#loading').waitFor({ state: 'hidden' });
       const persisted = (await book()).markdown;
       assert.ok(persisted.includes(answer));
-      const showNotebook = page.getByRole('button', { name: '打开笔记本' });
-      if (await showNotebook.isVisible()) await showNotebook.click();
+      const showNotes = page.getByRole('button', { name: '打开笔记' });
+      if (await showNotes.isVisible()) await showNotes.click();
       const discussion = source.locator('..').getByRole('link', { name: '查看讨论', exact: true });
       const address = new URL((await discussion.getAttribute('href'))!);
       const replyId = href.searchParams.get('reply');

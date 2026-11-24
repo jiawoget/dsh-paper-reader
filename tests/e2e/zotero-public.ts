@@ -22,7 +22,7 @@ await withHost(async host => {
     assert.ok(imported.ok());
     const doc = (await imported.json()).doc;
     await page.goto(host.origin + '/api/paper-reader/app/index.html?doc=' + doc.id);
-    await page.getByRole('button', { name: 'Show notebook' }).click();
+    await page.getByRole('button', { name: 'Show notes' }).click();
     const tab = page.getByRole('tab', { name: 'Reference' });
     await tab.click();
     await page.getByRole('button', { name: 'Connection settings' }).click();

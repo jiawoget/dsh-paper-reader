@@ -32,7 +32,10 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'outline.get': input => outlines.get(input),
     'outline.generate': input => outlines.generate(input),
     'book.progress.get': input => ({place:database.bookPosition(input.docId)}),
-    'book.progress.save': input => ({place:database.saveBookPosition(input.docId,input.place)}),
+    'book.progress.save': async input => {
+      await documents.get(input.docId);
+      return { place: database.saveBookPosition(input.docId, input.place) };
+    },
     state: async () => {
       const { settings, ...entries } = database.state();
       return { ...entries, settings: await model.publicSettings(settings) };

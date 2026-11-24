@@ -150,7 +150,7 @@ function noteLine(page: Page, value: string) {
 }
 
 async function openNotebook(page: Page, value: string) {
-  const show = page.getByRole('button', { name: 'Show notebook', exact: true });
+  const show = page.getByRole('button', { name: 'Show notes', exact: true });
   if (await show.isVisible()) await show.click();
   await page.getByRole('tab', { name: 'Notes', exact: true }).click();
   await noteLine(page, value).waitFor();

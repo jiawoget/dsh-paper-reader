@@ -153,7 +153,7 @@ await withHost(async host => {
     const photo = (name: string) => page.screenshot({ path: path.join(evidence, name + '.png'), animations: 'disabled' });
     const chat = page.locator('.selection-chat:visible');
     const card = page.locator('#card');
-    const history = page.getByRole('region', { name: 'Paper conversation' });
+    const history = page.getByRole('region', { name: '全文问答' });
     const figure = page.locator('#original .pdf-figure[data-block-id="figure-6"]');
     const sourceRun = (words: string) => page.locator('#original .pdf-native-text [data-block-id="block-tables"]').filter({ hasText: words }).first();
     const translated = page.locator('#translated .pdf-translated-text[data-block-id="block-tables"]').filter({ hasText: /逻辑/ });
@@ -344,7 +344,7 @@ await withHost(async host => {
       assert.equal(link.searchParams.get('reply'), original.requestId);
       assert.equal(link.searchParams.get('anchor'), originalSource.anchor);
       assert.equal(await reference.innerText(), 'p. 6 · 图 6', 'The saved screenshot citation identifies the printed figure.');
-      const editor = page.getByRole('textbox', { name: 'Notebook Markdown' });
+      const editor = page.getByRole('textbox', { name: '笔记 Markdown' });
       await editor.click();
       await page.keyboard.press('Control+Home');
       const wrote = page.waitForResponse(response => response.request().method() === 'POST' &&
@@ -367,7 +367,7 @@ await withHost(async host => {
       const fresh = await browser.newPage({ locale: 'zh-CN' });
       await fresh.goto(host.authenticatedUrl);
       await fresh.goto(entry);
-      await fresh.getByRole('button', { name: '打开笔记本' }).click();
+      await fresh.getByRole('button', { name: '打开笔记' }).click();
       const oldSource = fresh.getByRole('link', { name: 'p. 6 · 截图选区', exact: true });
       const discussion = oldSource.locator('..').getByRole('link', { name: '查看讨论', exact: true });
       const copied = (await discussion.getAttribute('href'))!;
@@ -433,7 +433,7 @@ await withHost(async host => {
       await page.mouse.click(visibleHighlight.x + visibleHighlight.width * .5, visibleHighlight.y + visibleHighlight.height * .5);
       await page.locator('.annotation-editor').waitFor();
       console.log('点实际已有高亮后截图讨论：' + String(await dockStatus()));
-      await page.getByRole('button', { name: '关闭批注', exact: true }).click();
+      await page.getByRole('button', { name: '关闭标记', exact: true }).click();
       if (await page.locator('#closeRail').isVisible()) await page.locator('#closeRail').click();
       await restoreOldRegion();
 
@@ -542,9 +542,9 @@ await withHost(async host => {
     await photo('08-从历史恢复准确文字选段');
     await chat.getByRole('button', { name: '记笔记', exact: true }).click();
     const ownNote = '下一次读到该段时，对照独立逻辑缓存。';
-    await card.getByRole('textbox', { name: 'Your note' }).fill(ownNote);
-    await card.getByRole('button', { name: 'Save note', exact: true }).click();
-    await card.getByText('Note saved.', { exact: true }).waitFor();
+    await card.getByRole('textbox', { name: '笔记内容' }).fill(ownNote);
+    await card.getByRole('button', { name: '保存笔记', exact: true }).click();
+    await card.getByText('笔记已保存。', { exact: true }).waitFor();
     assert.ok((await getBook()).markdown.includes(ownNote));
     assert.deepEqual(errors, []);
     await photo('09-恢复原文讨论后写个人笔记');

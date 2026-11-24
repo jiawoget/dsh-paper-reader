@@ -40,7 +40,7 @@ export class SelectionWorkspace {
     }, closeChat, () => { this.recent = { source: chatSource(item), thread }; }, previous);
     const actions = el('div', 'card-actions');
     const link = button(label('Insert passage link','引用到笔记'), () => insertNotebookPassage(this.app, item.source, item.selection), 'btn', 'arrow');
-    link.title = label('Insert this passage at the cursor in your notebook','在笔记光标处插入原文出处');
+    link.title = label('Insert this passage at the cursor in Notes','在笔记光标处插入原文出处');
     actions.append(chat.explain, chat.action);
     if (item.hit.regionText === undefined) actions.append(notes.action);
     actions.append(link);

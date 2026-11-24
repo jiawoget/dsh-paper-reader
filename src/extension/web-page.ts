@@ -1,5 +1,6 @@
 import type { Operations } from '../shared/types.js';
 import { extractArticle, type ArticleTree } from '../shared/web-article.js';
+import { extLabel } from './protocol.js';
 
 export type WebImport = Operations['web.import'][0];
 export interface PickedText {
@@ -52,7 +53,7 @@ const tree: ArticleTree<Node> = {
 };
 
 export function snapshot(pick: PickedText | null): Snapshot {
-  if (!document.body) throw new Error('The page content has not loaded yet.');
+  if (!document.body) throw new Error(extLabel('The page content has not loaded yet.', '网页内容尚未加载完成。'));
   const { article, index: selected } = extractArticle(document, tree, location.href, document.title, pick?.range.startContainer);
   let index = selected < 0 ? 0 : selected;
   if (pick && selected < 0) {

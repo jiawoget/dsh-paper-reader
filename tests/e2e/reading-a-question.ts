@@ -97,9 +97,9 @@ async function connect(page: Page, model: Awaited<ReturnType<typeof localModel>>
   await activate(page.getByRole('button', { name: '更多操作' }), mobile);
   await activate(page.getByRole('button', { name: '连接设置', exact: true }), mobile);
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('API base URL').fill(model.url);
-  await dialog.getByLabel('Model', { exact: true }).fill(model.name);
-  await dialog.getByLabel('API key', { exact: true }).fill(model.key);
+  await dialog.getByLabel('API 接口地址').fill(model.url);
+  await dialog.getByLabel('模型', { exact: true }).fill(model.name);
+  await dialog.getByLabel('API 密钥', { exact: true }).fill(model.key);
   await activate(dialog.getByRole('button', { name: '保存连接设置' }), mobile);
   await dialog.waitFor({ state: 'hidden' });
   await page.getByText('连接设置已保存。', { exact: true }).waitFor({ state: 'hidden' });
@@ -235,7 +235,7 @@ const originalSentence = 'Each block table entry records the corresponding physi
 async function readTranslation(page: Page, mobile: boolean) {
   if (mobile) {
     await activate(page.getByRole('button', { name: '读正文', exact: true }), mobile);
-    const paragraph = page.getByRole('region', { name: 'Page text' }).getByText(originalSentence, { exact: false }).first();
+    const paragraph = page.getByRole('region', { name: '本页正文' }).getByText(originalSentence, { exact: false }).first();
     await mouseSelect(page, paragraph, originalSentence);
   } else {
     const textLayer = page.locator('#original .pdf-native-text');
@@ -258,8 +258,8 @@ async function saveReaderNote(page: Page, reply: Locator, mobile: boolean) {
   const turn = reply.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," chat-turn ")][1]');
   await activate(turn.getByRole('button', { name: '记下选句', exact: true }), mobile);
   await turn.getByText('已记入', { exact: true }).waitFor();
-  const notebook = page.getByLabel('阅读笔记本', { exact: true });
-  const editor = notebook.getByRole('textbox', { name: 'Notebook Markdown' });
+  const notebook = page.getByLabel('阅读笔记', { exact: true });
+  const editor = notebook.getByRole('textbox', { name: '笔记 Markdown' });
   await activate(turn.getByRole('button', { name: '查看', exact: true }), mobile);
   await editor.press('Control+End');
   await page.keyboard.insertText('\n\n' + ownNote);
@@ -311,11 +311,11 @@ for (const mobile of mode) await withHost(async host => {
     const pageJump = page.getByRole('button', { name: /跳转到页码/ });
     if (!(await pageJump.innerText()).includes('6 /')) {
       await activate(pageJump, mobile);
-      await page.getByRole('spinbutton', { name: 'Page number' }).fill('6');
-      await activate(page.getByRole('button', { name: 'Go', exact: true }), mobile);
+      await page.getByRole('spinbutton', { name: '页码' }).fill('6');
+      await activate(page.getByRole('button', { name: '跳转', exact: true }), mobile);
     }
     await figure(page, 6).waitFor();
-    await page.getByText('Opening document…', { exact: true }).waitFor({ state: 'hidden' });
+    await page.getByText('正在打开文档…', { exact: true }).waitFor({ state: 'hidden' });
     console.log(device + ' loaded page ' + await pageJump.innerText());
     const selection = await readTranslation(page, mobile);
     await photo(page, (baseline ? 'old-' : '') + device + '-translation');
@@ -381,7 +381,7 @@ for (const mobile of mode) await withHost(async host => {
     console.log(JSON.stringify({ calls: model.calls.map(summarize) }));
     const notebook = await saveReaderNote(page, reply, mobile);
     if (!baseline) {
-      await activate(notebook.getByRole('button', { name: '关闭笔记本' }), mobile);
+      await activate(notebook.getByRole('button', { name: '关闭笔记' }), mobile);
       const other = await crop(page, 6, mobile);
       await other.choices.getByRole('button', { name: '接着问', exact: true }).waitFor();
       await other.choices.getByRole('button', { name: '单独提问', exact: true }).waitFor();
@@ -393,7 +393,7 @@ for (const mobile of mode) await withHost(async host => {
 
       if (await page.getByRole('button', { name: '读正文', exact: true }).isVisible())
         await activate(page.getByRole('button', { name: '读正文', exact: true }), mobile);
-      const text = page.getByRole('region', { name: 'Page text' }).getByRole('button', { name: /选中此段.*Parallel sampling/ });
+      const text = page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*并行采样/ });
       await activate(text, mobile);
       const card = page.locator('#card');
       await card.getByRole('button', { name: '接着问', exact: true }).waitFor();
@@ -407,9 +407,9 @@ for (const mobile of mode) await withHost(async host => {
 
     const reopened = await openDesk(browser, host, url, mobile);
     const nextPage = reopened.page;
-    await activate(nextPage.getByRole('button', { name: '打开笔记本', exact: true }), mobile);
-    const freshNotebook = nextPage.getByLabel('阅读笔记本', { exact: true });
-    const freshEditor = freshNotebook.getByRole('textbox', { name: 'Notebook Markdown' });
+    await activate(nextPage.getByRole('button', { name: '打开笔记', exact: true }), mobile);
+    const freshNotebook = nextPage.getByLabel('阅读笔记', { exact: true });
+    const freshEditor = freshNotebook.getByRole('textbox', { name: '笔记 Markdown' });
     await freshEditor.getByText(ownNote, { exact: true }).waitFor();
     const content = await freshEditor.innerText();
     assert.equal(content.split(excerpt).length, 2);
@@ -454,9 +454,9 @@ for (const mobile of mode) await withHost(async host => {
       assert.equal(model.calls.length, 3, 'Opening the discussion from its figure must not re-ask the model.');
       await activate(fromFigure.getByRole('button', { name: '收起讨论', exact: true }), mobile);
 
-      const close = freshNotebook.getByRole('button', { name: '关闭笔记本' });
+      const close = freshNotebook.getByRole('button', { name: '关闭笔记' });
       if (!(await freshNotebook.isVisible()))
-        await activate(nextPage.getByRole('button', { name: '打开笔记本', exact: true }), mobile);
+        await activate(nextPage.getByRole('button', { name: '打开笔记', exact: true }), mobile);
       await activate(freshNotebook.getByRole('link', { name: '查看讨论', exact: true }), mobile);
       const conversation = discussion(nextPage);
       for (const line of [firstQuestion, firstAnswer, followupQuestion, followupAnswer])

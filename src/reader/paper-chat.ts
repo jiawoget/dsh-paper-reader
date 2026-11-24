@@ -50,7 +50,7 @@ export class PaperChat {
 
   constructor(private app: ReaderPort) {
     this.modelPicker = questionModelButton(app);
-    this.root.ariaLabel = 'Paper conversation';
+    this.root.ariaLabel = label('Paper chat','全文问答');
     this.toggle.type = 'button';
     this.toggle.ariaLabel = label('Paper chat','全文问答');
     this.toggle.setAttribute('aria-controls', 'paper-chat-content');
@@ -63,7 +63,7 @@ export class PaperChat {
       if (this.expanded && this.doc) { void this.reload(this.doc.id); this.input.focus({ preventScroll: true }); }
     };
     this.log.setAttribute('role', 'log');
-    this.log.ariaLabel = 'Paper chat history';
+    this.log.ariaLabel = label('Paper chat history','全文问答记录');
     this.log.setAttribute('aria-live', 'polite');
     this.log.tabIndex = 0;
     document.addEventListener('selectionchange', () => {
@@ -80,7 +80,7 @@ export class PaperChat {
     this.removeSelection.ariaLabel = this.removeSelection.title = label('Remove selected passage','移除选段');
     this.removeSelection.append(icon('close', 12));
     this.attachment.append(this.scope, this.sourceLocation, this.sourceQuote, this.removeSelection, this.useSelection, this.modelPicker.button);
-    this.input.ariaLabel = 'Message about this paper';
+    this.input.ariaLabel = label('Message about this paper','对这篇文章提问');
     this.input.setAttribute('aria-describedby', this.scope.id);
     this.input.placeholder = label('Ask about this paper…','对这篇文章提问…');
     this.input.rows = 1;
@@ -120,7 +120,9 @@ export class PaperChat {
     this.notebookRevision = undefined;
     this.doc = doc; this.pdf = pdf; this.pages = undefined; this.logVersion = '';
     this.toggle.ariaLabel = doc.book ? label('Section chat','本节问答') : label('Paper chat','全文问答');
+    this.root.ariaLabel = this.toggle.ariaLabel;
     this.toggle.querySelector('strong')!.textContent = this.toggle.ariaLabel;
+    this.input.ariaLabel = doc.book ? label('Message about this section','对这一节提问') : label('Message about this paper','对这篇文章提问');
     this.input.placeholder = doc.book ? label('Ask about this section…','对这一节提问…') : label('Ask about this paper…','对这篇文章提问…');
     this.selectionCandidate = undefined;
     if (!this.conversations.has(doc.id)) this.conversations.set(doc.id, { draft: '', exchanges: [], loaded: false, version: 0 });
@@ -238,13 +240,13 @@ export class PaperChat {
     this.notice.hidden = !state.issue && !disconnected;
     if (!this.notice.hidden) {
       this.notice.setAttribute('role', state.issue ? 'alert' : 'status');
-      this.notice.append(el('span', '', state.issue || 'Connect a model to chat about this paper.'));
-      if (state.issue) this.notice.append(button('Retry', () => state.retry ? this.send(state.retry) : this.reload(this.doc!.id), 'text-btn'));
-      this.notice.append(button('Connections', () => settingsDialog(this.app), 'text-btn'));
+      this.notice.append(el('span', '', state.issue || label('Connect a model to chat about this paper.','请连接模型以使用全文问答。')));
+      if (state.issue) this.notice.append(button(label('Retry','重试'), () => state.retry ? this.send(state.retry) : this.reload(this.doc!.id), 'text-btn'));
+      this.notice.append(button(label('Connections','连接设置'), () => settingsDialog(this.app), 'text-btn'));
     }
   }
   private location(source: ChatSource): string {
-    return this.doc?.kind === 'web' ? source.label || 'Article' : 'p. ' + source.page;
+    return this.doc?.kind === 'web' ? source.label || label('Article','文章') : label('p. ' + source.page,'第 ' + source.page + ' 页');
   }
   private renderLog(state: Conversation): void {
     const archive = this.app.state.history.filter(record => record.docId === this.doc?.id && record.meaning.trim() &&
@@ -255,7 +257,7 @@ export class PaperChat {
     this.logVersion = version;
     this.log.replaceChildren();
     if (archive.length) this.legacyLookups(archive);
-    if (!state.exchanges.length && !state.pending) this.log.append(el('p', 'paper-chat-empty', state.loaded ? 'Ask a question about this paper.' : 'Loading conversation…'));
+    if (!state.exchanges.length && !state.pending) this.log.append(el('p', 'paper-chat-empty', state.loaded ? label('Ask a question about this paper.','向本文提问。') : label('Loading chat…','正在加载问答记录…')));
     const materials = new Map<string, Set<string>>();
     for (const {thread, source} of state.exchanges) {
       if (!source || thread === 'paper') continue;
@@ -272,7 +274,7 @@ export class PaperChat {
       answer.innerHTML = answerMarkdown(exchange.answer);
       row.append(el('span', 'paper-chat-speaker', 'AI'), answer);
       const coverage = exchange.coverage;
-      if (coverage?.partial) row.append(el('small', 'paper-chat-evidence', this.doc?.book ? label('Based on a section of this book.','依据书中小节作答。') : 'Based on excerpts from ' + coverage.pagesUsed + ' of ' + coverage.pageCount + ' pages.'));
+      if (coverage?.partial) row.append(el('small', 'paper-chat-evidence', this.doc?.book ? label('Based on a section of this book.','依据书中小节作答。') : label('Based on excerpts from ' + coverage.pagesUsed + ' of ' + coverage.pageCount + ' pages.','依据全篇 ' + coverage.pageCount + ' 页中的 ' + coverage.pagesUsed + ' 页摘录作答。')));
       let note = this.noteActions.get(exchange.requestId);
       if (!note) {
         const url = new URL('index.html', location.href);
@@ -306,7 +308,7 @@ export class PaperChat {
   }
   private question(turn: ChatRequest, passageThread: boolean): void {
     const row = el('div', 'paper-chat-question'), header = el('div', 'paper-chat-origin');
-    header.append(el('span', 'paper-chat-speaker', 'You'));
+    header.append(el('span', 'paper-chat-speaker', label('You','我')));
     if (turn.source) {
       const source = turn.source;
       const kind = isScreenshotAnchor(source.anchor) ? screenshotFigureLabel(source.label) ?? label('Screenshot','截图') : passageThread ? label('Selection chat','选段讨论') : label('Selected passage','所选原文');
@@ -324,7 +326,7 @@ export class PaperChat {
   }
   private legacyLookups(records: WordRecord[]): void {
     const previous = el('details', 'paper-chat-lookups');
-    previous.append(el('summary', '', 'Previous lookups (' + records.length + ')'));
+    previous.append(el('summary', '', label('Previous lookups (' + records.length + ')','历史查询（' + records.length + '）')));
     previous.addEventListener('toggle', () => {
       if (!previous.open || previous.children.length > 1) return;
       for (const record of records) {
@@ -384,7 +386,7 @@ export class PaperChat {
   private resize(): void {
     const grip = this.grip;
     grip.tabIndex = 0; grip.setAttribute('role', 'separator');
-    grip.ariaLabel = 'Resize paper chat'; grip.setAttribute('aria-orientation', 'horizontal');
+    grip.ariaLabel = label('Resize paper chat','调整全文问答高度'); grip.setAttribute('aria-orientation', 'horizontal');
     grip.setAttribute('aria-valuemin', '20'); grip.setAttribute('aria-valuemax', '72');
     const apply = (value: number, persist: boolean) => {
       this.ratio = Math.min(0.72, Math.max(0.2, value));

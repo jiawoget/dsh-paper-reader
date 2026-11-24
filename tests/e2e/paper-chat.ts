@@ -48,7 +48,7 @@ await withHost(async host => {
     }
     const address = host.origin + '/api/paper-reader/app/index.html?doc=' + docId + '&page=2';
     await reader.goto(address);
-    const chat = reader.getByRole('region', { name: 'Paper conversation' });
+    const chat = reader.getByRole('region', { name: 'Paper chat' });
     const toggle = chat.getByRole('button', { name: 'Paper chat' });
     await toggle.click({ timeout: 10_000 });
     const field = chat.getByRole('textbox', { name: 'Message about this paper' });
@@ -130,10 +130,10 @@ await withHost(async host => {
       }
       const paperReply = answers.nth(1), row = paperReply.locator('..');
       const replyId = await paperReply.getAttribute('data-exchange-id');
-      await row.getByRole('button', { name: 'Add to notebook' }).click();
+      await row.getByRole('button', { name: 'Add to Notes' }).click();
       await row.getByRole('button', { name: 'View', exact: true }).click();
       const notebook = reader.locator('#rail');
-      const citation = notebook.getByRole('link', { name: 'Paper discussion', exact: true });
+      const citation = notebook.getByRole('link', { name: 'Paper chat', exact: true });
       const linked = new URL((await citation.getAttribute('href'))!);
       assert.equal(linked.searchParams.get('discussion'), replyId);
       assert.equal(await notebook.getByRole('link', { name: 'View discussion', exact: true }).count(), 0);

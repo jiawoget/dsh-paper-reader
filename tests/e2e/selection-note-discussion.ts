@@ -80,9 +80,9 @@ async function connect(page: Page, model: Awaited<ReturnType<typeof requestRecor
   await tapOrClick(page.getByRole('button', { name: '更多操作' }), mobile);
   await tapOrClick(page.getByRole('button', { name: '连接设置', exact: true }), mobile);
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('API base URL').fill(model.url);
-  await dialog.getByLabel('Model', { exact: true }).fill(model.model);
-  await dialog.getByLabel('API key', { exact: true }).fill(model.key);
+  await dialog.getByLabel('API 接口地址').fill(model.url);
+  await dialog.getByLabel('模型', { exact: true }).fill(model.model);
+  await dialog.getByLabel('API 密钥', { exact: true }).fill(model.key);
   await tapOrClick(dialog.getByRole('button', { name: '保存连接设置' }), mobile);
   await dialog.waitFor({ state: 'hidden' });
   await page.getByText('连接设置已保存。', { exact: true }).waitFor({ state: 'hidden' });
@@ -169,17 +169,17 @@ async function checkPixels(url: string, capture: Capture) {
 
 function discussion(page: Page) { return page.locator('.selection-chat:visible'); }
 
-function notes(page: Page) { return discussion(page).getByLabel('Notes for this selection'); }
+function notes(page: Page) { return discussion(page).getByLabel('当前选区笔记'); }
 
-function composer(page: Page) { return discussion(page).getByRole('textbox', { name: 'Message about this selection' }); }
+function composer(page: Page) { return discussion(page).getByRole('textbox', { name: '针对此选段提问' }); }
 
-function noteEditor(page: Page) { return notes(page).getByRole('textbox', { name: 'Your note', exact: true }); }
+function noteEditor(page: Page) { return notes(page).getByRole('textbox', { name: '笔记内容', exact: true }); }
 
 function savedNote(page: Page, text: string) { return notes(page).locator('.selection-saved-note').filter({ hasText: text }); }
 
 async function saveNote(page: Page, text: string, mobile: boolean) {
   await noteEditor(page).fill(text);
-  await tapOrClick(notes(page).getByRole('button', { name: 'Save note', exact: true }), mobile);
+  await tapOrClick(notes(page).getByRole('button', { name: '保存笔记', exact: true }), mobile);
   await noteEditor(page).waitFor({ state: 'hidden' });
   await savedNote(page, text.split('\n')[0]).waitFor();
 }
@@ -219,8 +219,8 @@ async function sendWhileSaving<T>(page: Page, sendQuestion: (release: () => void
   };
   await page.route(action, delay);
   try {
-    await Promise.all([page.waitForRequest(isNoteSave), notes(page).getByRole('button', { name: 'Save note', exact: true }).click()]);
-    assert.equal(await notes(page).getByRole('button', { name: 'Saving…', exact: true }).isDisabled(), true);
+    await Promise.all([page.waitForRequest(isNoteSave), notes(page).getByRole('button', { name: '保存笔记', exact: true }).click()]);
+    assert.equal(await notes(page).getByRole('button', { name: '保存中…', exact: true }).isDisabled(), true);
     return await sendQuestion(release.resolve);
   } finally {
     release.resolve();
@@ -273,8 +273,8 @@ for (const mobile of devices) await withHost(async host => {
     const pageJump = page.getByRole('button', { name: /跳转到页码/ });
     if (!(await pageJump.innerText()).includes('6 /')) {
       await tapOrClick(pageJump, mobile);
-      await page.getByRole('spinbutton', { name: 'Page number' }).fill('6');
-      await tapOrClick(page.getByRole('button', { name: 'Go', exact: true }), mobile);
+      await page.getByRole('spinbutton', { name: '页码' }).fill('6');
+      await tapOrClick(page.getByRole('button', { name: '跳转', exact: true }), mobile);
     }
     const capture = await captureArea(page, blockTableLines, mobile);
     await tapOrClick(page.locator('.pdf-capture-actions').getByRole('button', { name: '记笔记', exact: true }), mobile);
@@ -295,7 +295,7 @@ for (const mobile of devices) await withHost(async host => {
     checkNotes(first, [note]);
     checkNotes(next, [note]);
 
-    await tapOrClick(notes(page).getByRole('button', { name: 'Add another note', exact: true }), mobile);
+    await tapOrClick(notes(page).getByRole('button', { name: '再记一条', exact: true }), mobile);
     await noteEditor(page).fill(extraNote);
     checkNotes(await ask(page, model, '这个框里说块表记录了什么？', mobile), [note]);
     if (mobile) await saveNote(page, extraNote, mobile);
@@ -321,7 +321,7 @@ for (const mobile of devices) await withHost(async host => {
       }));
       checkNotes(saved, [note, extraNote]);
     }
-    await tapOrClick(savedNote(page, note).getByRole('button', { name: 'Edit', exact: true }), mobile);
+    await tapOrClick(savedNote(page, note).getByRole('button', { name: '编辑', exact: true }), mobile);
     await saveNote(page, revisedNote, mobile);
     checkNotes(await ask(page, model, '请按这里最新保存的笔记回答。', mobile), [revisedNote, extraNote]);
 
@@ -350,9 +350,9 @@ for (const mobile of devices) await withHost(async host => {
       const noteId = await savedNote(page, extraNote).getAttribute('data-note-id');
       assert.ok(noteId);
       await page.locator('#mobileRail').click();
-      const notebook = page.getByLabel('阅读笔记本', { exact: true });
+      const notebook = page.getByLabel('阅读笔记', { exact: true });
       const linkedNote = notebook.locator('.notebook-source[data-note-id=' + JSON.stringify(noteId) + ']');
-      await linkedNote.getByRole('button', { name: 'Delete linked note', exact: true }).click();
+      await linkedNote.getByRole('button', { name: '删除关联笔记', exact: true }).click();
       await notebook.getByRole('button', { name: '保存', exact: true }).click();
       await notebook.getByText('已保存到本机', { exact: true }).waitFor();
       await page.locator('#closeRail').click();
@@ -360,7 +360,7 @@ for (const mobile of devices) await withHost(async host => {
       checkNotes(await ask(page, model, '删除一条后，这个框还剩哪些笔记？', mobile), [revisedNote]);
 
       await page.getByRole('button', { name: '读正文', exact: true }).click();
-      await page.getByRole('region', { name: 'Page text' }).getByRole('button', { name: /选中此段.*Parallel cache access/ }).click();
+      await page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*并行缓存访问/ }).click();
       await page.locator('#card').getByRole('button', { name: '接着问', exact: true }).click();
       const mixed = await ask(page, model, '也看看这段原文，按前一张截图的笔记解释。', mobile);
       checkNotes(mixed, []);
