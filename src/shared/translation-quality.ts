@@ -39,6 +39,4 @@ export function translationQualityError(source: string, result: string): string 
   if (isUntranslatedEnglish(source, result)) return 'The model returned the original English passage. Retry the page translation.';
 }
 
-export function targetsSimplifiedChinese(language: string): boolean {
-  return /^(?:simplified chinese|chinese(?:\s*\(simplified\))?|zh(?:[-_](?:cn|hans)(?:[-_]cn)?)?)$/i.test(language.trim());
-}
+export { targetsSimplifiedChinese } from './languages.js';

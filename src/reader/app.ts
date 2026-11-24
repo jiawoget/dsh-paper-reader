@@ -1,4 +1,5 @@
 import type { DocumentInfo, NotebookSnapshot, OpenDocument, PageView, ReaderState, RegionIntent, SelectionHit, SourceRecord } from '../shared/types.js';
+import { DEFAULT_TARGET_LANGUAGE, targetLanguageLabel, targetsSimplifiedChinese } from '../shared/languages.js';
 import { readArticleRegion } from '../shared/article-region.js';
 import { savedBookPlace, trackBookPlace } from './book-position.js';
 import { showSectionControls } from './book-navigation.js';
@@ -59,7 +60,7 @@ function syncTheme(): void {
 class Reader implements ReaderPort {
   doc:DocumentInfo={id:'pagedattention',title:'PagedAttention.pdf',kind:'pdf',defaultPage:6};
   page=6;
-  state:ReaderState={notes:[],vocabulary:[],history:[],settings:{hasApiKey:false,aiMode:'unconfigured',model:'',baseUrl:'',vaultPath:'',hasZoteroKey:false,zoteroLibraryId:'',zoteroLibraryType:'user'}};
+  state:ReaderState={notes:[],vocabulary:[],history:[],settings:{hasApiKey:false,aiMode:'unconfigured',model:'',baseUrl:'',targetLanguage:DEFAULT_TARGET_LANGUAGE,vaultPath:'',hasZoteroKey:false,zoteroLibraryId:'',zoteroLibraryType:'user'}};
   view?:PageView;
   notebook?:NotebookSnapshot;
   notebookError?:string;
@@ -104,6 +105,11 @@ class Reader implements ReaderPort {
   private zoom=this.desk.zoom;
   private tab:SidebarTab='notes';
   private get parallel(): boolean { return this.desk.mode === 'bilingual'; }
+  private get targetLanguage(): string { return this.state.settings.targetLanguage || DEFAULT_TARGET_LANGUAGE; }
+  private get targetLanguageLabel(): string {
+    const target = this.targetLanguage;
+    return label(targetLanguageLabel(target, false), targetLanguageLabel(target, true));
+  }
   private get pdfView(): PdfPageView | undefined {
     return this.view && 'setTextView' in this.view ? this.view as PdfPageView : undefined;
   }
@@ -142,6 +148,7 @@ class Reader implements ReaderPort {
       || this.notebook?.desktopOpenAvailable!==book.value?.desktopOpenAvailable || this.notebook?.path!==book.value?.path
       || this.state.settings.vaultPath!==state.settings.vaultPath
       || book.value?.notes.some((note,index)=>note.updatedAt!==this.notebook?.notes[index]?.updatedAt);
+    const previousTarget=this.state.settings.targetLanguage;
     this.state=state;
     this.notebookError=book.error;
     if(book.value){
@@ -152,6 +159,14 @@ class Reader implements ReaderPort {
     if((this.tab==='notes' && notebookChanged)||(this.tab!=='contents' && !byId('railBody').hasChildNodes()))this.repaintNotes();
     this.card.refresh();
     this.chat.render();
+    const targetChanged=Boolean(previousTarget && state.settings.targetLanguage && previousTarget!==state.settings.targetLanguage);
+    if(targetChanged){
+      byId('translationInfo').textContent=this.targetLanguageLabel;
+      if(this.view && !this.navigating){
+        this.translatingView=undefined;
+        await this.render(++this.epoch);
+      }
+    }
   }
   paperSelection(source?: ChatSource):void { this.chat.selected(source); }
   notebookHighlights() {
@@ -407,7 +422,8 @@ class Reader implements ReaderPort {
     const doc=this.doc,page=this.page;
     this.card.close();this.view?.dispose?.();this.view=undefined;
     const pdf=this.pdf;
-    const translations=pdf ? {} : (await api('translation.get',{docId:doc.id,page})).translations;
+    const targetLanguage=this.targetLanguage;
+    const translations=pdf ? {} : (await api('translation.get',{docId:doc.id,page,targetLanguage})).translations;
     if(version!==this.epoch)return;
     document.title=doc.title+' · Paper Reader';byId('docTitle').textContent=doc.title;
     const section=doc.book?.sections[page-1];
@@ -425,7 +441,7 @@ class Reader implements ReaderPort {
     byId<HTMLButtonElement>('prev').disabled=page<=1;byId<HTMLButtonElement>('next').disabled=page>=pages;
     const sourceEl=byId('original'),translationEl=byId('translated');
     const focusKey='reader.focus.'+doc.id+'.'+page;
-    if(!pdf)byId('translationInfo').textContent=label('Simplified Chinese','简体中文');
+    if(!pdf)byId('translationInfo').textContent=this.targetLanguageLabel;
     const opening=new AbortController();
     let interacted=false;
     let capturedAnchor='';
@@ -453,7 +469,7 @@ class Reader implements ReaderPort {
       this.translate.hidden=true;
       if(this.parallel)void this.translatePdf(view,doc,page);
     };
-    const options={doc,page,sourceEl,translationEl,translations,onSelect,onMounted,
+    const options={doc,page,sourceEl,translationEl,translations,targetLanguage,targetLanguageLabel:this.targetLanguageLabel,onSelect,onMounted,
       onNavigateAnchor:(anchor:string)=>this.navigate(doc.id,page,anchor),
       onBookSection:(number:number,fragment?:string)=>this.navigate(doc.id,number,fragment?'publisher:'+fragment:''),
       onAmbiguousQuote:()=>toast(label('This quote occurs more than once. Showing its paragraph.', '这段引文在段内出现多次，已定位到段落。')),
@@ -511,26 +527,38 @@ class Reader implements ReaderPort {
       return;
     }
     if (view.blocks.every(block => block.translation)) return;
+    const target = this.targetLanguage;
+    const targetName = this.targetLanguageLabel;
     const retry = { label: 'Retry translation', run: () => { void this.translatePdf(view, doc, page); } };
     const connections = { label: 'Connections', run: () => settingsDialog(this) };
     this.translatingView=view;
     view.setTranslationState('pending', 'Checking saved translations…');
     try {
-      const cached = await api('translation.get', {docId: doc.id, page});
+      const cached = await api('translation.get', {docId: doc.id, page, targetLanguage: target});
       if (!active()) return;
       view.setTranslations?.(cached.translations);
       this.card.refresh();
       const missing = view.blocks.filter(block => !block.translation);
       if (!missing.length) return;
-      if (this.state.settings.aiMode === 'unconfigured' && !this.state.settings.localTranslationAvailable) {
-        view.setTranslationState('unavailable', 'Connect a translation model to read this page in Simplified Chinese.', [connections, retry]);
+      const canUseLocal = Boolean(this.state.settings.localTranslationAvailable) && targetsSimplifiedChinese(target);
+      if (this.state.settings.aiMode === 'unconfigured' && !canUseLocal) {
+        const guidance = this.state.settings.localTranslationAvailable && !targetsSimplifiedChinese(target)
+          ? label(
+              'The built-in offline translator only supports Simplified Chinese. Connect a translation model in Connections to translate into ' + targetName + '.',
+              '内置离线翻译仅支持简体中文。请在连接设置中配置翻译模型以翻译为' + targetName + '。'
+            )
+          : label(
+              'Connect a translation model to read this page in ' + targetName + '.',
+              '请连接翻译模型以将本页翻译为' + targetName + '。'
+            );
+        view.setTranslationState('unavailable', guidance, [connections, retry]);
         return;
       }
-      view.setTranslationState('loading', 'Translating this page into Simplified Chinese…');
-      const key = doc.id + ':' + page;
+      view.setTranslationState('loading', label('Translating this page into ' + targetName + '…', '正在将本页翻译为' + targetName + '…'));
+      const key = doc.id + ':' + page + ':' + target;
       let request = this.pdfTranslations.get(key);
       if (!request) {
-        request = api('translation.page', {docId: doc.id, page, blocks: missing.map(({id, text}) => ({id, text}))})
+        request = api('translation.page', {docId: doc.id, page, targetLanguage: target, blocks: missing.map(({id, text}) => ({id, text}))})
           .then(result => result.translations);
         this.pdfTranslations.set(key, request);
         const clear = () => { if (this.pdfTranslations.get(key) === request) this.pdfTranslations.delete(key); };
@@ -561,7 +589,7 @@ class Reader implements ReaderPort {
     if(!blocks.length)return;
     this.translate.disabled=true;this.translate.textContent=label('Translating…','正在翻译…');
     try{
-      const {translations}=await api('translation.page',{docId:doc.id,page,blocks:blocks.map(({id,text})=>({id,text}))});
+      const {translations}=await api('translation.page',{docId:doc.id,page,targetLanguage:this.targetLanguage,blocks:blocks.map(({id,text})=>({id,text}))});
       if(version===this.epoch){this.view?.setTranslations?.(translations);this.card.refresh();this.translate.hidden=true;}
     }catch(error){if(version===this.epoch)toast(message(error));}
     finally{if(version===this.epoch){this.translate.disabled=false;this.translate.textContent=doc.book ? label('Translate section','翻译本节') : doc.kind==='web' ? label('Translate article','翻译文章') : label('Translate page','翻译本页');}}
@@ -731,7 +759,7 @@ class Reader implements ReaderPort {
     const [sourceHead,targetHead]=document.querySelectorAll<HTMLElement>('.headings b');
     if(sourceHead)sourceHead.textContent=label('Original','原文');
     if(targetHead)targetHead.textContent=label('Translation','译文');
-    byId('translationInfo').textContent=label('Simplified Chinese','简体中文');
+    byId('translationInfo').textContent=this.targetLanguageLabel;
     click('library',()=>libraryDialog(this));click('prev',()=>this.navigate(this.doc.id,this.page-1));click('next',()=>this.navigate(this.doc.id,this.page+1));
     const jump=byId<HTMLFormElement>('pageJump'), input=byId<HTMLInputElement>('pageNumber');
     jump.addEventListener('beforetoggle',event=>{

@@ -117,6 +117,7 @@ export interface ZoteroStatus {
 }
 export interface Settings {
   baseUrl: string; model: string; hasApiKey: boolean; aiMode: 'api' | 'dsh' | 'unconfigured';
+  targetLanguage: string;
   localTranslationAvailable?: boolean;
   questionModel?: QuestionModel;
   hostProvider?: string; hostModel?: string; vaultPath: string; zoteroLibraryType: 'user' | 'group';
@@ -150,8 +151,8 @@ export interface Operations {
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
   'article.capture.save': [{ docId: string; page: number; location: string; image: string; regionText: string; label: string }, { anchor: string }];
   'article.capture.get': [{ docId: string; page: number; anchor: string }, { image: string; regionText: string; label: string }];
-  'translation.get': [{ docId: string; page: number }, { translations: Record<string,string> }];
-  'translation.page': [{ docId: string; page: number; blocks: ReaderBlock[] }, { translations: Record<string,string> }];
+  'translation.get': [{ docId: string; page: number; targetLanguage?: string }, { translations: Record<string,string> }];
+  'translation.page': [{ docId: string; page: number; blocks: ReaderBlock[]; targetLanguage?: string }, { translations: Record<string,string> }];
   'ai': [{ mode: 'translate' | 'explain' | 'followup'; text: string; context: string; image?: string; regionText?: string;
     readerNotes?: string[]; previousMaterial?: { label: string; text: string; image?: string; readerNotes?: string[] }[];
     targetLanguage?: string; question?: string; answerQuote?: string; questionModel?: QuestionModel | null;
@@ -170,7 +171,7 @@ export interface Operations {
   'vocab.save': [SourceRecord & { text: string; meaning: string; context: string }, { word: WordRecord }];
   'vocab.delete': [{ id: string }, unknown];
   'history.add': [SourceRecord & { text: string; meaning: string; context?: string }, unknown];
-  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'>> & { apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean }, { settings: Settings }];
+  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'>> & { apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean }, { settings: Settings }];
   'obsidian.export': [NotebookRequest, { path: string }];
   'zotero.collections': [{library?: string}, { collections: Collection[]; library: string }];
   'zotero.browse': [{query?: string; collection?: string; start?: number; library?: string},

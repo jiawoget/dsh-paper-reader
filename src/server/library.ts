@@ -3,6 +3,7 @@ import { mkdir, link, readFile, readdir, rm, writeFile, rename } from 'node:fs/p
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { DEFAULT_TARGET_LANGUAGE, findTargetLanguagePreset, parseTargetLanguage, targetsSimplifiedChinese } from '../shared/languages.js';
 import { bookSlug, openStaxLocation, openStaxUrl, type OpenStaxLocation } from '../shared/openstax.js';
 import type { DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
 import type { WebArticle } from '../shared/web-article.js';
@@ -19,6 +20,15 @@ export const sample: DocumentInfo = {
   url: 'https://arxiv.org/abs/2309.06180', doi: '10.1145/3600006.3613165', defaultPage: 6
 };
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+export function translationCacheSlug(targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE): string {
+  const parsed = parseTargetLanguage(targetLanguage);
+  if (!parsed.ok) fail(parsed.error, 400);
+  const preset = findTargetLanguagePreset(parsed.value);
+  if (preset) return preset.slug;
+  const normalized = parsed.value.normalize('NFC').toLowerCase();
+  const ascii = normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  return 'custom-' + (ascii ? ascii + '-' : '') + hash(normalized).slice(0, 16);
+}
 export function isRecord(value: unknown): value is Record<string,unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -267,23 +277,26 @@ export class Library {
     this.imageJobs.set(file, job);
     try { return await job; } finally { this.imageJobs.delete(file); }
   }
-  private pageFile(id: unknown, page: unknown): string {
+  private pageFile(id: unknown, page: unknown, targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE): string {
     if (!validDocId(id) || typeof page !== 'number' || !Number.isSafeInteger(page) || page < 1 || page > 100000) fail('Invalid document or page number.');
-    return path.join(this.translationDir, id, page + '.json');
+    const slug = translationCacheSlug(targetLanguage);
+    return slug ? path.join(this.translationDir, id, slug, page + '.json') : path.join(this.translationDir, id, page + '.json');
   }
-  async translations(id: unknown, page: unknown): Promise<Record<string,string>> {
-    const file = this.pageFile(id,page);
+  async translations(id: unknown, page: unknown, targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE): Promise<Record<string,string>> {
+    const file = this.pageFile(id, page, targetLanguage);
+    const chinese = typeof targetLanguage === 'string' && targetsSimplifiedChinese(targetLanguage);
     try {
       const data: unknown = JSON.parse(await readFile(file, 'utf8'));
       if (!isRecord(data) || !Object.values(data).every(v => typeof v === 'string')) fail('The translation cache is damaged.', 500);
       const translations = data as Record<string,string>;
-      if (typeof id === 'string' && /^(?:web|book)-/.test(id)) return translations;
+      if ((typeof id === 'string' && /^(?:web|book)-/.test(id)) || !chinese) return translations;
       return Object.fromEntries(Object.entries(translations).filter(([, text]) => !hasDecoderRepetition(text)));
     } catch (error) { if (isFsError(error, 'ENOENT')) return {}; throw error; }
   }
-  async translate(id: unknown, page: unknown, input: unknown, translate: Translate): Promise<Record<string,string>> {
+  async translate(id: unknown, page: unknown, input: unknown, translate: Translate, targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE): Promise<Record<string,string>> {
     const doc = await this.get(id);
-    const file = this.pageFile(id,page);
+    const file = this.pageFile(id, page, targetLanguage);
+    const checkChineseQuality = doc.kind === 'pdf' && typeof targetLanguage === 'string' && targetsSimplifiedChinese(targetLanguage);
     if (!Array.isArray(input) || !input.length || input.length > 4000) fail('No translatable paragraphs or page too long.');
     const seen = new Set<string>();
     const blocks = input.map((b:unknown): ReaderBlock => {
@@ -294,15 +307,15 @@ export class Library {
     const previous = this.jobs.get(file);
     const job = (async () => {
       if (previous) await previous.catch(() => undefined);
-      const result = await this.translations(id, page);
-      const pending = blocks.filter(b => !result[b.id]?.trim() || (doc.kind === 'pdf' && translationQualityError(b.text, result[b.id])));
+      const result = await this.translations(id, page, targetLanguage);
+      const pending = blocks.filter(b => !result[b.id]?.trim() || (checkChineseQuality && translationQualityError(b.text, result[b.id])));
       await mkdir(path.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i,i+8);
         const translated = await translate(batch, doc.kind);
         for (const {id:key,text} of batch) {
           if (!translated[key]?.trim()) fail('The model omitted a paragraph. Retry to resume the translation.', 502);
-          const problem = doc.kind === 'pdf' && translationQualityError(text, translated[key]);
+          const problem = checkChineseQuality && translationQualityError(text, translated[key]);
           if (problem) fail(problem, 502);
           result[key] = translated[key];
         }

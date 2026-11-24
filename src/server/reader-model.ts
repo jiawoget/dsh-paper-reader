@@ -4,7 +4,7 @@ import type { ChatRequest, PaperEvidence, QuestionCatalog, QuestionModel } from 
 import { localTranslationAvailable, translateLocally } from './local-translation.js';
 import { translationQualityError, targetsSimplifiedChinese } from '../shared/translation-quality.js';
 import {
-  initialSettings, isObject, onLoopback, readQuestionModel, ServiceError, single, stringValue, zoteroModeFor,
+  initialSettings, isObject, onLoopback, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, zoteroModeFor,
   type Input, type PrivateSettings, type PublicSettings, type ServiceResults
 } from './service-types.js';
 
@@ -130,6 +130,7 @@ export class ReaderModel {
     const route = await this.#route(settings);
     return {
       model: settings.model, baseUrl: settings.baseUrl, hasApiKey: Boolean(settings.apiKey),
+      targetLanguage: settings.targetLanguage,
       questionModel: settings.questionModel,
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind, hostProvider: route.kind === 'dsh' ? route.provider : '', hostModel: route.kind === 'dsh' ? route.model : '',
@@ -213,7 +214,7 @@ export class ReaderModel {
   async passage(settings: PrivateSettings, input: Input, streamOptions?: StreamOptions): Promise<{ text: string }> {
     const mode = input.mode;
     if (mode !== 'translate' && mode !== 'explain' && mode !== 'followup') throw new ServiceError(400, 'Choose translate, explain or followup.');
-    const target = single(input.targetLanguage ?? 'Simplified Chinese', 'target language', 64, true);
+    const target = input.targetLanguage === undefined ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
     const attachments = hostAttachments(this.#ctx);
     const image = input.image === undefined ? undefined : await readRegionImage(input.image, attachments);
     if (!image && input.regionText !== undefined) throw new ServiceError(400, 'The screenshot is missing. Select the area again.');
@@ -318,7 +319,7 @@ export class ReaderModel {
       ids.add(id);
       return { id, text: stringValue(block.text, 'selected passage', 24_000, true) };
     });
-    const target = single(input.targetLanguage ?? 'Simplified Chinese', 'target language', 64, true);
+    const target = input.targetLanguage === undefined ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
     const chinesePdf = input.documentKind !== 'web' && targetsSimplifiedChinese(target);
     let raw: string;
     try {

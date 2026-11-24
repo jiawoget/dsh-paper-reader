@@ -1,4 +1,5 @@
 import type { RegionIntent, SelectionHit, SourceRecord } from '../shared/types.js';
+import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47 } from '../shared/languages.js';
 import { quoteLocator, writeSelectionRange, writeTranslatedLocator } from '../shared/source-link.js';
 import { hasPassageGutter, positionPassageCard } from './floating-position.js';
 import type { ReaderPort } from './panels.js';
@@ -380,7 +381,10 @@ export class SelectionCard {
           : item.exactPair ? readerLabel('Passage translation','选段译文') : readerLabel('Translated paragraph context','所在段落的译文');
         const content = el('p', isContext ? 'selection-context' : 'meaning', sourceMode && !term ? excerpt(text, 260) : text);
         content.dir = 'auto';
-        if (hit.side === 'source' && !glossary) content.lang = 'zh-CN';
+        if (hit.side === 'source' && !glossary) {
+          const lang = targetLanguageBcp47(app.state.settings.targetLanguage || DEFAULT_TARGET_LANGUAGE);
+          if (lang) content.lang = lang;
+        }
         if (sourceMode || (term && !isContext)) {
           if ((sourceMode && !item.exactPair && !glossary) || (term && !isContext)) counterpart.append(el('span', 'tag', label));
           counterpart.append(content);

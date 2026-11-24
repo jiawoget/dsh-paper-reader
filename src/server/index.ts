@@ -7,7 +7,8 @@ import { Library, PDF_LIMIT, fail, isRecord } from './library.js';
 import { openWebArticle } from './web-article.js';
 import { publicResource } from './public-resource.js';
 import { createServices } from './services.js';
-import { onLoopback } from './service-types.js';
+import { ReaderStore } from './reader-store.js';
+import { onLoopback, readTargetLanguage } from './service-types.js';
 
 type Method = 'GET'|'HEAD'|'POST';
 interface HostRoute { path:string; methods:Method[]; requestBody:'buffered'|'streaming'; fetch(request:Request):Promise<Response> }
@@ -61,6 +62,7 @@ async function boundedBody(request:Request, limit:number):Promise<Buffer> {
 export function apply(ctx:ReaderHost):void {
   const root = process.env.PAPER_READER_HOME || path.join(process.env.DSH_HOME || path.join(os.homedir(),'.dsh'),'paper-reader');
   const library = new Library(root);
+  const store = new ReaderStore(root);
   const models: {llm?: unknown; attachments?: unknown; sessionController?: unknown; agentDefaultModel?: unknown} = {};
   let listener:WebListener|undefined;
   ctx.inject(['webServer'],child=>{
@@ -146,12 +148,18 @@ export function apply(ctx:ReaderHost):void {
       case 'web.import': return json(await library.importWebDocument(input));
       case 'web.open': return json(await openWebArticle(library, input.url));
       case 'book.section': return json({doc:await library.bookSection(input.docId,input.page)});
-      case 'translation.get': return json({translations:await library.translations(input.docId,input.page)});
-      case 'translation.page': return json({translations:await library.translate(input.docId,input.page,input.blocks,async (blocks,documentKind)=>{
-        const result:unknown=await service('ai.blocks',{blocks,documentKind});
-        if(!isRecord(result)||!isRecord(result.translations)||!Object.values(result.translations).every(v=>typeof v==='string')) fail('The model returned an invalid translation.',502);
-        return result.translations as Record<string,string>;
-      })});
+      case 'translation.get': {
+        const targetLanguage = input.targetLanguage === undefined ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
+        return json({translations:await library.translations(input.docId,input.page,targetLanguage)});
+      }
+      case 'translation.page': {
+        const targetLanguage = input.targetLanguage === undefined ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
+        return json({translations:await library.translate(input.docId,input.page,input.blocks,async (blocks,documentKind)=>{
+          const result:unknown=await service('ai.blocks',{blocks,documentKind,targetLanguage});
+          if(!isRecord(result)||!isRecord(result.translations)||!Object.values(result.translations).every(v=>typeof v==='string')) fail('The model returned an invalid translation.',502);
+          return result.translations as Record<string,string>;
+        },targetLanguage)});
+      }
       case 'ai':
       case 'chat.ask': {
         const op = body.op;
