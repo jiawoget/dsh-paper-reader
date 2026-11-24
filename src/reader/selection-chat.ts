@@ -10,7 +10,7 @@ import { chatSource, isScreenshotAnchor, materialKey, notesForRecordedSource, no
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import type { SelectionNotes } from './selection-notes.js';
-import { activateAfterTouchDrag, api, button, byId, el, icon, message, readerLabel as label, toast } from './ui.js';
+import { activateAfterTouchDrag, api, apiStream, button, byId, el, icon, message, readerLabel as label, toast } from './ui.js';
 
 interface Turn { role: 'user' | 'assistant'; content: string; quote?: AnswerQuote; source?: ChatSource; requestId?: string }
 interface Request {
@@ -23,6 +23,8 @@ interface Request {
   quote?: AnswerQuote;
   payload?: Operations['ai'][0];
   side?: ReadingSide;
+  controller?: AbortController;
+  streamText?: string;
 }
 export interface ChatState {
   restored?: Promise<void>;
@@ -327,9 +329,12 @@ export class SelectionChat {
     if (pending && !this.pendingRow) {
       const question = rowFor({ role: 'user', content: pending.prompt, quote: pending.quote,
         source: pending.item && chatSource(pending.item) }, turns.length);
-      const wait = el('p', 'chat-wait', label('Waiting for a reply…', '正在回答…'));
+      const wait = el('p', 'chat-wait', pending.streamText || label('Waiting for a reply…', '正在回答…'));
+      wait.dir = 'auto';
       this.log.append(question, wait);
       this.pendingRow = { request: pending, question, wait };
+    } else if (pending && this.pendingRow && pending.streamText) {
+      this.pendingRow.wait.textContent = pending.streamText;
     }
     if (atEnd && !this.selected) this.log.scrollTop = this.log.scrollHeight;
   }
@@ -426,6 +431,10 @@ export class SelectionChat {
       if (!submit.disabled) void this.ask({ mode: 'followup', prompt: input.value.trim(), draftKey: activeDraft, quote: draft.quote });
     };
     row.append(input, submit);
+    if (this.state.pending) {
+      const stop = button(label('Stop', '停止'), () => { this.state.pending?.controller?.abort(); }, 'btn');
+      row.append(stop);
+    }
     this.form.append(row);
     if (cursor) {
       input.focus({ preventScroll: true });
@@ -473,7 +482,16 @@ export class SelectionChat {
         targetLanguage: request.mode === 'translate' && item.hit.side === 'translation' ? 'English' : undefined,
         record: { docId: item.source.docId, requestId: request.requestId, thread: this.thread,
           question: request.prompt, source: chatSource(item), answerQuote: request.quote?.text, answerTurn: request.quote?.turn } };
-      const reply = await api('ai', { ...request.payload, questionModel });
+      const controller = request.controller = new AbortController();
+      request.streamText = '';
+      const reply = await apiStream('ai', { ...request.payload, questionModel }, delta => {
+        request.streamText = (request.streamText ?? '') + delta;
+        if (this.pendingRow?.request === request) {
+          const atBottom = this.log.scrollHeight - this.log.clientHeight - this.log.scrollTop < 32;
+          this.pendingRow.wait.textContent = request.streamText;
+          if (atBottom) this.log.scrollTop = this.log.scrollHeight;
+        }
+      }, controller.signal);
       this.app.discussionChanged?.(item.source.docId);
       state.turns.push({ role: 'user', content: request.prompt, quote: request.quote, source: request.payload.record?.source },
         { role: 'assistant', content: reply.text, source: request.payload.record?.source, requestId: request.requestId });
@@ -484,9 +502,14 @@ export class SelectionChat {
       }
       void item.record?.(reply.text).catch(error => toast(message(error)));
     } catch (error) {
-      state.failure = { request, error: message(error) };
-      if (draft && !draft.text) draft.text = request.prompt;
+      if (request.controller?.signal.aborted) {
+        if (draft && !draft.text) draft.text = request.prompt;
+      } else {
+        state.failure = { request, error: message(error) };
+        if (draft && !draft.text) draft.text = request.prompt;
+      }
     } finally {
+      request.controller = undefined;
       state.pending = undefined;
       this.rememberDraft();
       this.changed();

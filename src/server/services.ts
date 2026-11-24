@@ -1,6 +1,6 @@
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
-import { ReaderModel } from './reader-model.js';
+import { ReaderModel, type StreamOptions } from './reader-model.js';
 import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
@@ -12,10 +12,10 @@ import { Library } from './library.js';
 export interface ServiceOptions { root: string; ctx?: unknown; fetchImpl?: typeof fetch; openObsidian?: ObsidianLauncher }
 type Operation = keyof ServiceResults;
 type Result = ServiceResults[Operation];
-type Handlers = { [K in Operation]: (input: Input) => ServiceResults[K] | Promise<ServiceResults[K]> };
+type Handlers = { [K in Operation]: (input: Input, options?: StreamOptions) => ServiceResults[K] | Promise<ServiceResults[K]> };
 export interface ServiceAction {
-  <K extends Operation>(operation: K, payload?: unknown): Promise<ServiceResults[K]>;
-  (operation: string, payload?: unknown): Promise<Result>;
+  <K extends Operation>(operation: K, payload?: unknown, options?: StreamOptions): Promise<ServiceResults[K]>;
+  (operation: string, payload?: unknown, options?: StreamOptions): Promise<Result>;
 }
 
 export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian() }: ServiceOptions): ServiceAction {
@@ -56,9 +56,9 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'vocab.save': input => ({ word: database.save('word', input) }),
     'vocab.delete': input => database.remove('word', input),
     'history.add': input => ({ entry: database.save('history', input) }),
-    ai: input => discussions.passage(input),
+    ai: (input, options) => discussions.passage(input, options),
     'chat.history': input => discussions.history(input),
-    'chat.ask': input => discussions.ask(input),
+    'chat.ask': (input, options) => discussions.ask(input, options),
     'chat.searchTerms': input => model.searchTerms(database.settings(), input),
     'ai.blocks': input => model.blocks(database.settings(), input),
     'obsidian.export': input => notebooks.export(input),
@@ -79,11 +79,11 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'zotero.save': input => zotero().save(input)
   } satisfies Handlers;
   function supported(action: string): action is Operation { return Object.hasOwn(handlers, action); }
-  function run<K extends Operation>(operation: K, payload?: unknown): Promise<ServiceResults[K]>;
-  function run(operation: string, payload?: unknown): Promise<Result>;
-  async function run(operation: string, payload: unknown = {}): Promise<Result> {
+  function run<K extends Operation>(operation: K, payload?: unknown, options?: StreamOptions): Promise<ServiceResults[K]>;
+  function run(operation: string, payload?: unknown, options?: StreamOptions): Promise<Result>;
+  async function run(operation: string, payload: unknown = {}, options?: StreamOptions): Promise<Result> {
     if (!supported(operation)) throw new ServiceError(404, 'Unknown Paper Reader operation.');
-    return handlers[operation](inputObject(payload));
+    return handlers[operation](inputObject(payload), options);
   }
   return run;
 }

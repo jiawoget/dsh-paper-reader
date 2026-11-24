@@ -77,4 +77,12 @@ test('questions use the exact DSH provider, model and opaque effort across resta
   assert.equal(apiCalls, 2, 'A disappearing host route must never send the question to the manual endpoint.');
   await reopen('ai.selectModel', { questionModel: null });
   assert.deepEqual(await act('ai', passage), { text: 'reader endpoint' });
+
+  const deltas: string[] = [];
+  const streamed = await reopen('ai', { ...passage, questionModel: first }, { onDelta: chunk => deltas.push(chunk) });
+  assert.equal(streamed.text, 'first');
+  assert.deepEqual(deltas, ['first']);
+  const canceled = new AbortController();
+  canceled.abort();
+  await assert.rejects(reopen('ai', { ...passage, questionModel: first }, { signal: canceled.signal }), { status: 499 });
 });

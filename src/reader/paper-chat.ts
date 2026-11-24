@@ -8,11 +8,12 @@ import { needsEnglishSearch, paperEvidence, readPaper } from './paper-evidence.j
 import { settingsDialog, sourceChip, type ReaderPort } from './panels.js';
 import { questionConnected, questionModelButton } from './question-model.js';
 import type { PdfDocument } from './pdf-view.js';
-import { api, button, el, icon, message, readerLabel as label } from './ui.js';
+import { api, apiStream, button, el, icon, message, readerLabel as label } from './ui.js';
 
 interface Conversation {
   draft: string; exchanges: ChatExchange[]; loaded: boolean; version: number;
   source?: ChatSource; pending?: ChatRequest; retry?: ChatRequest; issue?: string;
+  controller?: AbortController; streamText?: string;
 }
 
 export class PaperChat {
@@ -32,6 +33,8 @@ export class PaperChat {
   private readonly removeSelection = button('', () => this.setSource(undefined), 'icon-btn');
   private readonly input = el('textarea');
   private readonly submit = el('button', 'btn primary', label('Send','发送'));
+  private readonly stop = el('button', 'btn', label('Stop','停止'));
+  private pendingNode?: HTMLElement;
   private readonly grip = el('div', 'paper-chat-grip');
   private readonly conversations = new Map<string, Conversation>();
   private readonly noteActions = new Map<string, AnswerNotebookAction>();
@@ -83,9 +86,12 @@ export class PaperChat {
     this.input.rows = 1;
     this.input.maxLength = 16_000;
     this.submit.type = 'submit';
+    this.stop.type = 'button';
+    this.stop.hidden = true;
+    this.stop.onclick = () => { this.current()?.controller?.abort(); };
     const form = el('form', 'paper-chat-form');
     const row = el('div', 'paper-chat-input');
-    row.append(this.input, this.submit);
+    row.append(this.input, this.submit, this.stop);
     form.append(this.attachment, row);
     const history = el('div', 'paper-chat-transcript');
     history.append(this.log);
@@ -199,6 +205,7 @@ export class PaperChat {
   }
   private controls(state: Conversation): void {
     this.submit.disabled = Boolean(state.pending || !state.draft.trim() || !questionConnected(this.app.state.settings));
+    this.stop.hidden = !state.pending;
   }
   render(): void {
     const state = this.current();
@@ -287,9 +294,13 @@ export class PaperChat {
       row.append(actions);
       this.log.append(row);
     }
+    this.pendingNode = undefined;
     if (state.pending) {
       this.question(state.pending, false);
-      this.log.append(el('p', 'paper-chat-empty', 'Reading the paper…'));
+      const wait = el('p', 'paper-chat-empty', state.streamText || label('Reading the paper…', '正在阅读论文…'));
+      wait.dir = 'auto';
+      this.pendingNode = wait;
+      this.log.append(wait);
     }
     this.log.scrollTop = atBottom ? this.log.scrollHeight : scroll;
   }
@@ -332,6 +343,8 @@ export class PaperChat {
     const same = state.retry?.question === question && state.retry.source === state.source;
     const request = retry ?? (same ? state.retry : undefined) ?? { docId: doc.id, requestId: crypto.randomUUID(), question, source: state.source };
     if (!request.question) return;
+    const controller = state.controller = new AbortController();
+    state.streamText = '';
     state.pending = request; state.issue = undefined; state.retry = undefined;
     this.render();
     try {
@@ -345,15 +358,28 @@ export class PaperChat {
       const section = doc.sectionPage && doc.book?.sections[doc.sectionPage-1];
       const paper = paperEvidence(section ? doc.title + ' · ' + section.title : doc.paperTitle || doc.title, pages, query);
       if (doc.book) { paper.partial = true; paper.pageCount = doc.book.sections.length; }
-      const { text } = await api('chat.ask', { ...request, paper, questionModel });
+      const { text } = await apiStream('chat.ask', { ...request, paper, questionModel }, delta => {
+        state.streamText = (state.streamText ?? '') + delta;
+        if (this.doc === doc && this.pendingNode) {
+          const atBottom = this.log.scrollHeight - this.log.clientHeight - this.log.scrollTop < 32;
+          this.pendingNode.textContent = state.streamText;
+          if (atBottom) this.log.scrollTop = this.log.scrollHeight;
+        }
+      }, controller.signal);
       if (!state.exchanges.some(turn => turn.requestId === request.requestId)) {
         state.exchanges.push({ ...request, thread: 'paper', answer: text, createdAt: new Date().toISOString() });
       }
       if (state.draft.trim() === request.question) state.draft = '';
       if (state.source === request.source) state.source = undefined;
       await this.reload(doc.id);
-    } catch (error) { state.issue = message(error); state.retry = request; }
-    finally { state.pending = undefined; if (this.doc === doc) this.render(); }
+    } catch (error) {
+      if (!controller.signal.aborted) { state.issue = message(error); state.retry = request; }
+    } finally {
+      state.controller = undefined;
+      state.streamText = undefined;
+      state.pending = undefined;
+      if (this.doc === doc) this.render();
+    }
   }
   private resize(): void {
     const grip = this.grip;
