@@ -143,12 +143,14 @@ function requestDocument(records: NotebookRecords, input: Input, sources: VaultS
   return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries('note', docId, chapter)) }, sources, false);
 }
 
+const storedDocId = /^(?:pdf|web|book)-[a-f0-9]{64}$/;
+
 export class PaperNotebooks {
   constructor(private readonly database: ReaderStore, private readonly library: Library, private readonly launch?: ObsidianLauncher) {}
 
   private async sources(id: unknown, fallback?: unknown): Promise<VaultSources> {
     let metadata: DocumentInfo | undefined;
-    if (typeof id === 'string' && (id === 'pagedattention' || /^(?:pdf|web|book)-[a-f0-9]{64}$/.test(id))) {
+    if (typeof id === 'string' && (id === 'pagedattention' || storedDocId.test(id))) {
       try { metadata = await this.library.get(id); }
       catch (error) { if ((error as {status?: number})?.status !== 404) throw error; }
     }
@@ -162,6 +164,9 @@ export class PaperNotebooks {
 
   async read(input: Input): Promise<NotebookSnapshot> {
     const sources = await this.sources(input.docId, input.sourceUrl);
+    if (typeof input.docId === 'string' && storedDocId.test(input.docId) && !sources.doc) {
+      throw new ServiceError(404, 'This document has not been imported.');
+    }
     return this.database.withNotebook(records => {
       const book = requestDocument(records, input, sources);
       const { docId, chapter } = book.local;
@@ -174,6 +179,9 @@ export class PaperNotebooks {
     const markdown = stringValue(input.markdown, 'notebook Markdown', 4_000_000, false, true);
     if (typeof input.markdown !== 'string') throw new ServiceError(400, 'The full Markdown text is required.');
     const sources = await this.sources(input.docId, input.sourceUrl);
+    if (typeof input.docId === 'string' && storedDocId.test(input.docId) && !sources.doc) {
+      throw new ServiceError(404, 'This document has not been imported.');
+    }
     return this.database.withNotebook(records => {
       const book = requestDocument(records, input, sources);
       if (input.expectedRevision !== revision(book)) throw new ServiceError(409, 'The notebook changed. Compare the latest Markdown with your draft before saving.');

@@ -2594,6 +2594,7 @@ function requestDocument(records, input, sources) {
   const doc = { docId, title, sourceUrl: sourceUrl2, chapter };
   return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries("note", docId, chapter)) }, sources, false);
 }
+var storedDocId = /^(?:pdf|web|book)-[a-f0-9]{64}$/;
 var PaperNotebooks = class {
   constructor(database, library, launch2) {
     this.database = database;
@@ -2605,7 +2606,7 @@ var PaperNotebooks = class {
   launch;
   async sources(id, fallback) {
     let metadata;
-    if (typeof id === "string" && (id === "pagedattention" || /^(?:pdf|web|book)-[a-f0-9]{64}$/.test(id))) {
+    if (typeof id === "string" && (id === "pagedattention" || storedDocId.test(id))) {
       try {
         metadata = await this.library.get(id);
       } catch (error) {
@@ -2620,6 +2621,9 @@ var PaperNotebooks = class {
   }
   async read(input) {
     const sources = await this.sources(input.docId, input.sourceUrl);
+    if (typeof input.docId === "string" && storedDocId.test(input.docId) && !sources.doc) {
+      throw new ServiceError(404, "This document has not been imported.");
+    }
     return this.database.withNotebook((records) => {
       const book = requestDocument(records, input, sources);
       const { docId, chapter } = book.local;
@@ -2631,6 +2635,9 @@ var PaperNotebooks = class {
     const markdown2 = stringValue(input.markdown, "notebook Markdown", 4e6, false, true);
     if (typeof input.markdown !== "string") throw new ServiceError(400, "The full Markdown text is required.");
     const sources = await this.sources(input.docId, input.sourceUrl);
+    if (typeof input.docId === "string" && storedDocId.test(input.docId) && !sources.doc) {
+      throw new ServiceError(404, "This document has not been imported.");
+    }
     return this.database.withNotebook((records) => {
       const book = requestDocument(records, input, sources);
       if (input.expectedRevision !== revision(book)) throw new ServiceError(409, "The notebook changed. Compare the latest Markdown with your draft before saving.");

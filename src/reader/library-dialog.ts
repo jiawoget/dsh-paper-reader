@@ -134,14 +134,8 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
         const delBtn = button(confirmingId === doc.id ? t('Delete', '确认删除') : '', async () => {
           if (confirmingId !== doc.id) { confirmingId = doc.id; render(); return; }
           const wasActive = app.doc.id === doc.id;
-          if (wasActive) app.discardDocument?.(doc.id);
-          try {
-            await api('library.delete', { id: doc.id });
-          } catch (error) {
-            if (wasActive) await app.navigate(doc.id, app.page).catch(() => {});
-            throw error;
-          }
-          if (!wasActive) app.discardDocument?.(doc.id);
+          await api('library.delete', { id: doc.id });
+          app.discardDocument?.(doc.id);
           clearDocumentStorage(doc.id);
           const index = docs.indexOf(doc);
           if (index >= 0) docs.splice(index, 1);

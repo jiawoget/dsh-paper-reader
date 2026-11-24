@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Library } from '../src/server/library.js';
 import { ReaderStore } from '../src/server/reader-store.js';
+import { createServices } from '../src/server/services.js';
 
 function countRows(db: DatabaseSync, sql: string, ...params: (string | number)[]): number {
   const row = db.prepare(sql).get(...params) as { n: number };
@@ -179,4 +180,65 @@ test('library.delete enforces boundary status codes (400 sample, 404 traversal/m
   }
   const missingId = 'pdf-' + 'a'.repeat(64);
   assert.deepEqual(await library.delete(missingId), { id: missingId, deleted: false });
+});
+
+test('book.progress.save, notebook.get, and notebook.write reject deleted stored library documents with 404 and zero resurrection', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-delete-resurrect-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const store = new ReaderStore(root);
+  const library = new Library(root, undefined, id => store.deleteDocument(id));
+  const act = createServices({ root });
+
+  const pdfDoc = await library.importPdf('Resurrect-Guard.pdf', Buffer.from('%PDF-1.7\nguard payload'));
+  const pdfUrl = `http://127.0.0.1:29812/api/paper-reader/app/index.html?doc=${pdfDoc.id}&page=1`;
+  const pdfNb = await act('notebook.get', { docId: pdfDoc.id, title: pdfDoc.title, page: 1, sourceUrl: pdfUrl });
+  await act('notebook.write', { docId: pdfDoc.id, title: pdfDoc.title, page: 1, sourceUrl: pdfUrl, expectedRevision: pdfNb.revision, markdown: '# Initial PDF' });
+
+  const bookId = 'book-' + 'd'.repeat(64);
+  await mkdir(path.join(root, 'documents'), { recursive: true });
+  await writeFile(path.join(root, 'documents', bookId + '.json'), JSON.stringify({
+    id: bookId,
+    title: 'Resurrect Guard Book',
+    kind: 'web',
+    url: 'https://openstax.org/books/guard/pages/1-1-intro',
+    book: {
+      slug: 'guard',
+      sections: [
+        { slug: '1-1-intro', title: '1.1 Intro', chapterId: 'ch-1', chapterTitle: 'Chapter 1', url: 'https://openstax.org/books/guard/pages/1-1-intro' }
+      ]
+    }
+  }));
+  const bookUrl = `http://127.0.0.1:29812/api/paper-reader/app/index.html?doc=${bookId}&page=1`;
+  const bookNb = await act('notebook.get', { docId: bookId, title: 'Resurrect Guard Book', page: 1, sourceUrl: bookUrl });
+  await act('notebook.write', { docId: bookId, title: 'Resurrect Guard Book', page: 1, sourceUrl: bookUrl, expectedRevision: bookNb.revision, markdown: '# Initial Book' });
+  await act('book.progress.save', { docId: bookId, place: { page: 1, anchor: 'p-1', fraction: 0.25, side: 'source', updated: 100 } });
+
+  assert.deepEqual(await library.delete(pdfDoc.id), { id: pdfDoc.id, deleted: true });
+  assert.deepEqual(await library.delete(bookId), { id: bookId, deleted: true });
+
+  await assert.rejects(
+    act('book.progress.save', { docId: bookId, place: { page: 1, anchor: 'p-2', fraction: 0.5, side: 'source', updated: 200 } }),
+    (error: unknown) => error instanceof Error && 'status' in error && (error as { status: number }).status === 404
+  );
+  for (const [docId, title, sourceUrl, expectedRevision] of [
+    [pdfDoc.id, pdfDoc.title, pdfUrl, pdfNb.revision],
+    [bookId, 'Resurrect Guard Book', bookUrl, bookNb.revision]
+  ] as const) {
+    await assert.rejects(
+      act('notebook.get', { docId, title, page: 1, sourceUrl }),
+      (error: unknown) => error instanceof Error && 'status' in error && (error as { status: number }).status === 404
+    );
+    await assert.rejects(
+      act('notebook.write', { docId, title, page: 1, sourceUrl, expectedRevision, markdown: '# Resurrected' }),
+      (error: unknown) => error instanceof Error && 'status' in error && (error as { status: number }).status === 404
+    );
+  }
+
+  const db = new DatabaseSync(path.join(root, 'reader.sqlite'), { readOnly: true });
+  t.after(() => db.close());
+  const bookPrefix = bookId + '\u001f';
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM book_positions WHERE docId=?', bookId), 0);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=?', pdfDoc.id), 0);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?', bookId, bookPrefix.length, bookPrefix), 0);
 });

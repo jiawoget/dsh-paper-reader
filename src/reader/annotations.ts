@@ -249,7 +249,8 @@ export class AnnotationWorkspace {
     const close=button('',()=>this.closeEditor(true),'icon-btn','close'); close.ariaLabel=close.title=label('Close mark','关闭标记');
     header.append(el('h2','',label(kind,note.kind==='pin'?'页边笔记':'高亮')),close);
     const place=this.book?label('Section','小节'):note.docId.startsWith('web-')?label('Article','文章'):label('Page '+note.page,'第 '+note.page+' 页');
-    const location=button(place+(note.label && note.label!==kind && note.label!=='页边笔记'?' · '+note.label:''),()=>this.controls.locate(note),'source-chip','arrow');
+    const chipText=!note.label || note.label===kind || note.label==='页边笔记' ? place : note.label.startsWith(place+' · ') ? note.label : place+' · '+note.label;
+    const location=button(chipText,()=>this.controls.locate(note),'source-chip','arrow');
     root.append(header,location);
     if(note.quote){const quote=el('blockquote','annotation-quote',visibleQuote(note));quote.dir='auto';root.append(quote);}
     const field=el('label','field');const text=el('textarea','annotation-text');text.rows=3;text.dir='auto';

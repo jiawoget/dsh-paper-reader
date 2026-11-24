@@ -5,7 +5,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { chromium, type BrowserContext, type Page, type Response, type Route } from 'playwright-core';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
 import { withHost, type HostFixture } from './host.js';
 
@@ -44,12 +44,14 @@ try {
     page.setDefaultTimeout(12_000);
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
+    let expectSimulatedDelete500 = false;
     page.on('pageerror', err => pageErrors.push(err.message));
     page.on('console', msg => {
       if (msg.type() !== 'error') return;
       const text = msg.text();
       // Isolated E2E host has no live Zotero desktop daemon, so ignore expected 404/503 resource logs.
       if (/Failed to load resource: the server responded with a status of (?:404|503)\b/.test(text)) return;
+      if (expectSimulatedDelete500 && /Failed to load resource: the server responded with a status of 500\b/.test(text)) return;
       consoleErrors.push(text);
     });
 
@@ -344,6 +346,147 @@ try {
       assert.deepEqual(bookStorage.session, [], `Deleted book sessionStorage keys must be empty (suppressScrollend=${suppressScrollend}).`);
     }
     console.log('PASS F9 (active OpenStax book delete): 0 book_positions resurrection with normal scrollend and suppressed scrollend + 0 localStorage/sessionStorage orphans.');
+
+    // --- Block 4: Active-doc HTTP 500 library.delete rollback regressions (zero editor/draft/scroll loss) ---
+    // 4A: Active OpenStax book HTTP 500 rollback
+    {
+      const openBookRes = await rpc(context, host, 'web.open', { url: bookRoot + sections.start.slug });
+      assert.equal(openBookRes.status(), 200);
+      const { doc: bookDoc } = await openBookRes.json() as { doc: { id: string; title: string } };
+      await page.goto(host.origin + appPath + '?doc=' + bookDoc.id + '&page=2', { waitUntil: 'domcontentloaded' });
+      await page.locator('#loading').waitFor({ state: 'hidden' });
+
+      // Ensure Notes tab is open and CodeMirror is mounted
+      if (await page.locator('#rail').isHidden()) await page.locator('#mobileRail').click();
+      await page.locator('#notesTab').click();
+      await page.locator('.reader-notebook .cm-editor').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('.reader-notebook .cm-editor').count(), 1);
+
+      // Scroll so initial book position is saved before the failed delete
+      await page.evaluate(() => { document.getElementById('paperScroll')!.scrollTop = 260; });
+      await page.waitForTimeout(350);
+      const lsPlaceBefore = await page.evaluate(id => localStorage.getItem('reader.book-position.' + id), bookDoc.id);
+      assert.ok(lsPlaceBefore, 'Expected initial localStorage book position before simulated HTTP 500 delete.');
+
+      // Intercept library.delete with HTTP 500
+      const route500 = async (route: Route) => {
+        const body = route.request().postDataJSON() as { op?: string } | null;
+        if (body?.op === 'library.delete') {
+          await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Simulated delete failure 500' }) });
+          return;
+        }
+        await route.continue();
+      };
+      await page.route('**/api/paper-reader/action', route500);
+      expectSimulatedDelete500 = true;
+      try {
+        await page.locator('#library').click();
+        await dialog.waitFor({ state: 'visible' });
+        await dialog.getByRole('tab', { name: 'On this device', exact: true }).click();
+        const bookRow = dialog.locator('.library-device-item').filter({ hasText: bookDoc.title });
+        await bookRow.getByRole('button', { name: 'Delete document', exact: true }).click();
+        await bookRow.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+        await page.locator('#toast').filter({ hasText: 'Simulated delete failure 500' }).waitFor({ state: 'visible' });
+      } finally {
+        expectSimulatedDelete500 = false;
+        await page.unroute('**/api/paper-reader/action', route500);
+      }
+      await page.locator('#closeDialog').click();
+
+      // Notes editor remains mounted and active book remains open
+      assert.equal(new URL(page.url()).searchParams.get('doc'), bookDoc.id);
+      assert.equal(await page.locator('.reader-notebook .cm-editor').count(), 1, 'Notes editor must stay mounted after HTTP 500 active-book delete.');
+
+      // Scrolling paperScroll must continue triggering book.progress.save and updating localStorage
+      let postRollbackSaves = 0;
+      const onResponse = (res: Response) => {
+        if (!res.url().endsWith('/api/paper-reader/action')) return;
+        const body = res.request().postDataJSON() as { op?: string } | null;
+        if (body?.op === 'book.progress.save' && res.status() === 200) postRollbackSaves++;
+      };
+      page.on('response', onResponse);
+      try {
+        await page.evaluate(() => { document.getElementById('paperScroll')!.scrollTop = 580; });
+        await page.waitForTimeout(450);
+      } finally {
+        page.off('response', onResponse);
+      }
+      const lsPlaceAfter = await page.evaluate(id => localStorage.getItem('reader.book-position.' + id), bookDoc.id);
+      assert.ok(postRollbackSaves >= 1, `Expected book.progress.save after HTTP 500 rollback, got ${postRollbackSaves}.`);
+      assert.notEqual(lsPlaceAfter, lsPlaceBefore, 'localStorage book position must continue updating on scroll after HTTP 500 delete failure.');
+    }
+
+    // 4B: Active PDF with dirty Notes HTTP 500 rollback
+    {
+      const pdfRollback = await makePdf(context, 'Rollback Paper 500', 'Unique text for HTTP 500 active PDF delete rollback test.');
+      const importRollback = await context.request.post(host.origin + '/api/paper-reader/import-pdf?title=Rollback-500.pdf', {
+        headers: { 'Content-Type': 'application/pdf' }, data: pdfRollback
+      });
+      assert.equal(importRollback.status(), 200);
+      const pdfDoc = ((await importRollback.json()) as { doc: { id: string } }).doc;
+
+      await page.goto(host.origin + appPath + '?doc=' + pdfDoc.id + '&page=1', { waitUntil: 'domcontentloaded' });
+      await page.locator('#loading').waitFor({ state: 'hidden' });
+      if (await page.locator('#rail').isHidden()) await page.locator('#mobileRail').click();
+      await page.locator('#notesTab').click();
+      await page.locator('.reader-notebook .cm-editor').waitFor({ state: 'visible' });
+
+      // Hold any background notebook.write until after asserting the unsaved draft survived the 500 delete
+      let releaseWrite!: () => void;
+      const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+      const routePdf500 = async (route: Route) => {
+        const body = route.request().postDataJSON() as { op?: string } | null;
+        if (body?.op === 'library.delete') {
+          await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Simulated PDF delete 500' }) });
+          return;
+        }
+        if (body?.op === 'notebook.write') {
+          await writeGate;
+        }
+        await route.continue();
+      };
+      await page.route('**/api/paper-reader/action', routePdf500);
+      const draftMarker = 'Unsaved rollback draft marker';
+      expectSimulatedDelete500 = true;
+      try {
+        const notesEditor = page.getByRole('textbox', { name: 'Notes Markdown' });
+        await notesEditor.click();
+        await page.keyboard.type(draftMarker);
+        const draftBefore = await page.evaluate(id => sessionStorage.getItem('reader.markdown-draft.' + id), pdfDoc.id);
+        assert.ok(draftBefore?.includes(draftMarker), 'Expected dirty Notes draft in sessionStorage before failed delete.');
+
+        await page.locator('#library').click();
+        await dialog.waitFor({ state: 'visible' });
+        await dialog.getByRole('tab', { name: 'On this device', exact: true }).click();
+        const pdfRow = dialog.locator('.library-device-item').filter({ hasText: 'Rollback-500.pdf' });
+        await pdfRow.getByRole('button', { name: 'Delete document', exact: true }).click();
+        await pdfRow.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+        await page.locator('#toast').filter({ hasText: 'Simulated PDF delete 500' }).waitFor({ state: 'visible' });
+        await page.locator('#closeDialog').click();
+
+        // Editor remains mounted and unsaved text + sessionStorage draft remain 100% intact
+        assert.equal(await page.locator('.reader-notebook .cm-editor').count(), 1, 'Notes editor must stay mounted after HTTP 500 active-PDF delete.');
+        assert.ok((await page.locator('.reader-notebook .cm-content').innerText()).includes(draftMarker), 'Unsaved Notes text must remain in CodeMirror after HTTP 500 delete.');
+        const draftAfter = await page.evaluate(id => sessionStorage.getItem('reader.markdown-draft.' + id), pdfDoc.id);
+        assert.ok(draftAfter?.includes(draftMarker), 'Unsaved reader.markdown-draft.<id> must remain intact in sessionStorage after HTTP 500 delete.');
+      } finally {
+        expectSimulatedDelete500 = false;
+        releaseWrite();
+        await page.unroute('**/api/paper-reader/action', routePdf500);
+      }
+
+      // Switching Marks -> Notes keeps the editor mounted and usable
+      await page.locator('#annotationsTab').click();
+      await page.locator('#notesTab').click();
+      await page.locator('.reader-notebook .cm-editor').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('.reader-notebook .cm-editor').count(), 1, 'Notes editor must remain mounted after Marks -> Notes tab bounce.');
+      const notesEditorAfter = page.getByRole('textbox', { name: 'Notes Markdown' });
+      await notesEditorAfter.click();
+      await page.keyboard.type(' + still usable');
+      const finalEditorText = await page.locator('.reader-notebook .cm-content').innerText();
+      assert.ok(finalEditorText.includes(draftMarker) && finalEditorText.includes('still usable'), 'Notes editor must remain editable after HTTP 500 delete rollback.');
+    }
+    console.log('PASS F9 (active-doc HTTP 500 delete rollback): OpenStax scroll tracking & dirty PDF Notes editor/draft remain 100% intact.');
 
     // T2-F9-05: RPC boundary responses (400 sample, 404 traversal/malformed, 200 { deleted: false } nonexistent)
     assert.equal((await rpc(context, host, 'library.delete', { id: 'pagedattention' })).status(), 400);

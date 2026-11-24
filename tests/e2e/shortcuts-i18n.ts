@@ -516,6 +516,26 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     await zhPage.keyboard.press('Escape');
     await zhPage.locator('#readText').click();
 
+    // Verify page 7 Marks .source-chip does not duplicate "第 7 页 · " prefix
+    await zhPage.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=7', { waitUntil: 'domcontentloaded' });
+    await zhPage.locator('#loading').waitFor({ state: 'hidden' });
+    await zhPage.locator('#readText').click();
+    await zhPage.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段 · 第 7 页 · 第 2 段$/ }).click();
+    await card.waitFor({ state: 'visible' });
+    assert.equal((await card.locator('.selection-location').innerText()).trim(), '第 7 页 · 第 2 段');
+    await card.getByRole('button', { name: '高亮', exact: true }).click();
+    if (await zhPage.locator('#rail').isHidden()) await zhPage.locator('#mobileRail').click();
+    await zhPage.locator('#annotationsTab').click();
+    await zhPage.locator('.annotation-entry').first().click();
+    const page7Chip = (await zhPage.locator('.annotation-editor .source-chip').innerText()).trim();
+    assert.equal(page7Chip, '第 7 页 · 第 2 段', `Expected deduplicated Marks .source-chip, got: ${page7Chip}`);
+    await zhPage.locator('.annotation-editor').getByRole('button', { name: '移除', exact: true }).click();
+    await zhPage.locator('.annotation-editor').getByRole('button', { name: '移除标记', exact: true }).click();
+    await zhPage.locator('#closeRail').click();
+    await zhPage.locator('#readText').click();
+    await zhPage.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6', { waitUntil: 'domcontentloaded' });
+    await zhPage.locator('#loading').waitFor({ state: 'hidden' });
+
     // All 4 modals in zh-CN: Library (+ invalid URL error), Connections, Vocabulary & history, Shortcuts
     await zhPage.locator('#library').click();
     const modal = zhPage.locator('#dialog');
