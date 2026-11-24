@@ -1,10 +1,10 @@
 .paper-citation {
-  color: #65418c;
+  color: var(--purple);
   cursor: help;
-  text-decoration: underline dotted #a78abb;
+  text-decoration: underline dotted var(--quote-border);
   text-underline-offset: 3px;
 }
-.paper-citation:focus-visible { outline: 2px solid #8761ac; outline-offset: 2px; border-radius: 2px; }
+.paper-citation:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 2px; }
 .pdf-citation-focus {
   position: absolute;
   z-index: 4;
@@ -29,18 +29,18 @@
   max-height: min(46dvh, 340px);
   overflow: auto;
   box-sizing: border-box;
-  background: #fff;
-  color: #302a36;
-  border: 1px solid #d2c5dc;
+  background: var(--paper);
+  color: var(--desk-ink);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 6px 22px #35274629;
+  box-shadow: var(--shadow-popover);
   padding: 9px 12px 10px;
   font: 13px/1.4 system-ui, sans-serif;
   text-align: left;
 }
-.citation-preview header { margin: 0 0 5px; color: #6c587b; font-size: 11px; font-weight: 650; }
+.citation-preview header { margin: 0 0 5px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .citation-preview ul, .citation-preview p { margin: 0; padding: 0; list-style: none; }
 .citation-preview li { display: flex; gap: 8px; overflow-wrap: anywhere; }
 .citation-preview li + li { margin-top: 5px; }
-.citation-index { flex: none; color: #704b8d; font-variant-numeric: tabular-nums; }
-.citation-entry, .citation-lookup { color: #665b6c; }
+.citation-index { flex: none; color: var(--purple); font-variant-numeric: tabular-nums; }
+.citation-entry, .citation-lookup { color: var(--desk-ink); }

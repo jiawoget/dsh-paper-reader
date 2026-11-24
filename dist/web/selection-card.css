@@ -1,5 +1,5 @@
 #card[data-selection] {
-  --card-ink: #312c39;
+  --card-ink: var(--desk-ink);
   --card-main-width: 350px;
   --card-available-width: calc(100vw - 16px);
   --card-available-height: calc(100dvh - 16px);
@@ -10,9 +10,9 @@
   max-height: var(--card-available-height);
   padding: 0;
   overflow: hidden;
-  border-color: #cfc8d9;
+  border-color: var(--line);
   border-radius: 12px;
-  box-shadow: 0 10px 34px rgb(40 30 57 / 19%), 0 1px 4px rgb(40 30 57 / 10%);
+  box-shadow: var(--shadow-card);
   overscroll-behavior: contain;
 }
 #card[data-selection="term"] { --card-main-width: 320px; }
@@ -36,7 +36,7 @@
   align-items: center;
   gap: 8px;
   padding: 11px 10px 8px;
-  background: #fff;
+  background: var(--paper);
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -49,7 +49,7 @@
   height: 34px;
   padding: 0;
   border-radius: 5px;
-  color: #756980;
+  color: var(--muted);
   cursor: grab;
 }
 #card .selection-grip::before {
@@ -58,12 +58,12 @@
   height: 18px;
   background: radial-gradient(circle, currentColor 1.35px, transparent 1.6px) 0 0 / 6px 6px;
 }
-#card .selection-grip:hover, #card .selection-grip:focus-visible { color: #58328c; background-color: #f1ecf7; }
+#card .selection-grip:hover, #card .selection-grip:focus-visible { color: var(--purple); background-color: var(--lavender); }
 #card .selection-heading { flex: 1; min-width: 0; }
 #card .word-head h2 { margin: 0; color: var(--card-ink); }
 #card[data-selection="passage"] .word-head h2 { font-size: 16px; }
-#card .word-head .icon-btn { align-self: flex-start; min-width: 26px; height: 26px; color: #6b6572; }
-#card .selection-location { margin-top: 2px; color: #69717b; font-size: 11px; line-height: 1.35; }
+#card .word-head .icon-btn { align-self: flex-start; min-width: 26px; height: 26px; color: var(--muted); }
+#card .selection-location { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 #card .selection-body { padding: 0 14px 13px; }
 #card .selection-excerpt {
   display: grid;
@@ -71,13 +71,13 @@
   align-items: start;
   gap: 3px;
   margin: 2px 0 8px;
-  border-left: 2px solid #ac8ccf;
+  border-left: 2px solid var(--quote-border);
   padding-left: 8px;
 }
 #card .selection-excerpt blockquote {
   min-width: 0;
   margin: 0;
-  color: #443b4d;
+  color: var(--desk-ink);
   font: 15px/24px "STIX Two Text", Georgia, serif;
   overflow: hidden;
   white-space: nowrap;
@@ -96,12 +96,12 @@
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  color: #704e96;
+  color: var(--purple);
 }
-#card .selection-disclosure:hover { background: #f2edf7; }
+#card .selection-disclosure:hover { background: var(--lavender); }
 #card .selection-disclosure svg { transform: rotate(90deg); }
 #card .selection-disclosure[aria-expanded="true"] svg { transform: rotate(-90deg); }
-#card .selection-counterpart { margin: 5px 0; color: #685776; font-size: 12px; }
+#card .selection-counterpart { margin: 5px 0; color: var(--muted); font-size: 12px; }
 #card .selection-counterpart summary { width: fit-content; cursor: pointer; }
 #card .selection-context, #card .selection-counterpart .meaning {
   max-height: min(155px, 27dvh);
@@ -113,8 +113,8 @@
 #card .meaning { margin: 4px 0 8px; overflow-wrap: anywhere; }
 #card .card-actions { gap: 6px; margin-top: 9px; }
 #card .card-actions .btn { padding: 5px 8px; font-size: 12px; }
-#card .selection-note-action { color: #62408e; border-color: #d8c8e9; background: #f3edf9; }
-#card .card-actions [aria-expanded="true"] { color: #53327d; border-color: #b79acb; background: #ede2f6; }
+#card .selection-note-action { color: var(--purple); border-color: var(--quote-border); background: var(--lavender); }
+#card .card-actions [aria-expanded="true"] { color: var(--purple); border-color: var(--quote-border); background: var(--lavender-strong); }
 #card .selection-locate { margin-inline-start: auto; font-size: 12px; }
 @media (min-width: 681px) {
   #card[data-chat-open="true"] {
@@ -129,12 +129,12 @@
     pointer-events: none;
   }
   #card[data-chat-open="true"] > .selection-main, #card[data-chat-open="true"] > .selection-chat {
-    border: 1px solid #cfc8d9;
+    border: 1px solid var(--line);
     border-radius: 12px;
-    box-shadow: 0 10px 34px rgb(40 30 57 / 19%), 0 1px 4px rgb(40 30 57 / 10%);
+    box-shadow: var(--shadow-card);
     pointer-events: auto;
   }
-  #card[data-chat-open="true"] > .selection-main { background-color: white; }
+  #card[data-chat-open="true"] > .selection-main { background-color: var(--paper); }
 }
 @media (max-width: 680px) {
   #card[data-chat-open="true"] {

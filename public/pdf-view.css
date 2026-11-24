@@ -2,10 +2,14 @@
   width: 100%;
   position: relative;
   background: #fff;
+  color: #111;
   border-radius: inherit;
   isolation: isolate;
   overflow: hidden;
   color-scheme: light;
+  --hl-yellow: rgb(246 205 64 / 48%);
+  --hl-green: rgb(123 198 143 / 49%);
+  --hl-purple: rgb(182 142 222 / 49%);
   touch-action: pan-x pan-y pinch-zoom;
 }
 .pdf-scale-plane, .pdf-coordinate-plane {
@@ -121,9 +125,11 @@
   max-width: calc(100vw - 12px);
   gap: 4px;
   padding: 4px;
-  background: white;
-  border: 1px solid #d4d9e4;
+  background: var(--paper, #fff);
+  color: var(--desk-ink, #242738);
+  border: 1px solid var(--line, #d4d9e4);
   border-radius: 8px;
+  box-shadow: var(--shadow-popover, 0 6px 22px rgb(48 51 70 / 22%));
 }
 .pdf-capture-actions .btn { min-height: 34px; padding-inline: 13px; }
 @media (pointer: coarse) {
@@ -147,7 +153,12 @@
   user-select: text;
 }
 .pdf-translated-text[data-role="heading"] { font-weight: 720; line-height: 1.2; text-align: start; }
-.pdf-translated-text.needs-scroll { overflow: auto; }
+.pdf-translated-text.needs-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-inline-end: 2px;
+  scrollbar-color: #9e96ad transparent;
+}
 .pdf-translated-text[data-role="caption"] { font-weight: 620; line-height: 1.28; text-align: center; }
 .pdf-translated-text[data-block-id^="ref-"] { line-height: 1.18; text-align: start; word-break: break-all; }
 .pdf-translated-text::selection { color: #171122; background: #d9c5f2; }
@@ -160,23 +171,24 @@
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid #dcdce1;
+  border: 1px solid var(--line, #dcdce1);
   border-radius: 6px;
-  background: #faf9fc;
-  color: #393541;
+  background: var(--surface-sunken, #faf9fc);
+  color: var(--desk-ink, #393541);
   font: 13px/1.4 system-ui, sans-serif;
 }
 .pdf-translation-state[hidden] { display: none; }
 .pdf-status-message { flex: 1 1 190px; }
 .pdf-status-action {
-  border: 1px solid #c2b7d5;
+  border: 1px solid var(--border-strong, #c2b7d5);
   border-radius: 4px;
   padding: 4px 8px;
-  color: #4c3869;
-  background: white;
+  color: var(--purple, #4c3869);
+  background: var(--paper, #fff);
   cursor: pointer;
   font: inherit;
 }
+.pdf-status-action:hover { background: var(--lavender, #ece4fa); }
 .pdf-anchor.is-reading {
   border-inline-start: 2px solid #8458af;
   background: rgb(143 102 177 / 5%);

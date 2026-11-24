@@ -65,6 +65,13 @@ class NotebookEditor {
   private readonly page: number;
   private readonly title: string;
   private readonly mode = new Compartment();
+  private readonly selection = new Compartment();
+  private readonly reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  private readonly onMotionChange = () => {
+    if (this.disposed) return;
+    this.view.dispatch({effects: this.selection.reconfigure(this.selectionExtension())});
+    this.syncCursorAnimation();
+  };
   private readonly view: EditorView;
   private readonly status = el('span', 'notebook-status');
   private readonly locationButton: HTMLButtonElement;
@@ -144,6 +151,8 @@ class NotebookEditor {
     this.guide.append(el('summary', '', label('Reading guide','阅读提示')), el('div', 'notebook-guide-content'));
     this.guide.ontoggle = () => { if (this.guide.open && this.root.isConnected) this.renderGuide?.(this.guide.lastElementChild as HTMLElement); };
     this.view = new EditorView({state: this.state(this.draft.text), parent: mount});
+    this.syncCursorAnimation();
+    this.reducedMotion.addEventListener('change', this.onMotionChange);
     this.poll = setInterval(() => {
       if (this.book.path && this.root.isConnected && !document.hidden && !this.saving) void this.app.refresh().catch(() => undefined);
     }, 5000);
@@ -170,6 +179,15 @@ class NotebookEditor {
     });
   }
 
+  private selectionExtension() {
+    return drawSelection({cursorBlinkRate: this.reducedMotion.matches ? 0 : 1200});
+  }
+
+  private syncCursorAnimation(): void {
+    const layer = this.view.scrollDOM.querySelector<HTMLElement>('.cm-cursorLayer');
+    if (layer) layer.style.animationName = this.reducedMotion.matches ? 'none' : '';
+  }
+
   private visibleCursor(text: string, cursor: number): number {
     if (this.sourceMode || !this.book.chapterTitle) return cursor;
     const header = foldedHeader(text, this.book.chapterTitle);
@@ -179,7 +197,7 @@ class NotebookEditor {
   private state(text: string, cursor = 0): EditorState {
     const normalized = text.replace(/\r\n?/g, '\n');
     return EditorState.create({doc: text, selection: {anchor: Math.min(this.visibleCursor(normalized, cursor), normalized.length)}, extensions: [
-      history(), markdown(), markdownColors, this.mode.of(this.displayMode()), EditorView.lineWrapping, drawSelection(), highlightActiveLine(),
+      history(), markdown(), markdownColors, this.mode.of(this.displayMode()), EditorView.lineWrapping, this.selection.of(this.selectionExtension()), highlightActiveLine(),
       EditorView.contentAttributes.of({'aria-label': 'Notebook Markdown', 'aria-multiline': 'true', spellcheck: 'true'}),
       EditorView.domEventHandlers({ focus: () => { this.hasCaret = true; } }),
       keymap.of([
@@ -188,6 +206,7 @@ class NotebookEditor {
         ...historyKeymap, ...defaultKeymap
       ]),
       EditorView.updateListener.of(update => {
+        if (this.reducedMotion.matches && update.selectionSet) this.syncCursorAnimation();
         if (!update.docChanged) return;
         for (const range of this.excerpts) {
           range.from = update.changes.mapPos(range.from, 1);
@@ -393,6 +412,7 @@ class NotebookEditor {
       ? previousCursor + newEnd - oldEnd : Math.min(previousCursor, newEnd);
     const scrollTop = this.view.scrollDOM.scrollTop;
     this.view.setState(this.state(text, cursor));
+    this.syncCursorAnimation();
     this.view.scrollDOM.scrollTop = scrollTop;
   }
 
@@ -488,6 +508,7 @@ class NotebookEditor {
     clearTimeout(this.timer);
     clearInterval(this.poll);
     window.removeEventListener('pagehide', this.rememberOnExit);
+    this.reducedMotion.removeEventListener('change', this.onMotionChange);
     this.remember();
     this.view.destroy();
     this.root.remove();
