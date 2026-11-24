@@ -114,7 +114,7 @@ class NotebookEditor {
       this.updateControls();
     }, 'notebook-format notebook-source-mode');
     this.toggle.title = label('Show Markdown source', '显示 Markdown 源码');
-    const refresh = button('', () => this.app.refresh(), 'notebook-format', 'clock');
+    const refresh = button('', () => this.app.refresh(), 'notebook-format', 'refresh');
     refresh.setAttribute('aria-label', 'Refresh notebook'); refresh.title = 'Refresh notebook';
     this.saveButton = el('button', 'notebook-save', 'Save');
     this.saveButton.type = 'button';
