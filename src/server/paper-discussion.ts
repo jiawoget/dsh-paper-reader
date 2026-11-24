@@ -1,6 +1,6 @@
 import type { ChatExchange, ChatRequest, ChatSource, PaperEvidence } from '../shared/types.js';
 import { ReaderStore } from './reader-store.js';
-import { ReaderModel } from './reader-model.js';
+import { ReaderModel, type StreamOptions } from './reader-model.js';
 import { address, inputObject, isObject, pageNumber, ServiceError, single, stringValue, type Input } from './service-types.js';
 
 function threadId(value: unknown): string {
@@ -37,21 +37,21 @@ export class PaperDiscussions {
   history(input: Input): { exchanges: ChatExchange[] } {
     return { exchanges: this.store.chatHistory(single(input.docId, 'document ID', 512, true), input.thread === undefined ? undefined : threadId(input.thread)) };
   }
-  ask(input: Input): Promise<{ text: string }> {
+  ask(input: Input, options?: StreamOptions): Promise<{ text: string }> {
     return this.record(input, 'paper', async request => {
       const history = this.store.chatHistory(request.docId).slice(-12).map(turn => ({
         question: turn.question.slice(0, 4000), answer: turn.answer.slice(0, 6000), passage: turn.source?.selected.slice(0, 1500), page: turn.source?.page
       }));
       const paper = evidence(input.paper);
-      const reply = await this.model.paper(this.store.settings(), paper, history, request, input.questionModel);
+      const reply = await this.model.paper(this.store.settings(), paper, history, request, input.questionModel, options);
       return { ...reply, coverage: { pageCount: paper.pageCount, pagesUsed: new Set(paper.excerpts.map(e => e.page)).size, partial: paper.partial } };
     });
   }
-  passage(input: Input): Promise<{ text: string }> {
-    if (input.record === undefined) return this.model.passage(this.store.settings(), input);
+  passage(input: Input, options?: StreamOptions): Promise<{ text: string }> {
+    if (input.record === undefined) return this.model.passage(this.store.settings(), input, options);
     const record = inputObject(input.record), thread = threadId(record.thread);
     if (thread === 'paper' || !isObject(record.source)) throw new ServiceError(400, 'A selection conversation needs a passage.');
-    return this.record(record, thread, () => this.model.passage(this.store.settings(), input));
+    return this.record(record, thread, () => this.model.passage(this.store.settings(), input, options));
   }
   private record(input: Input, thread: string, complete: (request: ChatRequest) => Promise<{ text: string; coverage?: ChatExchange['coverage'] }>): Promise<{ text: string }> {
     const docId = single(input.docId, 'document ID', 512, true), requestId = single(input.requestId, 'message ID', 36, true);

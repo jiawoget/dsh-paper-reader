@@ -159,7 +159,8 @@ await withHost(async host => {
         await chat.getByRole('button', { name: 'Send', exact: true }).click();
         const reply = await response;
         assert.ok(reply.ok(), await reply.text());
-        assert.equal((await reply.json()).text, 'reader-test / reasoner / high');
+        const finalFrame = (await reply.text()).trim().split('\n').at(-1)!;
+        assert.equal(JSON.parse(finalFrame).text, 'reader-test / reasoner / high');
         await answers.filter({ hasText: 'reader-test / reasoner / high' }).waitFor();
         await reader.reload();
         await selectedWord(reader);

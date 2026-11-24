@@ -99,6 +99,40 @@ export async function responseJson<T>(response:Response):Promise<T> {
 export async function api<K extends keyof Operations>(op:K, payload:Operations[K][0], keepalive=false):Promise<Operations[K][1]> {
   return responseJson(await fetch('../action',{method:'POST',credentials:'same-origin',cache:'no-store',keepalive,headers:{'content-type':'application/json'},body:JSON.stringify({op,payload})}));
 }
+export async function apiStream<K extends 'ai'|'chat.ask'>(op:K, payload:Operations[K][0], onDelta:(delta:string)=>void, signal?:AbortSignal):Promise<Operations[K][1]> {
+  const response = await fetch('../action', {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
+    headers: { 'content-type': 'application/json', accept: 'application/x-ndjson, application/json' },
+    body: JSON.stringify({ op, payload })
+  });
+  if (!response.ok || !response.headers.get('content-type')?.includes('application/x-ndjson') || !response.body) {
+    return responseJson(response);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '', finalText: string | undefined;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: !done });
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) {
+          const frame = JSON.parse(line) as { delta?: string; text?: string; error?: string };
+          if (typeof frame.error === 'string') throw new Error(frame.error);
+          if (typeof frame.delta === 'string') onDelta(frame.delta);
+          if (typeof frame.text === 'string') finalText = frame.text;
+        }
+        newline = buffer.indexOf('\n');
+      }
+      if (done) break;
+    }
+  } finally { reader.releaseLock(); }
+  if (finalText !== undefined) return { text: finalText };
+  throw new Error('The response ended unexpectedly.');
+}
 export function sourceUrl(id:string,page:number,anchor=''):string {
   const address=new URL('index.html',location.href);
   address.searchParams.set('doc',id); address.searchParams.set('page',String(page));

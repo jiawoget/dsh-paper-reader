@@ -1,10 +1,12 @@
 import { ServiceError, isObject } from './service-types.js';
 
 export type Fetcher = typeof globalThis.fetch;
-export async function send(fetcher: Fetcher, url: string, init: RequestInit, name: string, timeout: number): Promise<Response> {
+export async function send(fetcher: Fetcher, url: string, init: RequestInit, name: string, timeout: number, signal?: AbortSignal): Promise<Response> {
   try {
-    return await fetcher(url, { ...init, redirect: init.redirect === 'manual' ? 'manual' : 'error', signal: AbortSignal.timeout(timeout) });
+    const combined = signal ? AbortSignal.any([AbortSignal.timeout(timeout), signal]) : AbortSignal.timeout(timeout);
+    return await fetcher(url, { ...init, redirect: init.redirect === 'manual' ? 'manual' : 'error', signal: combined });
   } catch (error) {
+    if (signal?.aborted) throw new ServiceError(499, 'Request canceled.');
     if (isObject(error) && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       throw new ServiceError(504, name + ' timed out. Try again shortly.');
     }

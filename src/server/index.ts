@@ -152,7 +152,37 @@ export function apply(ctx:ReaderHost):void {
         if(!isRecord(result)||!isRecord(result.translations)||!Object.values(result.translations).every(v=>typeof v==='string')) fail('The model returned an invalid translation.',502);
         return result.translations as Record<string,string>;
       })});
-      default: return json(await service(body.op,input));
+      case 'ai':
+      case 'chat.ask': {
+        const op = body.op;
+        if (req.headers.get('accept')?.includes('application/x-ndjson')) {
+          const encoder = new TextEncoder();
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          req.signal.addEventListener('abort', abort, { once: true });
+          const stream = new ReadableStream<Uint8Array>({
+            start(sink) {
+              const sendLine = (value: unknown) => {
+                if (!controller.signal.aborted) sink.enqueue(encoder.encode(JSON.stringify(value) + '\n'));
+              };
+              void service(op, input, { signal: controller.signal, onDelta: delta => sendLine({ delta }) }).then(
+                result => { sendLine(result); if (!controller.signal.aborted) sink.close(); },
+                error => {
+                  if (!controller.signal.aborted) {
+                    const msg = error instanceof Error ? error.message : 'The request failed.';
+                    sendLine({ error: msg });
+                    sink.close();
+                  }
+                }
+              ).finally(() => req.signal.removeEventListener('abort', abort));
+            },
+            cancel() { controller.abort(); }
+          });
+          return new Response(stream, { headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
+        }
+        return json(await service(op, input, { signal: req.signal }));
+      }
+      default: return json(await service(body.op,input,{ signal: req.signal }));
     }
   },'streaming');
 }
