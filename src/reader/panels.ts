@@ -108,6 +108,8 @@ export function settingsDialog(app:ReaderPort,focusVault:boolean|'zotero'=false,
 export function collectionsDialog(app:ReaderPort,tab:'vocabulary'|'history'='vocabulary'):void {
   const body=modal('Words and history');
   const tabs=el('div','tabs');
+  tabs.setAttribute('role','group');
+  tabs.setAttribute('aria-label',label('Collection view','收藏视图'));
   for(const [key,label] of [['vocabulary','Vocabulary'],['history','History']] as const){
     const b=button(label,()=>collectionsDialog(app,key));b.setAttribute('aria-pressed',String(tab===key));tabs.append(b);
   }

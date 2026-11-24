@@ -35,6 +35,27 @@ function needsTranslation(anchor: string, target?: TranslatedLocator): boolean {
   return Boolean(target) || side === 'translation' || side === 'both';
 }
 
+function syncTheme(): void {
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const apply = () => {
+    let dark: boolean | undefined;
+    try {
+      const parentDoc = window.parent !== window ? window.parent.document : undefined;
+      if (parentDoc?.body) dark = parentDoc.body.hasAttribute('data-ds-dark-theme');
+    } catch { /* Standalone or cross-origin: fall back to system preference. */ }
+    const scheme = (dark ?? media.matches) ? 'dark' : 'light';
+    document.documentElement.dataset.theme = scheme;
+    document.documentElement.style.colorScheme = scheme;
+  };
+  apply();
+  media.addEventListener('change', apply);
+  try {
+    if (window.parent !== window && window.parent.document.body) {
+      new MutationObserver(apply).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
+    }
+  } catch { /* Ignore cross-origin parent access. */ }
+}
+
 class Reader implements ReaderPort {
   doc:DocumentInfo={id:'pagedattention',title:'PagedAttention.pdf',kind:'pdf',defaultPage:6};
   page=6;
@@ -655,6 +676,8 @@ class Reader implements ReaderPort {
     byId('translated').scrollTo({top:initial.translationTop,left:initial.translationLeft,behavior:'instant'});
   }
   private controls():void{
+    document.documentElement.lang=/^zh(?:-|$)/i.test(navigator.language)?'zh-CN':'en';
+    syncTheme();
     const click=(id:string,fn:()=>unknown)=>byId(id).addEventListener('click',()=>{void Promise.resolve().then(fn).catch(error=>toast(message(error)));});
     const glyphs:Record<string,Glyph>={library:'library',prev:'back',next:'next',more:'more',mobileRail:'book',closeRail:'close',closeDialog:'close'};
     for(const [id,name] of Object.entries(glyphs))byId(id).append(icon(name));
