@@ -16,7 +16,7 @@
   --lavender: #ece4fa;
   --lavender-strong: #e2d5f7;
   --line: #d4d9e4;
-  --border-strong: #8c93a6;
+  --border-strong: #7e8599;
   --focus-ring: #6d42b3;
   --selection-bg: #dfcff7;
   --selection-ink: #221633;
@@ -148,7 +148,7 @@ input::placeholder, textarea::placeholder {
   html, #paperScroll, #railBody, #contentsPanel, .paper-chat-transcript, .paper-chat-log, .selection-chat-log, .library-results {
     scroll-behavior: auto;
   }
-  .notebook-writing-area .cm-cursorLayer {
+  .notebook-writing-area .cm-editor.cm-focused > .cm-scroller > .cm-cursorLayer {
     animation: none;
   }
 }

@@ -356,13 +356,17 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       assert.equal((await readTheme()).scheme, 'dark');
       await assertContrast(dialog.locator('h2'), 'iframe dark settingsDialog h2', 4.5);
 
-      // Explicit "false" and "0" must resolve to light mode cleanly.
+      // Explicit "false", "0", and case/whitespace variants must normalize cleanly.
       await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', 'false'));
       await until(async () => (await readTheme()).theme === 'light', 'Explicit data-ds-dark-theme="false" must resolve to light');
       await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', '0'));
       assert.equal((await readTheme()).theme, 'light', 'Explicit data-ds-dark-theme="0" must resolve to light');
       await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', 'true'));
       await until(async () => (await readTheme()).theme === 'dark', 'Explicit data-ds-dark-theme="true" must resolve to dark');
+      await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ' FALSE '));
+      await until(async () => (await readTheme()).theme === 'light', 'data-ds-dark-theme=" FALSE " must resolve to light');
+      await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ' TRUE '));
+      await until(async () => (await readTheme()).theme === 'dark', 'data-ds-dark-theme=" TRUE " must resolve to dark');
       await frame.locator('#closeDialog').click();
       await dialog.waitFor({ state: 'hidden' });
 
@@ -475,6 +479,62 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await assertContrast(mdMarkup, '.md-markup', 4.5);
       await assertContrast(rail.locator('.notebook-status'), '.notebook-status::before dot', 3.0, 'backgroundColor', '::before');
 
+      // Finding #2: .cm-cursorLayer must not blink under prefers-reduced-motion: reduce (after typing, on focus, and after live toggle).
+      const readCursorAnim = () => rail.locator('.notebook-writing-area .cm-cursorLayer').evaluate(el => {
+        const s = getComputedStyle(el);
+        return { name: s.animationName, duration: s.animationDuration };
+      });
+      const cursorAfterType = await readCursorAnim();
+      assert.equal(cursorAfterType.name, 'none', 'CodeMirror .cm-cursorLayer must not blink after typing under reduced motion');
+      assert.equal(cursorAfterType.duration, '0s', 'CodeMirror .cm-cursorLayer duration must be 0s after typing under reduced motion');
+      await page.locator('#saveState').click();
+      await cmContent.click();
+      const cursorOnFocus = await readCursorAnim();
+      assert.equal(cursorOnFocus.name, 'none', 'CodeMirror .cm-cursorLayer must not blink on focus under reduced motion');
+      assert.equal(cursorOnFocus.duration, '0s', 'CodeMirror .cm-cursorLayer duration must be 0s on focus under reduced motion');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await until(async () => (await readCursorAnim()).name !== 'none', 'Live reducedMotion -> no-preference should re-enable CM6 cursor blink');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await until(async () => {
+        const a = await readCursorAnim();
+        return a.name === 'none' && a.duration === '0s';
+      }, 'Live no-preference -> reducedMotion should disable CM6 cursor blink immediately');
+
+      // Finding #1: Focused and blurred .cm-selectionBackground in BOTH dark & light modes (beats CM6 (0,5,0) default).
+      await page.keyboard.press('Control+a');
+      const cmSel = rail.locator('.notebook-writing-area .cm-selectionBackground').first();
+      await cmSel.waitFor({ state: 'visible' });
+      const checkCmSelection = async (scheme: 'dark' | 'light', focused: boolean) => {
+        const res = await rail.locator('.notebook-writing-area').evaluate((root, arg) => {
+          const sel = root.querySelector<HTMLElement>('.cm-selectionBackground')!;
+          const line = root.querySelector<HTMLElement>('.cm-line')!;
+          const fn = new Function('sel', 'line', arg.helper + `
+            const bgRaw = parseCssColor(getComputedStyle(sel).backgroundColor);
+            const base = effectiveBg(sel.parentElement);
+            const bg = bgRaw[3] < 1 ? composite(bgRaw, base) : bgRaw;
+            const fgRaw = parseCssColor(getComputedStyle(line).color);
+            const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
+            const fgLum = relLum(fg), bgLum = relLum(bg);
+            return { raw: getComputedStyle(sel).backgroundColor, bgLum, ratio: contrastRatio(fgLum, bgLum) };
+          `) as (s: HTMLElement, l: HTMLElement) => { raw: string; bgLum: number; ratio: number };
+          return fn(sel, line);
+        }, { helper: CONTRAST_HELPER_SOURCE });
+        assert.notEqual(res.raw, 'rgb(215, 212, 240)', `CM6 default selection leaked in ${scheme} (${focused ? 'focused' : 'blurred'})`);
+        if (scheme === 'dark') {
+          assert.ok(res.bgLum < 0.10, `Dark CM6 ${focused ? 'focused' : 'blurred'} selection must stay dark, got bgLum=${res.bgLum.toFixed(4)} (${res.raw})`);
+        }
+        assert.ok(res.ratio >= 4.5, `CM6 ${scheme} ${focused ? 'focused' : 'blurred'} selection contrast must be >= 4.5:1, got ${res.ratio.toFixed(2)}:1 (${res.raw})`);
+      };
+      await checkCmSelection('dark', true);
+      await page.locator('#saveState').click();
+      await checkCmSelection('dark', false);
+      await page.emulateMedia({ colorScheme: 'light' });
+      await checkCmSelection('light', false);
+      await cmContent.click();
+      await page.keyboard.press('Control+a');
+      await checkCmSelection('light', true);
+      await page.emulateMedia({ colorScheme: 'dark' });
+
       // Trigger notebook conflict diff (.notebook-issue + .notebook-latest) and check dark contrast.
       const currentBook = await action(page, host.origin, 'notebook.get', { docId: 'pagedattention', title: 'PagedAttention.pdf', sourceUrl: appUrl });
       await action(page, host.origin, 'notebook.write', {
@@ -493,13 +553,13 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await assertContrast(nbLatest, '.notebook-latest text', 4.5);
       await nbIssue.getByRole('button', { name: 'Use saved file' }).click();
 
-      // Reading guide (.trail) contrast check.
+      // Reading guide (.notebook-guide .quote & .source-chip) contrast check (unconditional).
       const guideSummary = rail.locator('.notebook-guide > summary');
-      if (await guideSummary.isVisible()) {
-        await guideSummary.click();
-        const trail = rail.locator('.trail').first();
-        if (await trail.isVisible()) await assertContrast(trail, '.trail', 4.5);
-      }
+      await guideSummary.waitFor({ state: 'visible' });
+      await guideSummary.click();
+      await assertContrast(rail.locator('.notebook-guide .quote').first(), '.notebook-guide .quote', 4.5);
+      await assertContrast(rail.locator('.notebook-guide .source-chip').first(), '.notebook-guide .source-chip', 4.5);
+      await guideSummary.click();
 
       // Selection card dark check + highlight -> Marks tab (annotations.css cascade) + stale-revision .annotation-error.
       const run = page.locator('#original .pdf-native-text [data-block-id="block-tables"]').filter({ hasText: /mapping between logical/i }).first();
@@ -514,15 +574,12 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await card.waitFor({ state: 'visible' });
       await assertDarkSurface(card, '#card', 0.08);
       await assertContrast(card.locator('.word-head h2'), '#card h2', 4.5);
-      if (await card.locator('.selection-excerpt blockquote').isVisible()) {
-        await assertContrast(card.locator('.selection-excerpt blockquote'), '#card excerpt', 4.5);
-      }
-      if (await card.locator('.selection-counterpart .meaning').isVisible()) {
-        await assertContrast(card.locator('.selection-counterpart .meaning'), '#card .selection-counterpart .meaning', 4.5);
-      }
-      if (await card.locator('.selection-explain-action').isVisible()) {
-        await assertContrast(card.locator('.selection-explain-action'), '#card .selection-explain-action', 4.5);
-      }
+      const directMeaning = card.locator('.passage-counterpart .meaning');
+      await directMeaning.waitFor({ state: 'visible' });
+      await assertContrast(directMeaning, '#card .passage-counterpart .meaning', 4.5);
+      const explainBtn = card.locator('.selection-explain-action');
+      await explainBtn.waitFor({ state: 'visible' });
+      await assertContrast(explainBtn, '#card .selection-explain-action', 4.5);
       await page.getByRole('button', { name: 'Highlight', exact: true }).click();
       await page.locator('#annotationsTab').click();
       const annWorkspace = rail.locator('.annotation-workspace');
@@ -544,15 +601,16 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await rail.getByRole('button', { name: 'Keep my draft' }).click();
       await rail.getByRole('button', { name: 'Save', exact: true }).click();
 
-      // Reference tab (including M3 .citation-export controls) in dark mode.
+      // Reference tab (including M3 .citation-export controls & .trail) in dark mode.
       await page.locator('#refsTab').click();
       const citeExport = rail.locator('.citation-export');
       await citeExport.waitFor({ state: 'visible' });
+      await assertContrast(rail.locator('.trail'), '#refsTab .trail', 4.5);
       await assertDarkSurface(citeExport, '.citation-export', 0.08);
       await assertContrast(citeExport.locator('h3'), '.citation-export h3', 4.5);
       await assertContrast(citeExport.locator('.btn').first(), '.citation-export .btn', 4.5);
 
-      // Paper chat transcript & textarea in dark mode (T1-F4-03, T2-F4-06).
+      // Paper chat transcript, textarea & resize grip contrast (Finding #4: >= 3.0:1 in dark & light) (T1-F4-03, T2-F4-06).
       await page.locator('.paper-chat-toggle').click();
       const chatTranscript = page.locator('.paper-chat-transcript');
       await chatTranscript.waitFor({ state: 'visible' });
@@ -561,6 +619,12 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await assertDarkSurface(chatInput, '.paper-chat-input textarea', 0.08);
       assert.equal((await measureLocator(chatInput)).colorScheme, 'dark');
       await assertContrast(chatInput, '.paper-chat-input textarea text', 4.5);
+      const grip = page.locator('.paper-chat-grip');
+      await grip.waitFor({ state: 'visible' });
+      await assertContrast(grip, '.paper-chat-grip::after (dark)', 3.0, 'backgroundColor', '::after');
+      await page.emulateMedia({ colorScheme: 'light' });
+      await assertContrast(grip, '.paper-chat-grip::after (light)', 3.0, 'backgroundColor', '::after');
+      await page.emulateMedia({ colorScheme: 'dark' });
       await page.locator('.paper-chat-toggle').click();
 
       // All 3 late-loaded dialogs: libraryDialog, settingsDialog, collectionsDialog (T1-F4-05, T2-F4-01).
@@ -663,6 +727,28 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
         await assertContrast(annPop.locator('h2'), `.annotation-popover h2 (${scheme})`, 4.5);
       }
       await page.emulateMedia({ colorScheme: 'dark' });
+
+      // Overlapping margin pins -> .annotation-chooser dark surface & >= 4.5:1 contrast.
+      await annPop.getByRole('textbox', { name: 'Comment', exact: true }).fill('First pin');
+      await annPop.getByRole('button', { name: 'Save', exact: true }).click();
+      if (await annPop.isVisible()) await page.keyboard.press('Escape');
+      await annPop.waitFor({ state: 'hidden' });
+      await page.locator('#placePin').click();
+      await page.mouse.click(fig6Box.x + fig6Box.width * 0.2 + 4, fig6Box.y + fig6Box.height * 0.35);
+      await annPop.waitFor({ state: 'visible' });
+      await annPop.getByRole('textbox', { name: 'Comment', exact: true }).fill('Second pin');
+      await annPop.getByRole('button', { name: 'Save', exact: true }).click();
+      if (await annPop.isVisible()) await page.keyboard.press('Escape');
+      await annPop.waitFor({ state: 'hidden' });
+      await page.locator('#original .annotation-pin[data-count="2"]').click();
+      const chooser = page.locator('.annotation-chooser');
+      await chooser.waitFor({ state: 'visible' });
+      await assertDarkSurface(chooser, '.annotation-chooser', 0.08);
+      await assertContrast(chooser.locator('strong'), '.annotation-chooser strong', 4.5);
+      await assertContrast(chooser.locator('button').first(), '.annotation-chooser button', 4.5);
+      await page.keyboard.press('Escape');
+      await chooser.waitFor({ state: 'hidden' });
+
       await snap(page, 'phase3-dark-mode');
       await ctx.close();
       console.log('PASS Phase 3 (T1-F4-02/03/05, T1-F5-01/04/05, T2-F4-01/04/05/06, T2-F5-03): All core dark surfaces, dialogs, popovers, conflicts, Read text, and browser surfaces verified.');
@@ -731,9 +817,33 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await page.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
       await page.locator('#loading').waitFor({ state: 'hidden' });
 
-      // Enable bilingual mode and open sidebar.
+      // Enable bilingual mode and verify bilingual #card (.selection-excerpt, .selection-counterpart, .chat-starter).
       await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
       await page.locator('#translated .pdf-translated-text').first().waitFor({ state: 'visible' });
+      const translatedBlock = page.locator('#translated .pdf-translated-text[data-block-id="block-tables"]');
+      await translatedBlock.waitFor({ state: 'visible' });
+      await translatedBlock.evaluate(el => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        const text = walker.nextNode() as Text | null;
+        if (!text || text.data.length < 4) throw new Error('Missing translated text node');
+        document.getSelection()!.setBaseAndExtent(text, 0, text, Math.min(20, text.data.length));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
+      });
+      const bilingualCard = page.locator('#card');
+      await bilingualCard.waitFor({ state: 'visible' });
+      await assertDarkSurface(bilingualCard, 'bilingual #card', 0.08);
+      await assertContrast(bilingualCard.locator('.selection-excerpt blockquote'), '#card .selection-excerpt blockquote', 4.5);
+      await bilingualCard.locator('.selection-counterpart > summary').click();
+      await assertContrast(bilingualCard.locator('.selection-counterpart .meaning'), '#card .selection-counterpart .meaning', 4.5);
+      await bilingualCard.locator('.selection-chat-action').click();
+      const chatStarter = bilingualCard.locator('.chat-starter').first();
+      await chatStarter.waitFor({ state: 'visible' });
+      await assertDarkSurface(chatStarter, '#card .chat-starter', 0.08);
+      await assertContrast(chatStarter, '#card .chat-starter', 4.5);
+      await page.keyboard.press('Escape');
+      if (await bilingualCard.isVisible()) await page.keyboard.press('Escape');
+      await bilingualCard.waitFor({ state: 'hidden' });
+
       await page.locator('#mobileRail').click();
       await page.locator('#rail').waitFor({ state: 'visible' });
 
@@ -787,6 +897,49 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const openMetrics = await inspectTranslated();
       assert.equal(openMetrics.overlaps, 0, 'Translated blocks must not overlap at 1440px bilingual + open sidebar');
       assert.ok(openMetrics.pageOverflow <= 1, `Zero horizontal overflow expected at 1440px, got ${openMetrics.pageOverflow}px`);
+
+      // Finding #3: Page 1 at 1440x900 Bilingual Full page must stay >= 11.5px and monotonic when closing #rail.
+      await page.locator('#pageCount').click();
+      await page.locator('#pageNumber').fill('1');
+      await page.locator('#pageNumber').press('Enter');
+      await page.locator('#loading').waitFor({ state: 'hidden' });
+      const p1BodyIds = ['p1-r3', 'p1-r5', 'p1-r7', 'p1-r26', 'p1-r26-2'] as const;
+      await until(async () => {
+        const m = await inspectTranslated();
+        const byId = new Map(m.bodySizes.map(b => [b.id, b.visualFont]));
+        return p1BodyIds.every(id => (byId.get(id) ?? 0) >= 11.5);
+      }, 'Page 1 1440x900 bilingual + open rail body paragraphs must reach >= 11.5px visual font');
+      const p1Open = await inspectTranslated();
+      assert.equal(p1Open.overlaps, 0, 'Page 1 bilingual + open rail must have 0 overlaps');
+      assert.ok(p1Open.pageOverflow <= 1, `Page 1 bilingual + open rail overflow must be <= 1px, got ${p1Open.pageOverflow}px`);
+      const openById = new Map(p1Open.bodySizes.map(b => [b.id, b.visualFont]));
+
+      await page.locator('#closeRail').click();
+      await until(async () => page.locator('#translated .pdf-sheet').evaluate(el => el.getBoundingClientRect().width > 640),
+        'Closing #rail at 1440x900 should widen translated sheet past 640px');
+      await until(async () => {
+        const m = await inspectTranslated();
+        const byId = new Map(m.bodySizes.map(b => [b.id, b.visualFont]));
+        return p1BodyIds.every(id => (byId.get(id) ?? 0) >= 11.5);
+      }, 'Page 1 1440x900 bilingual + closed rail body paragraphs must stay >= 11.5px visual font');
+      const p1Closed = await inspectTranslated();
+      assert.equal(p1Closed.overlaps, 0, 'Page 1 bilingual + closed rail must have 0 overlaps');
+      assert.ok(p1Closed.pageOverflow <= 1, `Page 1 bilingual + closed rail overflow must be <= 1px, got ${p1Closed.pageOverflow}px`);
+      const closedById = new Map(p1Closed.bodySizes.map(b => [b.id, b.visualFont]));
+      for (const id of p1BodyIds) {
+        const before = openById.get(id)!;
+        const after = closedById.get(id)!;
+        assert.ok(after >= 11.5, `Page 1 ${id} with #rail closed must be >= 11.5px, got ${after.toFixed(2)}px`);
+        assert.ok(after >= before - 0.1, `Closing #rail must not shrink Page 1 ${id} (${before.toFixed(2)}px -> ${after.toFixed(2)}px)`);
+      }
+
+      // Return to Page 6 with #rail open for widened-sidebar, 200% zoom, and mobile checks.
+      await page.locator('#mobileRail').click();
+      await page.locator('#rail').waitFor({ state: 'visible' });
+      await page.locator('#pageCount').click();
+      await page.locator('#pageNumber').fill('6');
+      await page.locator('#pageNumber').press('Enter');
+      await page.locator('#loading').waitFor({ state: 'hidden' });
 
       // Widen sidebar via #notesSplit keyboard (T2-F5-02).
       const notesSplit = page.locator('#notesSplit');

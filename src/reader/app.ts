@@ -43,7 +43,7 @@ function syncTheme(): void {
     try {
       const parentDoc = window.parent !== window ? window.parent.document : undefined;
       if (parentDoc?.body) {
-        const attr = parentDoc.body.getAttribute('data-ds-dark-theme');
+        const attr = parentDoc.body.getAttribute('data-ds-dark-theme')?.trim().toLowerCase() ?? null;
         dark = attr !== null && attr !== 'false' && attr !== '0';
       }
     } catch { /* Standalone or cross-origin: fall back to system preference. */ }

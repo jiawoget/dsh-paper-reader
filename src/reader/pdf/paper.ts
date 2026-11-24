@@ -85,13 +85,15 @@ export function fitText(node: HTMLElement, passage: Passage, sheetScale = 1, min
   const baseMax = Math.max(6, Math.min(58, passage.fontSize * (passage.role === 'heading' ? 1.08 : 1)));
   let floor = Math.min(baseMax, Math.max(5, baseMax * 0.65));
   let maximum = baseMax;
-  // When a bilingual sheet scales below 1:1 (e.g. 1440px with an open or widened sidebar),
-  // keep translated prose at a readable visual size and let overflowing boxes scroll vertically.
-  if (minVisualPx > 0 && sheetScale > 0 && sheetScale < 1.05) {
+  // Keep translated prose readable at <=1440px (rail open or closed) and smoothly hand off to
+  // native box-fit sizing before wide desktop sheets (scale >= 1.13) where zero-clipping applies.
+  if (minVisualPx > 0 && sheetScale > 0 && sheetScale < 1.125) {
     const isSmallNote = passage.role === 'caption' || passage.fontSize < 8.5 || passage.id.startsWith('ref-');
     const targetVisualPx = isSmallNote ? Math.min(minVisualPx, 10) : minVisualPx;
     const scaledFloor = Math.min(24, targetVisualPx / sheetScale);
-    floor = Math.max(floor, scaledFloor);
+    const weight = sheetScale <= 1.11 ? 1 : (1.125 - sheetScale) / 0.015;
+    const base = scaledFloor > baseMax ? baseMax : floor;
+    floor = Math.max(floor, base + (scaledFloor - base) * weight);
     maximum = Math.max(maximum, floor);
   }
   let lower = floor, upper = maximum;
