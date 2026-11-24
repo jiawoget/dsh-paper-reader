@@ -720,7 +720,18 @@ class Reader implements ReaderPort {
     this.desk.connect(mode=>{
       if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setFocusMode(mode);
     }, () => refreshNotebookHighlights(this));
-    byId<HTMLSelectElement>('zoom').value=String(this.zoom);
+    const zoomSelect=byId<HTMLSelectElement>('zoom');
+    zoomSelect.ariaLabel=label('Zoom','缩放');
+    zoomSelect.options[0].text=label('Fit width','适合宽度');
+    zoomSelect.value=String(this.zoom);
+    byId('prev').ariaLabel=label('Previous page','上一页');
+    byId('next').ariaLabel=label('Next page','下一页');
+    byId('pageCount').ariaLabel=byId('pageCount').title=label('Go to page','跳转到页码');
+    byId('more').ariaLabel=label('More actions','更多操作');
+    const [sourceHead,targetHead]=document.querySelectorAll<HTMLElement>('.headings b');
+    if(sourceHead)sourceHead.textContent=label('Original','原文');
+    if(targetHead)targetHead.textContent=label('Translation','译文');
+    byId('translationInfo').textContent=label('Simplified Chinese','简体中文');
     click('library',()=>libraryDialog(this));click('prev',()=>this.navigate(this.doc.id,this.page-1));click('next',()=>this.navigate(this.doc.id,this.page+1));
     const jump=byId<HTMLFormElement>('pageJump'), input=byId<HTMLInputElement>('pageNumber');
     jump.addEventListener('beforetoggle',event=>{
@@ -788,15 +799,15 @@ class Reader implements ReaderPort {
       menu.style.top=byId('more').getBoundingClientRect().bottom+4+'px';
       byId('more').setAttribute('aria-expanded','true');menu.querySelector('button')?.focus();});
     const items:[string,Glyph,()=>unknown][]=[
-      [label('Library','资料库'),'library',()=>libraryDialog(this)],['Vocabulary and history','clock',async()=>{await this.refresh();collectionsDialog(this);}],
-      ['Reset reading layout','columns',()=>{
+      [label('Library','资料库'),'library',()=>libraryDialog(this)],[label('Vocabulary and history','生词与历史'),'clock',async()=>{await this.refresh();collectionsDialog(this);}],
+      [label('Reset reading layout','重置阅读布局'),'columns',()=>{
         this.readingText=false;this.desk.reset();this.updatePageFormat();resizePages(1);byId<HTMLSelectElement>('zoom').value='1';
         if(this.view && 'setFocusMode' in this.view){
           (this.view as PdfPageView).setFocusMode(this.desk.focus);
         }
-        toast('Reading layout reset.');
+        toast(label('Reading layout reset.','阅读布局已重置。'));
       }],
-      ['Connections','settings',()=>settingsDialog(this)],['Open in new tab','popout',()=>window.open(sourceUrl(this.doc.id,this.page),'_blank','noopener')]
+      [label('Connections','连接设置'),'settings',()=>settingsDialog(this)],[label('Open in new tab','在新标签页打开'),'popout',()=>window.open(sourceUrl(this.doc.id,this.page),'_blank','noopener')]
     ];
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
     byId('menu').addEventListener('focusout',event=>{
@@ -821,6 +832,14 @@ class Reader implements ReaderPort {
       if(caret?.parentElement?.closest('.pdf-native-text,.pdf-reading-text'))return;
       if(e.key==='ArrowRight'&&this.pdf&&this.page<this.pdf.pages){e.preventDefault();byId('next').click();}
       if(e.key==='ArrowLeft'&&this.page>1){e.preventDefault();byId('prev').click();}
+      if(e.key==='b'){e.preventDefault();this.setReadingMode(this.desk.mode==='bilingual'?'source':'bilingual');}
+      if(e.key==='n'){e.preventDefault();this.toggleSidebar('notes');}
+      if(e.key==='c'){e.preventDefault();this.toggleSidebar('contents');}
+      if(e.key==='='||e.key==='+'||e.key==='-'){
+        const select=byId<HTMLSelectElement>('zoom');
+        const next=Math.max(0,Math.min(select.options.length-1,select.selectedIndex+(e.key==='-'?-1:1)));
+        if(next!==select.selectedIndex){e.preventDefault();select.selectedIndex=next;resizePages(Number(select.value));}
+      }
     });
   }
   private selectTab(tab:SidebarTab):void {

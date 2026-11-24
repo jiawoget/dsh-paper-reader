@@ -88,6 +88,35 @@ export class Library {
     const docs = await Promise.all(names.map(name => this.get(name.slice(0,-5))));
     return [sample, ...docs.sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).map(({ paragraphs, articleLayout, ...meta }) => meta)];
   }
+  async rename(id: unknown, title: unknown): Promise<DocumentInfo> {
+    if (id === sample.id) fail('The bundled sample paper cannot be renamed.');
+    const nextTitle = typeof title === 'string' ? title.trim().slice(0, 250) : '';
+    if (!nextTitle) fail('A document title is required.');
+    const doc = await this.get(id);
+    const file = path.join(this.directory, doc.id + '.json');
+    const saved = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    saved.title = nextTitle;
+    const tmp = file + '.' + randomUUID() + '.tmp';
+    try { await writeFile(tmp, JSON.stringify(saved)); await rename(tmp, file); }
+    finally { await rm(tmp, { force: true }); }
+    return this.get(doc.id);
+  }
+  async delete(id: unknown): Promise<{ id: string; deleted: boolean }> {
+    if (id === sample.id) fail('The bundled sample paper cannot be deleted.');
+    if (!validDocId(id)) fail('Invalid document ID.', 404);
+    const file = path.join(this.directory, id + '.json');
+    const existed = existsSync(file);
+    await Promise.all([
+      rm(file, { force: true }),
+      rm(path.join(this.directory, id + '.pdf'), { force: true }),
+      rm(path.join(this.directory, id + '.source-url'), { force: true }),
+      rm(path.join(this.directory, id + '.layout.json'), { force: true }),
+      rm(path.join(this.directory, 'book-sections', id), { recursive: true, force: true }),
+      rm(path.join(this.translationDir, id), { recursive: true, force: true }),
+      rm(path.join(this.imageDir, id), { recursive: true, force: true })
+    ]);
+    return { id, deleted: existed };
+  }
   private bookJob(key: string, start: () => Promise<DocumentInfo>): Promise<DocumentInfo> {
     const pending = this.bookJobs.get(key);
     if (pending) return pending;

@@ -33,3 +33,25 @@ test('identical PDFs keep one identity and corrupt uploads do not appear in the 
   await assert.rejects(library.importPdf('bad.pdf', Buffer.from('no PDF header')));
   await assert.rejects(library.get('../private'));
 });
+
+test('saved documents can be renamed and deleted with their cached translations while protecting the bundled sample', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-ts-manage-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const library = new Library(root);
+  const bytes = Buffer.from('%PDF-1.7\nmanageable document bytes');
+  const imported = await library.importPdf('Draft.pdf', bytes);
+  await library.translate(imported.id, 1, [{ id: 'p1', text: 'Hello world.' }], async () => ({ p1: '你好世界。' }));
+  assert.deepEqual(await library.translations(imported.id, 1), { p1: '你好世界。' });
+
+  const renamed = await library.rename(imported.id, 'Final Paper.pdf');
+  assert.equal(renamed.title, 'Final Paper.pdf');
+  assert.equal((await library.get(imported.id)).title, 'Final Paper.pdf');
+  await assert.rejects(library.rename(imported.id, '   '));
+  await assert.rejects(library.rename('pagedattention', 'Other'));
+
+  assert.deepEqual(await library.delete(imported.id), { id: imported.id, deleted: true });
+  await assert.rejects(library.get(imported.id));
+  assert.deepEqual(await library.translations(imported.id, 1), {});
+  assert.equal((await library.list()).some(doc => doc.id === imported.id), false);
+  await assert.rejects(library.delete('pagedattention'));
+});

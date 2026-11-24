@@ -143,6 +143,8 @@ export interface Operations {
   'state': [Record<string, never>, ReaderState];
   'library.list': [Record<string, never>, { docs: DocumentInfo[] }];
   'library.get': [{ id: string }, { doc: DocumentInfo }];
+  'library.rename': [{ id: string; title: string }, { doc: DocumentInfo }];
+  'library.delete': [{ id: string }, { id: string; deleted: boolean }];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
