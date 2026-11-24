@@ -148,7 +148,7 @@ export class SelectionCard {
   dismiss(restoreFocus = false): void {
     const card = byId('card');
     if (restoreFocus && card.dataset.workspace) {
-      if (card.dataset.workspace === 'chat') card.querySelector<HTMLButtonElement>('.chat-heading button')?.click();
+      if (card.dataset.workspace === 'chat') card.querySelector<HTMLButtonElement>('.chat-heading .chat-close')?.click();
       else this.leaveTool();
       return;
     }

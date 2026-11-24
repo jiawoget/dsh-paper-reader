@@ -80,13 +80,13 @@ export class PageRaster {
       this.drawing = this.page.render({ canvas: next, viewport, background: '#ffffff' });
       await this.drawing.promise;
       this.signal.throwIfAborted();
-      const previous = this.original;
+      this.original.width = next.width;
+      this.original.height = next.height;
+      this.original.getContext('2d')?.drawImage(next, 0, 0);
       this.artwork.width = next.width;
       this.artwork.height = next.height;
       paintArtwork(this.artwork, next, this.areas, this.pageWidth, this.pageHeight);
-      previous.replaceWith(next);
-      this.original = next;
-      previous.width = previous.height = 1;
+      next.width = next.height = 1;
     }
   }
 

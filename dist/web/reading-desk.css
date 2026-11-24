@@ -370,9 +370,23 @@
 #rail:has(.notebook-source-mode[aria-pressed="true"]) .highlight-preference { display: none; }
 @media (max-width: 700px) { #highlightDisplay { min-height: 36px; } }
 #notebookPose:hover, #closeRail:hover { background: var(--lavender); color: var(--purple); }
-.rail-head { height: 37px; padding-inline: 14px; }
-.rail-head [role="tab"] { color: var(--muted); }
+.rail-head {
+  height: 37px;
+  min-width: 0;
+  padding-inline: 14px;
+  overflow: hidden;
+}
+.rail-head [role="tablist"] {
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.rail-head [role="tablist"]::-webkit-scrollbar { display: none; }
+.rail-head [role="tab"] { flex: none; color: var(--muted); }
 .rail-head [role="tab"][aria-selected="true"] { color: var(--purple); }
+#saveState { flex: none; }
 #contentsPanel {
   flex: 1;
   min-height: 0;
@@ -666,8 +680,13 @@
   #reader { --rail-width: clamp(241px, 22vw, 294px); }
   #railBody { padding-inline: 13px; }
   .rail-head { padding-inline: 7px; }
+  .rail-head [role="tablist"] { gap: 5px; }
 }
-@container reading-area (max-width: 700px) {
+@container reading-area (max-width: 1080px) {
+  .topbar #captureRegion .capture-label { display: none; }
+  .topbar #captureRegion .capture-short { display: inline; }
+}
+@container reading-area (max-width: 920px) {
   .topbar {
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr) auto auto;
@@ -680,7 +699,7 @@
   .topbar #more { grid-row: 1; grid-column: 5; }
   .topbar:has(#captureRegion:not([hidden])) {
     grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
-    & #captureRegion { grid-row: 1; grid-column: 4; min-height: 42px; padding-inline: 7px; }
+    & #captureRegion { grid-row: 1; grid-column: 4; }
     & #mobileRail { grid-column: 5; }
     & #more { grid-column: 6; }
   }
@@ -694,19 +713,20 @@
     padding-inline: 0;
   }
   #zoomControl { margin-inline: 2px; }
+  .reader-mode-switch { margin-inline-start: auto; }
+}
+@container reading-area (max-width: 700px) {
+  .topbar:has(#captureRegion:not([hidden])) #captureRegion { min-height: 42px; padding-inline: 7px; }
   .toolbar .icon-btn { min-width: 44px; height: 44px; }
   .toolbar :is(#zoom, #pageCount) { min-height: 44px; }
-  .reader-mode-switch { margin-inline-start: auto; }
   .reader-mode-switch :is(#originalMode, #parallel) { min-height: 44px; padding-inline: 7px; }
   .reader-mode-switch svg { display: none; }
   .topbar :is(#library, #contentsToggle, #mobileRail, #more) { min-height: 40px; padding-inline: 6px; }
 }
 @container reading-area (max-width: 520px) {
   .topbar { column-gap: 4px; }
-  .topbar :is(#library, #mobileRail) { min-width: 38px; }
-  .topbar :is(#library, #mobileRail) > span { display: none; }
-  .topbar #captureRegion .capture-label { display: none; }
-  .topbar #captureRegion .capture-short { display: inline; }
+  .topbar :is(#library, #contentsToggle, #mobileRail) { min-width: 38px; }
+  .topbar :is(#library, #contentsToggle, #mobileRail) > span { display: none; }
 }
 @media (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
   .toc-entry, .toc-chapter > summary, .toc-fold { min-height: 44px; }

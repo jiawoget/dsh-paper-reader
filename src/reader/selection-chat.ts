@@ -72,7 +72,7 @@ export class SelectionChat {
     this.root.ariaLabel = 'Selection chat';
     this.root.hidden = true;
     this.action.setAttribute('aria-expanded', 'false');
-    const close = button('', () => { this.show(false); closeChat(); }, 'icon-btn');
+    const close = button('', () => { this.show(false); closeChat(); }, 'icon-btn chat-close');
     close.ariaLabel = label('Close chat', '收起讨论');
     close.append(icon('close', 14));
     this.heading.append(el('h3', '', label('Reading discussion', '阅读讨论')), this.modelPicker.button, close);
