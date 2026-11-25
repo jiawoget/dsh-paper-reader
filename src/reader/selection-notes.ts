@@ -1,8 +1,7 @@
 import type { JournalNote, SourceRecord } from '../shared/types.js';
 import { answerMarkdown } from './answer-markdown.js';
-import type { ReaderPort } from './panels.js';
 import { notesForSelection, selectionKey, type SelectionContext } from './selection-context.js';
-import { api, button, el, icon, message, readerLabel, toast } from './ui.js';
+import { api, button, el, icon, message, readerLabel, toast, type ReaderPort } from './ui.js';
 
 type NoteOrigin = Pick<SelectionContext, 'source' | 'original' | 'selection'>;
 interface NoteDraft {

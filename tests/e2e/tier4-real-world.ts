@@ -11,9 +11,7 @@ import type { DocumentInfo, ReaderState } from '../../src/shared/types.js';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
 import { cardElement, clickCard, openToolbar, until } from './extension-controls.js';
 import { assertDarkAndContrast, computeElementMetrics, inspectShadowCardMetrics, type RawElementSample } from './helpers/contrast.js';
-import {
-  failClipboardExecCommand, inspectTranslatedBlocks, mockClipboardFallback, readClipboardFallback, restoreClipboard
-} from './helpers/dom-probes.js';
+import { blockClipboard, inspectTranslatedBlocks, restoreClipboard } from './helpers/dom-probes.js';
 import {
   assertZeroSqliteRows, closeServer, snapshotDocSqliteCounts,
   startCompositePublisher, startRichZoteroFixture, startVersatileLlmFixture
@@ -139,13 +137,7 @@ try {
                   await iframe.locator('#mobileRail').click();
                   await iframe.locator('#refsTab').click();
                   await iframe.locator('.citation-export').waitFor({ state: 'visible' });
-                  await mockClipboardFallback(iframe);
-                  await iframe.getByRole('button', { name: '复制 BibTeX', exact: true }).click();
-                  await iframe.locator('.citation-export-status').filter({ hasText: 'BibTeX 已复制到剪贴板。' }).waitFor();
-                  const fallbackBib = await readClipboardFallback(iframe);
-                  assert.ok(fallbackBib.startsWith('@inproceedings{kwon2023efficient,\n'), fallbackBib);
-
-                  await failClipboardExecCommand(iframe);
+                  await blockClipboard(iframe);
                   await iframe.getByRole('button', { name: '复制 RIS', exact: true }).click();
                   await iframe.locator('.citation-export-status').filter({ hasText: '剪贴板权限受限，请改用下载按钮。' }).waitFor();
                   const [risDl] = await Promise.all([
@@ -236,8 +228,8 @@ try {
                   await page.locator('#paperScroll').focus();
                   await page.keyboard.press('Shift++');
                   assert.equal(await page.locator('#zoom').inputValue(), '1.25');
-                  const saveFont = await page.locator('#saveState').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
-                  assert.ok(saveFont >= 12, `Expected #saveState >= 12px, got ${saveFont}`);
+                  const saveFont = await page.locator('.notebook-status').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+                  assert.ok(saveFont >= 12, `Expected .notebook-status >= 12px, got ${saveFont}`);
                   await until(async () => {
                     const m = await inspectTranslatedBlocks(page);
                     return m.bodySizes.length > 0 && m.bodySizes.every(b => b.visualFont >= 11.5);

@@ -382,21 +382,20 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
       await zhPage.locator('.rail-head [role="tab"]').allInnerTexts(),
       ['目录', '笔记', '标记', '文献']
     );
-    // T2-F8-03: #highlightDisplay options in ZH
+    assert.equal(await zhPage.locator('.highlight-preference').isVisible(), false);
     assert.deepEqual(
-      await zhPage.locator('#highlightDisplay option').allInnerTexts(),
+      await zhPage.locator('#highlightDisplay option').allTextContents(),
       ['随笔记显示', '仅在标记中显示']
     );
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Notes tab');
 
-    // Expand Reading guide on pagedattention
     await zhPage.getByText('阅读提示', { exact: true }).click();
     await zhPage.getByText('第 6 页要点', { exact: true }).waitFor();
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Reading guide');
 
-    // Marks tab (empty state)
     await zhPage.locator('#annotationsTab').click();
-    await zhPage.locator('#rail').getByRole('heading', { name: '标记', exact: true }).waitFor();
+    await zhPage.locator('.annotation-workspace').getByRole('heading', { name: '标记', exact: true }).waitFor();
+    assert.equal((await zhPage.locator('#notebookHandle').innerText()).trim(), '标记');
     assert.equal(await zhPage.locator('.annotation-workspace').getAttribute('aria-label'), '本篇标记');
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Marks tab');
 
@@ -498,9 +497,6 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     await zhPage.locator('#more').click();
     await zhPage.locator('#menu').getByRole('button', { name: '连接设置', exact: true }).click();
     await modal.waitFor({ state: 'visible' });
-    // T2-F8-04: Obsidian 笔记库 preserved distinctly
-    await modal.getByLabel('Obsidian 笔记库文件夹', { exact: true }).waitFor();
-    // Invalid custom targetLanguage validation toasts must render localized Chinese (zero English leak)
     const zhLangSelect = modal.getByRole('combobox', { name: '翻译目标语言', exact: true });
     await zhLangSelect.selectOption('__custom__');
     const zhCustomInput = modal.getByLabel('自定义目标语言', { exact: true });
@@ -517,7 +513,12 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     await modal.getByRole('button', { name: '保存连接设置', exact: true }).click();
     await zhToast.waitFor({ state: 'visible' });
     assert.equal((await zhToast.innerText()).trim(), '翻译目标语言最多 64 个字符。');
-    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Connections modal');
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Connections AI tab');
+    await modal.getByRole('tab', { name: 'Obsidian', exact: true }).click();
+    await modal.getByLabel('Obsidian 笔记库文件夹', { exact: true }).waitFor();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Connections Obsidian tab');
+    await modal.getByRole('tab', { name: 'Zotero', exact: true }).click();
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Connections Zotero tab');
     await zhPage.locator('#closeDialog').click();
 
     await zhPage.locator('#more').click();
@@ -576,14 +577,16 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
       await enPage.locator('.rail-head [role="tab"]').allInnerTexts(),
       ['Contents', 'Notes', 'Marks', 'Reference']
     );
+    assert.equal(await enPage.locator('.highlight-preference').isVisible(), false);
     assert.deepEqual(
-      await enPage.locator('#highlightDisplay option').allInnerTexts(),
+      await enPage.locator('#highlightDisplay option').allTextContents(),
       ['In Notes', 'In Marks only']
     );
     assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Notes tab');
 
     await enPage.locator('#annotationsTab').click();
-    await enPage.locator('#rail').getByRole('heading', { name: 'Marks', exact: true }).waitFor();
+    await enPage.locator('.annotation-workspace').getByRole('heading', { name: 'Marks', exact: true }).waitFor();
+    assert.equal((await enPage.locator('#notebookHandle').innerText()).trim(), 'Marks');
     assert.equal(await enPage.locator('.annotation-workspace').getAttribute('aria-label'), 'Marks for this paper');
     assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Marks tab');
 
@@ -596,8 +599,12 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
 
     await enPage.locator('#more').click();
     await enPage.locator('#menu').getByRole('button', { name: 'Connections', exact: true }).click();
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Connections AI tab');
+    await enPage.locator('#dialog').getByRole('tab', { name: 'Obsidian', exact: true }).click();
     await enPage.locator('#dialog').getByLabel('Obsidian vault folder', { exact: true }).waitFor();
-    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Connections modal');
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Connections Obsidian tab');
+    await enPage.locator('#dialog').getByRole('tab', { name: 'Zotero', exact: true }).click();
+    assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Connections Zotero tab');
     await enPage.locator('#closeDialog').click();
 
     await enPage.locator('#more').click();

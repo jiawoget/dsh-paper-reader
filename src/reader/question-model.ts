@@ -1,7 +1,6 @@
 import type { Settings } from '../shared/types.js';
 import { questionModelForm } from '../shared/question-model-form.js';
-import type { ReaderPort } from './panels.js';
-import { api, byId, el, icon, modal, readerLabel as label } from './ui.js';
+import { api, byId, el, icon, modal, readerLabel as label, type ReaderPort } from './ui.js';
 
 export const questionConnected = (settings: Settings) => Boolean(settings.questionModel) || settings.aiMode !== 'unconfigured';
 

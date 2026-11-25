@@ -1,11 +1,11 @@
 import type { DocumentInfo, OpenDocument } from '../shared/types.js';
 import { localBookPlace } from './book-position.js';
 import { openStaxLocation } from '../shared/openstax.js';
-import { settingsDialog, type ReaderPort } from './panels.js';
-import { api, button, byId, el, icon, message, modal, readerLabel as t, safeWeb, toast, webPageError } from './ui.js';
+import { settingsDialog } from './settings-dialog.js';
+import { api, bindTablist, button, byId, el, icon, message, modal, readerLabel as t, safeWeb, toast, webPageError, type ReaderPort } from './ui.js';
 import { browseZotero, type ZoteroBrowsePosition } from './zotero-browser.js';
 
-let lastSource: 'zotero' | 'device' = 'zotero';
+let lastSource: 'zotero' | 'device' | undefined;
 let connection = '';
 let position: ZoteroBrowsePosition = { query: '', collection: '' };
 
@@ -72,6 +72,7 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
     }
     let editingId = '';
     let confirmingId = '';
+    let focusDeleteId = '';
     function render() {
       const query = search.value.trim().toLocaleLowerCase();
       const shown = docs.filter(doc => [doc.title, doc.authors, doc.url].some(field => field?.toLocaleLowerCase().includes(query)));
@@ -129,9 +130,8 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
         if (doc.id === 'pagedattention') { list.append(row); continue; }
         const wrap = el('div', 'library-device-item');
         const actions = el('div', 'library-item-actions');
-        const renameBtn = button('', () => { confirmingId = ''; editingId = doc.id; render(); }, 'icon-btn', 'edit');
-        renameBtn.ariaLabel = renameBtn.title = t('Rename document', '重命名文档');
-        const delBtn = button(confirmingId === doc.id ? t('Delete', '确认删除') : '', async () => {
+        const confirming = confirmingId === doc.id;
+        const delBtn = button(confirming ? t('Delete', '确认删除') : '', async () => {
           if (confirmingId !== doc.id) { confirmingId = doc.id; render(); return; }
           const wasActive = app.doc.id === doc.id;
           await api('library.delete', { id: doc.id });
@@ -144,13 +144,27 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
           else await app.refresh();
           render();
           toast(t('Document removed from this device.', '已从本机删除文档。'));
-        }, confirmingId === doc.id ? 'btn library-delete-confirm' : 'icon-btn', confirmingId === doc.id ? undefined : 'close');
-        delBtn.ariaLabel = delBtn.title = confirmingId === doc.id
+        }, confirming ? 'btn library-delete-confirm' : 'icon-btn', confirming ? undefined : 'trash');
+        delBtn.ariaLabel = delBtn.title = confirming
           ? t('Confirm delete', '确认删除')
           : t('Delete document', '删除文档');
-        actions.append(renameBtn, delBtn);
-        wrap.append(row, actions);
-        list.append(wrap);
+        if (confirming) {
+          const cancelBtn = button(t('Cancel', '取消'), () => { confirmingId = ''; focusDeleteId = doc.id; render(); });
+          actions.append(delBtn, cancelBtn);
+          wrap.append(row, actions);
+          list.append(wrap);
+          cancelBtn.focus({ preventScroll: true });
+        } else {
+          const renameBtn = button('', () => { confirmingId = ''; editingId = doc.id; render(); }, 'icon-btn', 'edit');
+          renameBtn.ariaLabel = renameBtn.title = t('Rename document', '重命名文档');
+          actions.append(renameBtn, delBtn);
+          wrap.append(row, actions);
+          list.append(wrap);
+          if (focusDeleteId === doc.id) {
+            focusDeleteId = '';
+            delBtn.focus({ preventScroll: true });
+          }
+        }
       }
     }
     search.addEventListener('input', render);
@@ -158,10 +172,12 @@ function deviceDocuments(app: ReaderPort, panel: HTMLElement, read: (doc: Docume
   }).catch(error => { status.textContent = message(error); });
 }
 
-export async function libraryDialog(app: ReaderPort): Promise<void> {
+export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 'device'): Promise<void> {
   const settings = app.state.settings;
   const current = [settings.zoteroMode, settings.zoteroLibraryType, settings.zoteroLibraryId].join('/');
-  if (current !== connection) { position = { query: '', collection: '' }; lastSource = 'zotero'; connection = current; }
+  if (current !== connection) { position = { query: '', collection: '' }; lastSource = undefined; connection = current; }
+  const zoteroReady = Boolean(settings.zoteroLibraryId) || localStorage.getItem('reader.zotero-connected') === '1';
+  const startSource: 'zotero' | 'device' = initialSource ?? lastSource ?? (zoteroReady ? 'zotero' : 'device');
   const dialog = byId<HTMLDialogElement>('dialog');
   const body = modal(t('Library', '资料库'));
   const root = el('section', 'reader-library');
@@ -227,41 +243,42 @@ export async function libraryDialog(app: ReaderPort): Promise<void> {
   openWeb.addEventListener('click', clearRequest);
   imports.append(openWeb, pdf, file);
   const tabs = el('div', 'library-tabs');
-  tabs.setAttribute('role', 'tablist');
   tabs.ariaLabel = t('Library source', '资料库来源');
   const toolbar = el('div', 'library-toolbar');
   toolbar.append(tabs, imports);
   const holder = el('div');
   root.append(toolbar, form, holder);
-  function show(source: typeof lastSource) {
-    lastSource = source;
-    for (const tab of [zotero, device]) {
-      const selected = tab.dataset.source === source;
-      tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
-    }
-    const panel = el('section', 'library-source');
-    panel.id = 'library-source'; panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', 'library-tab-' + source);
-    holder.replaceChildren(panel);
-    if (source === 'device') deviceDocuments(app, panel, doc => read({doc}));
-    else browseZotero(panel, position, read, () => settingsDialog(app, 'zotero', () => { void libraryDialog(app); }));
-  }
-  function sourceTab(source: typeof lastSource, name: string) {
-    const tab = el('button', 'library-tab', name);
-    tab.type = 'button';
-    tab.addEventListener('click', () => { if (lastSource !== source) show(source); });
-    tab.id = 'library-tab-' + source; tab.dataset.source = source; tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-controls', 'library-source');
-    return tab;
-  }
-  const zotero = sourceTab('zotero', 'Zotero'), device = sourceTab('device', t('On this device', '本机文档'));
+  const zotero = el('button', 'library-tab', 'Zotero');
+  zotero.id = 'library-tab-zotero';
+  zotero.dataset.source = 'zotero';
+  zotero.setAttribute('aria-controls', 'library-source');
+  const device = el('button', 'library-tab', t('On this device', '本机文档'));
+  device.id = 'library-tab-device';
+  device.dataset.source = 'device';
+  device.setAttribute('aria-controls', 'library-source');
   tabs.append(zotero, device);
-  tabs.addEventListener('keydown', event => {
-    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const tab = event.key === 'Home' ? zotero : event.key === 'End' ? device : lastSource === 'zotero' ? device : zotero;
-    tab.click(); tab.focus();
+  let shownSource: 'zotero' | 'device' | undefined;
+  bindTablist(tabs, [
+    { key: 'zotero', button: zotero },
+    { key: 'device', button: device }
+  ], startSource, source => {
+    lastSource = source;
+    if (shownSource === source) return;
+    shownSource = source;
+    const panel = el('section', 'library-source');
+    panel.id = 'library-source';
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', 'library-tab-' + source);
+    holder.replaceChildren(panel);
+    if (source === 'device') deviceDocuments(app, panel, doc => read({ doc }));
+    else browseZotero(
+      panel,
+      position,
+      read,
+      () => settingsDialog(app, 'zotero', () => { void libraryDialog(app, 'zotero'); }),
+      () => localStorage.setItem('reader.zotero-connected', '1')
+    );
   });
-  show(lastSource);
   dialog.scrollTop = 0;
-  (lastSource === 'zotero' ? zotero : device).focus({ preventScroll: true });
+  (startSource === 'zotero' ? zotero : device).focus({ preventScroll: true });
 }

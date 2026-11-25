@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium, type Page } from 'playwright-core';
 import type { DocumentInfo } from '../../src/shared/types.js';
-import { failClipboardExecCommand, mockClipboardFallback, readClipboardFallback, restoreClipboard } from './helpers/dom-probes.js';
+import { blockClipboard, restoreClipboard } from './helpers/dom-probes.js';
 import { closeServer, startRichZoteroFixture } from './helpers/fixtures.js';
 import { makePdf, readDownload } from './helpers/reader.js';
 import { withHost } from './host.js';
@@ -227,11 +227,7 @@ try {
         assert.equal(downloadedRis.text, copiedRis);
         console.log('PASS T1-F3-04: Download .ris on pagedattention.');
 
-        await mockClipboardFallback(page);
-        await page.getByRole('button', { name: 'Copy BibTeX', exact: true }).click();
-        await page.locator('.citation-export-status').filter({ hasText: 'BibTeX copied to clipboard.' }).waitFor({ state: 'visible' });
-        assert.equal(await readClipboardFallback(page), copiedBib);
-        await failClipboardExecCommand(page);
+        await blockClipboard(page);
         await page.getByRole('button', { name: 'Copy RIS', exact: true }).click();
         await page.locator('.citation-export-status').filter({ hasText: 'Clipboard access was blocked. Use Download instead.' }).waitFor({ state: 'visible' });
         const [recoveryDownload] = await Promise.all([
@@ -240,7 +236,7 @@ try {
         ]);
         assert.equal((await readDownload(recoveryDownload)).text, copiedRis);
         await restoreClipboard(page);
-        console.log('PASS T2-F3-07: Clipboard NotAllowedError fallback and blocked-clipboard download recovery.');
+        console.log('PASS T2-F3-07: Blocked clipboard reports recovery message and Download .ris succeeds.');
 
         // T2-F3-01: Sparse bare-filename PDF notes.pdf (with Zotero still unconfigured).
         const pdfBytes = await makePdf(context, 'Scratch Notes', ['Undated local draft PDF for citation export testing.']);

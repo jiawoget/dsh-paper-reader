@@ -193,9 +193,18 @@ try {
     // Delete active Doc A through Library UI two-step confirmation
     await page.locator('#library').click();
     await dialog.waitFor({ state: 'visible' });
-    await dialog.getByRole('tab', { name: 'On this device', exact: true }).click();
+    assert.equal(await dialog.getByRole('tab', { name: 'On this device', exact: true }).getAttribute('aria-selected'), 'true');
     const rowA = dialog.locator('.library-device-item').filter({ hasText: 'Alpha-Delete.pdf' });
-    await rowA.getByRole('button', { name: 'Delete document', exact: true }).click();
+    const delA = rowA.getByRole('button', { name: 'Delete document', exact: true });
+    assert.ok((await delA.locator('path').getAttribute('d'))?.startsWith('M4 7h16'));
+    await delA.click();
+    const cancelDel = rowA.getByRole('button', { name: 'Cancel', exact: true });
+    await cancelDel.waitFor({ state: 'visible' });
+    assert.equal(await cancelDel.evaluate(el => document.activeElement === el), true);
+    await cancelDel.click();
+    assert.equal(await rowA.count(), 1);
+    assert.equal(await delA.evaluate(el => document.activeElement === el), true);
+    await delA.click();
     await rowA.getByRole('button', { name: 'Confirm delete', exact: true }).click();
 
     await dialog.getByText('Document removed from this device.', { exact: true }).waitFor();

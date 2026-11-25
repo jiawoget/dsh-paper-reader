@@ -393,7 +393,7 @@ await withHost(async host => {
       await page.getByRole('separator', { name: 'Resize notes', exact: true }).press('ArrowLeft');
       assert.ok((await box(rail)).width > width, 'The right sidebar should resize from the keyboard.');
       await comment.press('Control+Enter');
-      await rail.getByRole('heading', { name: 'Marks', exact: true }).waitFor();
+      await rail.locator('.annotation-workspace').getByRole('heading', { name: 'Marks', exact: true }).waitFor();
       await notes.click();
       await display.selectOption('inline');
       await highlight.getByText(markComment, { exact: true }).waitFor();

@@ -261,7 +261,7 @@ export class ReaderContents {
       for (const row of this.entries) {
         const e = row.entry, best = current?.entry;
         if (e.page > this.page || (e.page === this.page && (e.top ?? 0) > top)) continue;
-        if (!best || e.page > best.page || (e.page === best.page && (e.top ?? 0) > (best.top ?? 0))) current = row;
+        if (!best || e.page > best.page || (e.page === best.page && (e.page < this.page || (e.top ?? 0) >= (best.top ?? 0)))) current = row;
       }
     } else {
       const host = byId('original').offsetWidth ? byId('original') : this.translation;

@@ -4,10 +4,9 @@ import { Compartment, EditorSelection, EditorState } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, keymap } from '@codemirror/view';
 import type { JournalNote, NotebookSnapshot, SourceRecord } from '../shared/types.js';
 import type { PaperAnnotation } from '../shared/annotations.js';
-import type { ReaderPort } from './panels.js';
 import { editedMarkdown, foldedHeader, foldedSources, markdownColors, refreshSources } from './notebook-editor.js';
 import { markdownPassageLabel, notebookBodyEnd, passageDefinitions, passageLinks } from './passage-links.js';
-import { api, button, el, icon, message, readerLabel as label, sourceUrl, toast } from './ui.js';
+import { api, button, el, icon, message, readerLabel as label, sourceUrl, toast, type ReaderPort } from './ui.js';
 
 type MakeChip = (app: ReaderPort, note: JournalNote, quote?: string) => HTMLButtonElement;
 interface Draft { revision: string; original: string; text: string }
@@ -456,7 +455,7 @@ class NotebookEditor {
     const conflict = this.conflict;
     this.toggle.setAttribute('aria-pressed', String(this.sourceMode));
     const location = this.book.path || this.book.vaultPending ? label('Obsidian vault','Obsidian 笔记库') : label('Connect Obsidian','连接 Obsidian');
-    this.locationButton.replaceChildren(icon('folder', 13), location);
+    this.locationButton.replaceChildren(icon('folder', 13), el('span', '', location));
     this.locationButton.title = this.book.path || (this.book.vaultPending ? label('Obsidian vault settings', 'Obsidian 笔记库设置') : label('Connect these notes to an Obsidian vault', '将笔记连接到 Obsidian 笔记库'));
     this.locationButton.setAttribute('aria-label', location);
     this.fileLink.hidden = !this.chapterId || !this.book.uri || Boolean(this.app.notebookError);

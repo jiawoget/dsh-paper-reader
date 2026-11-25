@@ -135,6 +135,7 @@ async function connectVault(page: Page, folder: string) {
   await page.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Connections', exact: true });
+  await settings.getByRole('tab', { name: 'Obsidian', exact: true }).click();
   await settings.getByLabel('Obsidian vault folder', { exact: true }).fill(folder);
   await settings.getByRole('button', { name: 'Save connections', exact: true }).click();
   await settings.waitFor({ state: 'hidden' });

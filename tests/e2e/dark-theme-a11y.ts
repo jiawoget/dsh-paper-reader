@@ -111,7 +111,8 @@ async function runStaticCssAudit(): Promise<void> {
   }
   const deskCss = await readFile(path.join(project, 'public/reading-desk.css'), 'utf8');
   assert.ok(!deskCss.includes('.article-body'), 'reading-desk.css must remove dead .article-body selector');
-  assert.match(deskCss, /:root\[data-theme="dark"\][\s\S]*color-scheme:\s*dark;/, 'reading-desk.css must set color-scheme: dark on :root[data-theme="dark"]');
+  const readerCss = await readFile(path.join(project, 'public/reader.css'), 'utf8');
+  assert.match(readerCss, /:root\[data-theme="dark"\][\s\S]*color-scheme:\s*dark;/, 'reader.css must set color-scheme: dark on :root[data-theme="dark"]');
 
   const annCss = await readFile(path.join(project, 'public/annotations.css'), 'utf8');
   assert.ok(!annCss.includes('var(--text'), 'annotations.css must not reference undefined var(--text)');
@@ -295,11 +296,10 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const rail = page.locator('#rail');
       await rail.waitFor({ state: 'visible' });
       await assertDarkSurface(rail, '#rail', 0.08);
-      await assertContrast(page.locator('#saveState'), '#saveState text', 4.5);
-      await assertContrast(page.locator('#saveState'), '#saveState::before dot', 3.0, 'backgroundColor', '::before');
+      await assertContrast(rail.locator('.notebook-status'), '.notebook-status text', 4.5);
       await page.mouse.move(0, 0);
       await assertBorderContrastBothThemes(page, page.locator('#notebookPose'), '#notebookPose select');
-      await assertBorderContrastBothThemes(page, page.locator('#highlightDisplay'), '#highlightDisplay select');
+      assert.equal(await page.locator('.highlight-preference').isVisible(), false);
 
       const cmContent = rail.locator('.notebook-writing-area .cm-content');
       await cmContent.waitFor({ state: 'visible' });
@@ -320,7 +320,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const cursorAfterType = await readCursorAnim();
       assert.equal(cursorAfterType.name, 'none', 'CodeMirror .cm-cursorLayer must not blink after typing under reduced motion');
       assert.equal(cursorAfterType.duration, '0s', 'CodeMirror .cm-cursorLayer duration must be 0s after typing under reduced motion');
-      await page.locator('#saveState').click();
+      await page.locator('#notebookHandle').click();
       await cmContent.click();
       const cursorOnFocus = await readCursorAnim();
       assert.equal(cursorOnFocus.name, 'none', 'CodeMirror .cm-cursorLayer must not blink on focus under reduced motion');
@@ -365,7 +365,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
         assert.ok(ratio >= 4.5, `CM6 ${scheme} ${focused ? 'focused' : 'blurred'} selection contrast must be >= 4.5:1, got ${ratio.toFixed(2)}:1 (${raw.selBg})`);
       };
       await checkCmSelection('dark', true);
-      await page.locator('#saveState').click();
+      await page.locator('#notebookHandle').click();
       await checkCmSelection('dark', false);
       await page.emulateMedia({ colorScheme: 'light' });
       await checkCmSelection('light', false);
@@ -439,8 +439,8 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await assertContrast(annError, '.annotation-error', 4.5);
       await rail.getByRole('button', { name: 'Keep my draft' }).click();
       await rail.getByRole('button', { name: 'Save', exact: true }).click();
-
-      // Reference tab (including M3 .citation-export controls & .trail) in dark mode.
+      await page.locator('#notesTab').click(); await page.locator('.highlight-preference').waitFor({ state: 'visible' });
+      await assertBorderContrastBothThemes(page, page.locator('#highlightDisplay'), '#highlightDisplay select');
       await page.locator('#refsTab').click();
       const citeExport = rail.locator('.citation-export');
       await citeExport.waitFor({ state: 'visible' });
@@ -501,9 +501,13 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       assert.equal((await measureLocator(langSelect)).colorScheme, 'dark');
       await assertContrast(langSelect, 'settingsDialog select text', 4.5);
       await assertBorderContrastBothThemes(page, langSelect, 'settingsDialog .field select');
+      const advanced = dialog.locator('.settings-advanced');
+      assert.equal(await advanced.evaluate(el => (el as HTMLDetailsElement).open), false);
+      await advanced.locator('summary').click();
       await assertBorderContrastBothThemes(page, dialog.locator('.field input').first(), 'settingsDialog .field input');
-      await page.locator('#closeDialog').click();
-      await dialog.waitFor({ state: 'hidden' });
+      assert.ok(((await dialog.getByRole('button', { name: 'Save connections', exact: true }).boundingBox())!.y) < 860);
+      for (const tab of ['Obsidian', 'Zotero']) await dialog.getByRole('tab', { name: tab, exact: true }).click();
+      await page.locator('#closeDialog').click(); await dialog.waitFor({ state: 'hidden' });
 
       await page.locator('#more').click();
       await page.getByRole('button', { name: 'Vocabulary and history', exact: true }).click();
@@ -720,11 +724,10 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       await page.locator('#mobileRail').click();
       await page.locator('#rail').waitFor({ state: 'visible' });
 
-      // Breakpoint sweep for #saveState >= 12px (T1-F5-02, T2-F5-01).
       for (const width of [1381, 1380, 1280, 1024]) {
         await page.setViewportSize({ width, height: 900 });
-        const size = await page.locator('#saveState').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
-        assert.ok(size >= 12, `#saveState fontSize at ${width}px must be >= 12px, got ${size}px`);
+        const sweep = await page.evaluate(() => ({ size: parseFloat(getComputedStyle(document.querySelector('.notebook-status')!).fontSize), clip: document.querySelector<HTMLElement>('.rail-head [role="tablist"]')!.scrollWidth - document.querySelector<HTMLElement>('.rail-head [role="tablist"]')!.clientWidth }));
+        assert.ok(sweep.size >= 12 && sweep.clip <= 1, `Sweep failed at ${width}px: ${JSON.stringify(sweep)}`);
       }
 
       // 1440x900 bilingual + open sidebar + page scope (T1-F5-03).

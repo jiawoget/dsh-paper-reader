@@ -3,8 +3,6 @@ import type { FrameLocator, Page } from 'playwright-core';
 
 type ClipWin = Window & {
   __origWrite?: typeof navigator.clipboard.writeText;
-  __origExec?: typeof document.execCommand;
-  __copied?: string;
 };
 
 export interface TranslatedBlockMetric {
@@ -23,34 +21,12 @@ export interface TranslatedBlocksReport {
   railWidth: number;
 }
 
-export async function mockClipboardFallback(target: Page | FrameLocator): Promise<void> {
+export async function blockClipboard(target: Page | FrameLocator): Promise<void> {
   await target.locator('body').evaluate(() => {
     const w = window as ClipWin;
     w.__origWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
-    w.__origExec = document.execCommand.bind(document);
-    w.__copied = '';
-    const stubs = {
-      writeText() { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); },
-      execCommand(cmd: string) {
-        if (cmd !== 'copy') return false;
-        const a = document.activeElement;
-        w.__copied = a && 'value' in a ? String(a.value) : '';
-        return true;
-      }
-    };
+    const stubs = { writeText() { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); } };
     Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: stubs.writeText });
-    document.execCommand = stubs.execCommand;
-  });
-}
-
-export async function readClipboardFallback(target: Page | FrameLocator): Promise<string> {
-  return target.locator('body').evaluate(() => (window as ClipWin).__copied ?? '');
-}
-
-export async function failClipboardExecCommand(target: Page | FrameLocator): Promise<void> {
-  await target.locator('body').evaluate(() => {
-    const stubs = { execCommand() { return false; } };
-    document.execCommand = stubs.execCommand;
   });
 }
 
@@ -58,7 +34,6 @@ export async function restoreClipboard(target: Page | FrameLocator): Promise<voi
   await target.locator('body').evaluate(() => {
     const w = window as ClipWin;
     if (w.__origWrite) Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: w.__origWrite });
-    if (w.__origExec) document.execCommand = w.__origExec;
   });
 }
 
@@ -213,4 +188,52 @@ export async function assertMobilePanelTargets(page: Page, rootSelector: string)
   assert.ok(res.visible && res.count >= 1, `Panel ${rootSelector} not visible or has no controls: ${JSON.stringify(res)}`);
   assert.ok(res.overflow <= 1, `Panel ${rootSelector} horizontal overflow ${res.overflow} > 1px`);
   assert.deepEqual(res.undersized, [], `Panel ${rootSelector} controls below 44x44px: ${JSON.stringify(res.undersized)}`);
+}
+
+export async function assertDesktopChromeCraft(page: Page): Promise<void> {
+  const prevSize = page.viewportSize() ?? { width: 1440, height: 900 };
+  for (const width of [1440, 1280, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    if (await page.locator('#rail').isVisible()) await page.locator('#closeRail').click();
+    const closedTop = await page.locator('.topbar').evaluate(el => el.getBoundingClientRect().height);
+    await page.locator('#mobileRail').click();
+    await page.locator('#rail').waitFor({ state: 'visible' });
+    const metrics = await page.evaluate(() => {
+      const topbar = document.querySelector('.topbar')!.getBoundingClientRect();
+      const title = document.getElementById('docTitle')!.getBoundingClientRect();
+      const tablist = document.querySelector<HTMLElement>('.rail-head [role="tablist"]')!;
+      const footer = document.querySelector<HTMLElement>('.notebook-footer');
+      const footerRect = footer?.getBoundingClientRect();
+      return {
+        topbarHeight: topbar.height,
+        titleWidth: title.width,
+        saveStateExists: Boolean(document.getElementById('saveState')),
+        tablistOverflow: tablist.scrollWidth - tablist.clientWidth,
+        footerHeight: footerRect?.height ?? 0,
+        footerOverflow: footer ? footer.scrollWidth - footer.clientWidth : 0
+      };
+    });
+    assert.equal(metrics.saveStateExists, false, '#saveState must be removed');
+    assert.ok(Math.abs(metrics.topbarHeight - closedTop) <= 1, `Topbar jumped at ${width}px: ${closedTop} -> ${metrics.topbarHeight}`);
+    assert.ok(metrics.titleWidth >= 80, `#docTitle width ${metrics.titleWidth} < 80px at ${width}px`);
+    assert.ok(metrics.tablistOverflow <= 1, `Rail tablist clipped at ${width}px: overflow=${metrics.tablistOverflow}`);
+    assert.ok(metrics.footerHeight > 0 && metrics.footerHeight <= 42 && metrics.footerOverflow <= 1,
+      `Notebook footer wrapped or overflowed at ${width}px: ${JSON.stringify(metrics)}`);
+  }
+  for (const [id, name] of [['annotationsTab', 'Marks'], ['refsTab', 'Reference'], ['contentsTab', 'Contents'], ['notesTab', 'Notes']] as const) {
+    await page.locator('#' + id).click();
+    assert.equal((await page.locator('#notebookHandle').innerText()).trim(), name);
+  }
+  await page.locator('#closeRail').click();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('#more').click();
+  assert.equal(await page.locator('#menu').getByRole('button', { name: 'Library', exact: true }).count(), 0);
+  await page.locator('#menu').getByRole('button', { name: 'Connections', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.waitFor({ state: 'visible' });
+  const saveBox = (await dialog.getByRole('button', { name: 'Save connections', exact: true }).boundingBox())!;
+  assert.ok(saveBox.y >= 0 && saveBox.y + saveBox.height <= 900, 'Save connections must be visible without scrolling');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  await page.setViewportSize(prevSize);
 }

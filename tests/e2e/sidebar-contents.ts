@@ -104,6 +104,13 @@ async function configureModel(page: Page, model: OutlineModel) {
 }
 
 async function nativePdf(page: Page, host: HostFixture, model: OutlineModel) {
+  await showContents(page);
+  await current(entry(page, '4.2 KV Cache Manager'), '4.2 KV Cache Manager');
+  await page.locator('#zoom').selectOption('2');
+  await page.locator('#paperScroll').evaluate(el => { el.scrollTop = Math.round(el.scrollHeight * 0.46); });
+  await current(entry(page, '4.3 Decoding with PagedAttention and vLLM'), '4.3 Decoding with PagedAttention and vLLM');
+  await page.locator('#zoom').selectOption('1');
+  await page.locator('#closeRail').click();
   await importPdf(page, bookTitle, outlinePdf('bookmarked'));
   await showContents(page);
   const [opening, design, controls, findings] = bookmarkTitles;

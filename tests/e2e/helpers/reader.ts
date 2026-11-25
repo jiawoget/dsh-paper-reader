@@ -158,6 +158,12 @@ export async function saveTargetLanguage(
   await reader.locator('#menu').getByRole('button', { name: options?.zh ? '连接设置' : 'Connections', exact: true }).click();
   const dialog = reader.getByRole('dialog');
   await dialog.waitFor({ state: 'visible' });
+  if (options?.baseUrl !== undefined || options?.model !== undefined || options?.apiKey !== undefined) {
+    const advanced = dialog.locator('.settings-advanced');
+    if (await advanced.count() && !(await advanced.evaluate(el => (el as HTMLDetailsElement).open))) {
+      await advanced.locator('summary').click();
+    }
+  }
   if (options?.baseUrl !== undefined) await dialog.getByLabel(options.zh ? 'API 接口地址' : 'API base URL').fill(options.baseUrl);
   if (options?.model !== undefined) await dialog.getByLabel(options.zh ? '模型' : 'Model', { exact: true }).fill(options.model);
   if (options?.apiKey !== undefined) await dialog.getByLabel(options.zh ? 'API 密钥' : 'API key', { exact: true }).fill(options.apiKey);

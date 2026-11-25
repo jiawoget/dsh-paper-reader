@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type Browser, type Locator, type Page } from 'playwright-core';
-import { assertMobileChromeBudget, assertMobilePanelTargets } from './helpers/dom-probes.js';
+import { assertDesktopChromeCraft, assertMobileChromeBudget, assertMobilePanelTargets } from './helpers/dom-probes.js';
 import { assertNoZhEnglishLeaks, collectChromeStrings } from './helpers/i18n.js';
 import { openReader, withHost } from './host.js';
 import { idleDensity } from './idle-density.js';
@@ -432,6 +432,7 @@ await withHost(async host => {
     await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
     assert.equal(await page.getByLabel('Translation scope').inputValue(), 'page');
     assert.ok(Math.abs((await box(original)).width - (await box(translated)).width) < 2);
+    await assertDesktopChromeCraft(page);
     await mobileChromeJourney(page, browser, host.authenticatedUrl, host.origin + '/api/paper-reader/app/index.html?doc=' + id + '&page=' + pageNumber, pageNumber);
 
     const laptops = [];

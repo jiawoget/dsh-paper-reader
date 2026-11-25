@@ -1,10 +1,9 @@
-import type { ReaderPort } from './panels.js';
 import { insertNotebookPassage } from './notebook.js';
 import { SelectionChat, type ChatState } from './selection-chat.js';
 import { chatSource, selectionKey, type SelectionContext } from './selection-context.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import { SelectionNotes, type NoteState } from './selection-notes.js';
-import { button, byId, el, readerLabel as label } from './ui.js';
+import { button, byId, el, readerLabel as label, type ReaderPort } from './ui.js';
 
 export class SelectionWorkspace {
   private readonly discussions = new Map<string, ChatState>();

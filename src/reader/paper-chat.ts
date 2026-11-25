@@ -5,10 +5,11 @@ import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import { isScreenshotAnchor, materialKey } from './selection-context.js';
 import { paperQuestions, type DiscussionRef } from './discussion-drafts.js';
 import { needsEnglishSearch, paperEvidence, readPaper } from './paper-evidence.js';
-import { settingsDialog, sourceChip, type ReaderPort } from './panels.js';
+import { sourceChip } from './notes-panel.js';
+import { settingsDialog } from './settings-dialog.js';
 import { questionConnected, questionModelButton } from './question-model.js';
 import type { PdfDocument } from './pdf-view.js';
-import { api, apiStream, button, el, icon, message, readerLabel as label } from './ui.js';
+import { api, apiStream, button, el, icon, message, readerLabel as label, type ReaderPort } from './ui.js';
 
 interface Conversation {
   draft: string; exchanges: ChatExchange[]; loaded: boolean; version: number;

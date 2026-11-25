@@ -2,7 +2,6 @@ import type { RegionIntent, SelectionHit, SourceRecord } from '../shared/types.j
 import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47 } from '../shared/languages.js';
 import { quoteLocator, writeSelectionRange, writeTranslatedLocator } from '../shared/source-link.js';
 import { hasPassageGutter, positionPassageCard } from './floating-position.js';
-import type { ReaderPort } from './panels.js';
 import type { PdfPageView } from './pdf-view.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import { discussionId } from './passage-links.js';
@@ -10,7 +9,7 @@ import { correspondingText, pairSelection } from './pdf/alignment.js';
 import { selectionRange } from './saved-selection.js';
 import { SelectionWorkspace } from './selection-workspace.js';
 import { chatSource, conversationThread, materialKey, type SelectionContext } from './selection-context.js';
-import { api, button, byId, el, icon, message, readerLabel, sourceUrl, toast } from './ui.js';
+import { api, button, byId, el, icon, message, readerLabel, sourceUrl, toast, type ReaderPort } from './ui.js';
 
 function isTerm(text: string): boolean {
   if (text.length > 56 || /[\r\n。！？；，、!?;:]|\.(?:\s|$)/u.test(text)) return false;

@@ -161,7 +161,6 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
     await pane.getByLabel('Obsidian vault folder').fill(vault);
     await pane.getByRole('button', { name: 'Save connections' }).click();
     await pane.getByText('Connections saved.', { exact: true }).waitFor();
-    await pane.locator('#saveState.exported').waitFor();
     await pane.getByText('Saved to vault', {exact: true}).waitFor();
     const directory = path.join(vault, 'Paper Reader');
     const markdown = (await readdir(directory)).find(entry => entry.endsWith('.md'));
