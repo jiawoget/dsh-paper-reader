@@ -9,6 +9,8 @@
   position: absolute; z-index: 4; display: grid; place-items: center;
   min-width: 0; padding: 0; border: 0; border-radius: 3px;
   background: transparent; pointer-events: auto; cursor: pointer; user-select: none;
+  --quote-border: #9f7ec8;
+  --purple: #59358e;
 }
 .pdf-citation-focus::after {
   content: ""; width: var(--cite-w, 100%); height: var(--cite-h, 100%);
