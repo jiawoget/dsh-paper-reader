@@ -136,3 +136,25 @@ test('translate with force overwrites only requested blocks and preserves cache 
   assert.equal(afterFailure.b1, '重译一。');
   assert.equal(afterFailure.b2, '初版二。');
 });
+
+test('importPdf enriches missing metadata on duplicate bytes and updateMeta validates and serializes atomic writes', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-ts-update-meta-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const library = new Library(root);
+  const bytes = Buffer.from('%PDF-1.7\nmetadata enrichment and update test');
+  const first = await library.importPdf('Paper.pdf', bytes, undefined, { paperTitle: 'Initial Title', year: '2023' });
+  assert.equal(first.paperTitle, 'Initial Title'); assert.equal(first.year, '2023');
+  const enriched = await library.importPdf('Paper2.pdf', bytes, 'https://arxiv.org/abs/2309.06180', { paperTitle: 'Should Not Clobber', authors: 'Alice Smith', doi: '10.1145/123.456' });
+  assert.equal(enriched.id, first.id); assert.equal(enriched.paperTitle, 'Initial Title'); assert.equal(enriched.authors, 'Alice Smith'); assert.equal(enriched.url, 'https://arxiv.org/abs/2309.06180');
+  const edited = await library.updateMeta({ id: first.id, paperTitle: 'Edited Paper', authors: ['Alice Smith', 'Bob Jones'], venue: 'SOSP', year: '2024', doi: 'https://doi.org/10.1145/999.1' });
+  assert.equal(edited.paperTitle, 'Edited Paper'); assert.equal(edited.authors, 'Alice Smith; Bob Jones'); assert.equal(edited.doi, '10.1145/999.1');
+  const cleared = await library.updateMeta({ id: first.id, authors: [], venue: '', doi: '' });
+  assert.equal(cleared.authors, undefined); assert.equal(cleared.venue, undefined); assert.equal(cleared.doi, undefined); assert.equal(cleared.paperTitle, 'Edited Paper');
+  await assert.rejects(library.updateMeta({ id: 'pagedattention', paperTitle: 'No' }), { status: 400 });
+  await assert.rejects(library.updateMeta({ id: first.id, year: '99' }), { status: 400 });
+  await assert.rejects(library.updateMeta({ id: first.id, doi: 'bad-doi' }), { status: 400 });
+  await assert.rejects(library.updateMeta({ id: 'pdf-' + '0'.repeat(64), paperTitle: 'Missing' }), { status: 404 });
+  await Promise.all([library.rename(first.id, 'Concurrent.pdf'), library.updateMeta({ id: first.id, authors: 'Concurrent Author' }), library.updateMeta({ id: first.id, venue: 'OSDI' })]);
+  const finalDoc = await library.get(first.id);
+  assert.equal(finalDoc.title, 'Concurrent.pdf'); assert.equal(finalDoc.authors, 'Concurrent Author'); assert.equal(finalDoc.venue, 'OSDI');
+});

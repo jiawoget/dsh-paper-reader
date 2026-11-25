@@ -308,3 +308,21 @@ test('chat.delete validates docId, requestId, and thread inputs', async t => {
   await assert.rejects(act('chat.delete', { docId: 'doc1', thread: 'invalid-thread' }), { status: 400 });
   assert.deepEqual(await act('chat.delete', { docId: 'doc1', requestId: '11111111-1111-4111-8111-111111111111' }), { deleted: 0 });
 });
+
+test('unified createServices wires web.open, library.updateMeta, and library.delete SQLite cascade', async t => {
+  const { act } = await setup(t, {
+    readResource: async raw => {
+      const url = new URL(String(raw));
+      if (url.pathname.endsWith('.pdf')) return { url, type: 'application/pdf', bytes: Buffer.from('%PDF-1.7\nservice-arxiv') };
+      return { url, type: 'text/html', bytes: Buffer.from('<meta name="citation_title" content="Unified Paper"><article><p>Body.</p></article>') };
+    }
+  });
+  const opened = await act('web.open', { url: '2402.12345' });
+  assert.equal(opened.doc.kind, 'pdf'); assert.equal(opened.doc.paperTitle, 'Unified Paper');
+  const updated = await act('library.updateMeta', { id: opened.doc.id, authors: 'Ada Lovelace', year: '2024' });
+  assert.equal(updated.doc.authors, 'Ada Lovelace'); assert.equal(updated.doc.year, '2024');
+  await act('note.save', { docId: opened.doc.id, title: opened.doc.title, page: 1, anchor: 'p1', label: 'p. 1', sourceUrl: 'http://127.0.0.1/a', quote: 'q', text: 'Note to cascade' });
+  assert.equal((await act('state')).notes.length, 1);
+  assert.deepEqual(await act('library.delete', { id: opened.doc.id }), { id: opened.doc.id, deleted: true });
+  assert.equal((await act('state')).notes.length, 0);
+});

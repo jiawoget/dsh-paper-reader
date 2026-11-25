@@ -154,6 +154,16 @@ export interface ServiceResults {
   'annotation.save': Operations['annotation.save'][1];
   'annotation.delete': Operations['annotation.delete'][1];
   state: Entries & { settings: PublicSettings };
+  'library.list': Operations['library.list'][1];
+  'library.get': Operations['library.get'][1];
+  'library.rename': Operations['library.rename'][1];
+  'library.updateMeta': Operations['library.updateMeta'][1];
+  'library.delete': Operations['library.delete'][1];
+  'web.import': Operations['web.import'][1];
+  'web.open': Operations['web.open'][1];
+  'book.section': Operations['book.section'][1];
+  'translation.get': Operations['translation.get'][1];
+  'translation.page': Operations['translation.page'][1];
   'settings.save': { settings: PublicSettings };
   'note.save': { note: Entry };
   'note.delete': { id: string; deleted: boolean };

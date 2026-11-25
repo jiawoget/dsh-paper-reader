@@ -27,10 +27,11 @@ import { readRegion } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
 import { discussionId } from './passage-links.js';
 import type { DiscussionRef } from './discussion-drafts.js';
-import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, syncTheme, toast, type Glyph, type ReaderPort } from './ui.js';
+import { api, button, byId, el, icon, message, readerLabel as label, sourceUrl, syncTheme, toast, type Glyph, type ReaderPort } from './ui.js';
 import { DocSearch } from './doc-search.js';
 import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './jump-history.js';
 import { bindPdfControls, runRetranslate, type PdfControlsHandle, type ZoomSetting } from './pdf-controls.js';
+import { bindPdfDropTarget, importPdfFiles } from './pdf-import.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
 type SidebarTab = typeof sidebarTabs[keyof typeof sidebarTabs];
@@ -598,11 +599,10 @@ class Reader implements ReaderPort {
     await runRetranslate({docId:doc.id,page,isPdf:Boolean(this.pdf),target:this.targetLanguage,settings:this.state.settings,view,blockIds,isActive:()=>version===this.epoch&&this.view===view},
       translations=>{this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.syncRetranslate();},()=>settingsDialog(this,'ai'));
   }
-  async importFile(file:File):Promise<void>{
-    if(file.size>80*1024*1024)throw new Error(label('Choose a PDF of up to 80 MB.','请选择不超过 80 MB 的 PDF 文件。'));
-    const check=await openPdf(new Uint8Array(await file.arrayBuffer()));await check.destroy();
-    const response=await fetch('../import-pdf?title='+encodeURIComponent(file.name),{method:'POST',credentials:'same-origin',headers:{'content-type':'application/pdf'},body:file});
-    const {doc}=await responseJson<{doc:DocumentInfo}>(response);await this.navigate(doc.id);
+  async importFiles(files: readonly File[], onProgress?: (text: string) => void): Promise<boolean> {
+    const { imported, summary } = await importPdfFiles(files, onProgress);
+    if (imported.length) await this.navigate(imported.at(-1)!.id);
+    if (summary) toast(summary); return imported.length > 0;
   }
   private async translatePage():Promise<void>{
     if(!this.view)return;
@@ -897,6 +897,7 @@ class Reader implements ReaderPort {
     byId('menu').append(...this.jumpControls.menuButtons,this.menuPin,this.menuRead);
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
     this.desk.connect(mode=>this.pdfView?.setFocusMode(mode), () => refreshNotebookHighlights(this));
+    bindPdfDropTarget(byId('reader'), files => { void this.importFiles(files, text => toast(text)).catch(e => toast(message(e))); }, { isBlocked: () => Boolean(document.querySelector('dialog[open]')) });
     byId('menu').addEventListener('focusout',event=>{
       if(event.relatedTarget instanceof HTMLElement && !event.relatedTarget.closest('#menu,#more,#pdfThemeMenu'))this.closeMenu();
     });

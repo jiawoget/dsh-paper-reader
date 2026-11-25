@@ -16,7 +16,7 @@ function fakePdf(pages: { str: string; hasEOL?: boolean }[][], failOnce = false)
       if (shouldFail) { shouldFail = false; throw new Error('transient pdf read error'); }
       return { items: pages[page - 1].map(item => ({ str: item.str, hasEOL: Boolean(item.hasEOL) })), styles: {}, lang: null } as Awaited<ReturnType<PdfDocument['textContent']>>;
     },
-    async render() { throw new Error('unused'); }, async destroy() {}
+    async metadata() { return {}; }, async render() { throw new Error('unused'); }, async destroy() {}
   };
   return { pdf, calls };
 }

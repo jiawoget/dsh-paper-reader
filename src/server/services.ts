@@ -1,15 +1,21 @@
+import type { ResourceReader } from './academic-intake.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
+import { publicResource } from './public-resource.js';
 import { ReaderModel, type StreamOptions } from './reader-model.js';
 import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
 import { hostAttachments } from './region-image.js';
-import { inputObject, mergeSettings, readQuestionModel, ServiceError, type Input, type ServiceResults } from './service-types.js';
+import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, type Input, type ServiceResults } from './service-types.js';
+import { openWebArticle } from './web-article.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
 
-export interface ServiceOptions { root: string; ctx?: unknown; fetchImpl?: typeof fetch; openObsidian?: ObsidianLauncher }
+export interface ServiceOptions {
+  root: string; ctx?: unknown; fetchImpl?: typeof fetch; openObsidian?: ObsidianLauncher;
+  library?: Library; store?: ReaderStore; readResource?: ResourceReader;
+}
 type Operation = keyof ServiceResults;
 type Result = ServiceResults[Operation];
 type Handlers = { [K in Operation]: (input: Input, options?: StreamOptions) => ServiceResults[K] | Promise<ServiceResults[K]> };
@@ -18,15 +24,29 @@ interface ServiceAction {
   (operation: string, payload?: unknown, options?: StreamOptions): Promise<Result>;
 }
 
-export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian() }: ServiceOptions): ServiceAction {
-  const documents = new Library(root);
-  const database = new ReaderStore(root);
+export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian(), library, store, readResource = publicResource }: ServiceOptions): ServiceAction {
+  const database = store ?? new ReaderStore(root);
+  const documents = library ?? new Library(root, readResource, id => database.deleteDocument(id));
   const notebooks = new PaperNotebooks(database, documents, openObsidian);
   const model = new ReaderModel(ctx, fetchImpl);
   const discussions = new PaperDiscussions(database, model);
   const outlines = new PdfOutlines(documents, database, model);
   const zotero = () => new ZoteroLibrary(database.settings(), fetchImpl, database);
   const handlers = {
+    'library.list': async () => ({ docs: await documents.list() }),
+    'library.get': async input => ({ doc: await documents.get(input.id) }),
+    'library.rename': async input => ({ doc: await documents.rename(input.id, input.title) }),
+    'library.updateMeta': async input => ({ doc: await documents.updateMeta(input) }),
+    'library.delete': input => documents.delete(input.id),
+    'web.import': input => documents.importWebDocument(input),
+    'web.open': input => openWebArticle(documents, input.url, readResource),
+    'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
+    'translation.get': async input => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
+    'translation.page': async input => {
+      if (input.force !== undefined && typeof input.force !== 'boolean') throw new ServiceError(400, 'Invalid force option.');
+      const targetLanguage = input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
+      return { translations: await documents.translate(input.docId, input.page, input.blocks, async (blocks, documentKind) => (await model.blocks(database.settings(), { blocks, documentKind, targetLanguage })).translations, targetLanguage, input.force === true) };
+    },
     'article.capture.save': input => database.saveArticleCapture(input, hostAttachments(ctx)),
     'article.capture.get': input => database.articleCapture(input),
     'outline.get': input => outlines.get(input),

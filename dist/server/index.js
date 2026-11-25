@@ -10,7 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, link, readFile, readdir, rm, writeFile, rename } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
+import path2 from "node:path";
 
 // src/shared/languages.ts
 var DEFAULT_TARGET_LANGUAGE = "Simplified Chinese";
@@ -76,38 +76,6 @@ function openStaxLocation(raw) {
   } catch {
   }
   return { book, section, fragment: fragment || void 0 };
-}
-
-// src/shared/translation-quality.ts
-var englishWords = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
-var sentenceWords = /\b(?:a|an|the|is|are|was|were|will|can|must|has|have|had|we|this|these|that|they|from|with|without|into|on|in|of|at|than|which|when|each|every|across|between)\b/i;
-function isUntranslatedEnglish(source2, result) {
-  const content = result.replace(new RegExp("^\\s*\\p{Script=Han}{1,4}\\s*[:\uFF1A]\\s*", "u"), "");
-  if (new RegExp("\\p{Script=Han}", "u").test(content) || /^\s*\[\d+(?:[,\s–-]+\d+)*\]/.test(source2) || /\bet al\.\s*(?:\(?\d{4}\)?)?[.,]?\s*$/i.test(source2) || /\b(?:19|20)\d{2}\b/.test(source2) && /\b(?:doi|isbn|arxiv|journal|proceedings|vol\.|pp\.)\b/i.test(source2)) return false;
-  const original = source2.normalize("NFKC").match(englishWords) ?? [];
-  const lowercase = original.filter((word) => /^[a-z]{2}/.test(word)).length;
-  const sentence = original.length >= 3 && lowercase >= 2 && /[.!?]["'’”)]*\s*$/.test(source2);
-  const passage = original.length >= 5 && lowercase >= 3 && sentenceWords.test(source2);
-  if (!sentence && !passage) return false;
-  const translated = content.normalize("NFKC").match(englishWords) ?? [];
-  const phrase = (words) => " " + words.join(" ").toLowerCase() + " ";
-  return phrase(translated).includes(phrase(original));
-}
-function hasDecoderRepetition(result, source2 = "") {
-  const compact = result.replace(/\s+/gu, "");
-  const original = source2.replace(/\s+/gu, "");
-  const stutter = /\u6df1[\u5c42\u5c64\u5ea6]\u7559{3,}[\u5b66\u5b78][\u4e60\u7fd2]/u.exec(compact);
-  if (stutter && !original.includes(stutter[0]) && (source2 ? /\bresidual[\s-]+learning\b/i.test(source2) : stutter.index === 0 && compact.length <= 80)) return true;
-  for (const match of compact.matchAll(/[.,:;!?，。；：、！？]{7,}|([\p{Script=Han}][\p{Script=Han},.:;!?，。；：、！？]{0,39}?)\1{3,}/gu)) {
-    const run = match[0], unit = match[1];
-    if (/^\.+$/.test(run) && (run.length < 32 || /\d/.test(compact[match.index + run.length] ?? ""))) continue;
-    if ((!unit || run.length >= (unit.length === 1 ? 6 : 10)) && !original.includes(run)) return true;
-  }
-  return false;
-}
-function translationQualityError(source2, result) {
-  if (hasDecoderRepetition(result, source2)) return "The model returned repeated text. Retry the page translation.";
-  if (isUntranslatedEnglish(source2, result)) return "The model returned the original English passage. Retry the page translation.";
 }
 
 // src/shared/web-article.ts
@@ -350,6 +318,7 @@ function extractArticle(root, tree, address2, fallbackTitle, picked) {
   const doi = firstMeta("citation_doi", "dc.identifier");
   const publisher = firstMeta("citation_publisher", "dc.publisher", "dcterms.publisher");
   const abstract = firstMeta("citation_abstract", "dcterms.abstract", "dc.description", "description", "og:description");
+  const pdfUrl = articleUrl(firstMeta("citation_pdf_url"), base)?.href;
   return {
     article: {
       url: address2,
@@ -362,10 +331,43 @@ function extractArticle(root, tree, address2, fallbackTitle, picked) {
       ...year ? { year } : {},
       ...doi ? { doi } : {},
       ...publisher ? { publisher } : {},
-      ...abstract ? { abstract } : {}
+      ...abstract ? { abstract } : {},
+      ...pdfUrl ? { pdfUrl } : {}
     },
     index: pickedIndex
   };
+}
+
+// src/shared/translation-quality.ts
+var englishWords = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
+var sentenceWords = /\b(?:a|an|the|is|are|was|were|will|can|must|has|have|had|we|this|these|that|they|from|with|without|into|on|in|of|at|than|which|when|each|every|across|between)\b/i;
+function isUntranslatedEnglish(source2, result) {
+  const content = result.replace(new RegExp("^\\s*\\p{Script=Han}{1,4}\\s*[:\uFF1A]\\s*", "u"), "");
+  if (new RegExp("\\p{Script=Han}", "u").test(content) || /^\s*\[\d+(?:[,\s–-]+\d+)*\]/.test(source2) || /\bet al\.\s*(?:\(?\d{4}\)?)?[.,]?\s*$/i.test(source2) || /\b(?:19|20)\d{2}\b/.test(source2) && /\b(?:doi|isbn|arxiv|journal|proceedings|vol\.|pp\.)\b/i.test(source2)) return false;
+  const original = source2.normalize("NFKC").match(englishWords) ?? [];
+  const lowercase = original.filter((word) => /^[a-z]{2}/.test(word)).length;
+  const sentence = original.length >= 3 && lowercase >= 2 && /[.!?]["'’”)]*\s*$/.test(source2);
+  const passage = original.length >= 5 && lowercase >= 3 && sentenceWords.test(source2);
+  if (!sentence && !passage) return false;
+  const translated = content.normalize("NFKC").match(englishWords) ?? [];
+  const phrase = (words) => " " + words.join(" ").toLowerCase() + " ";
+  return phrase(translated).includes(phrase(original));
+}
+function hasDecoderRepetition(result, source2 = "") {
+  const compact = result.replace(/\s+/gu, "");
+  const original = source2.replace(/\s+/gu, "");
+  const stutter = /\u6df1[\u5c42\u5c64\u5ea6]\u7559{3,}[\u5b66\u5b78][\u4e60\u7fd2]/u.exec(compact);
+  if (stutter && !original.includes(stutter[0]) && (source2 ? /\bresidual[\s-]+learning\b/i.test(source2) : stutter.index === 0 && compact.length <= 80)) return true;
+  for (const match of compact.matchAll(/[.,:;!?，。；：、！？]{7,}|([\p{Script=Han}][\p{Script=Han},.:;!?，。；：、！？]{0,39}?)\1{3,}/gu)) {
+    const run = match[0], unit = match[1];
+    if (/^\.+$/.test(run) && (run.length < 32 || /\d/.test(compact[match.index + run.length] ?? ""))) continue;
+    if ((!unit || run.length >= (unit.length === 1 ? 6 : 10)) && !original.includes(run)) return true;
+  }
+  return false;
+}
+function translationQualityError(source2, result) {
+  if (hasDecoderRepetition(result, source2)) return "The model returned repeated text. Retry the page translation.";
+  if (isUntranslatedEnglish(source2, result)) return "The model returned the original English passage. Retry the page translation.";
 }
 
 // src/server/article-layout.ts
@@ -413,6 +415,200 @@ function readArticleLayout(raw, paragraphs) {
     result[id] = block;
   }
   return result;
+}
+
+// src/server/service-types.ts
+import path from "node:path";
+var ServiceError = class extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+};
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function inputObject(value) {
+  if (!isObject(value)) throw new ServiceError(400, "Request parameters must be an object.");
+  return value;
+}
+function stringValue(value, name2, limit, required = false, preserveWhitespace = false) {
+  if (value === void 0 || value === null) {
+    if (!required) return "";
+  }
+  if (typeof value !== "string" || value.includes("\0") || value.length > limit || required && !value.trim()) {
+    throw new ServiceError(400, "Check the " + name2 + " length and format.");
+  }
+  return preserveWhitespace ? value : value.trim();
+}
+function single(value, name2, limit, required = false) {
+  const result = stringValue(value, name2, limit, required);
+  if (/[\u0000-\u001f\u007f]/.test(result)) throw new ServiceError(400, name2 + " contains invalid characters.");
+  return result;
+}
+function address(value, required = false) {
+  const raw = single(value, "URL", 8192, required);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password) return url.href;
+  } catch {
+  }
+  throw new ServiceError(400, "Enter a valid HTTP(S) URL without embedded credentials.");
+}
+function onLoopback(url) {
+  return url.hostname === "[::1]" || url.hostname === "localhost" || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
+}
+function modelBase(value) {
+  const url = new URL(address(value, true));
+  if (url.protocol === "http:" && !onLoopback(url) || url.search || url.hash) {
+    throw new ServiceError(400, "Use HTTPS or loopback HTTP for the model endpoint and remove its query and fragment.");
+  }
+  return url.href.replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
+}
+function pageNumber(value) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new ServiceError(400, "The page number must be a positive integer.");
+  return value;
+}
+function readTargetLanguage(value) {
+  const parsed = parseTargetLanguage(value);
+  if (!parsed.ok) throw new ServiceError(400, parsed.error);
+  return parsed.value;
+}
+function readGlossary(value) {
+  const raw = stringValue(value, "glossary", 8e3, false, true);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, "Glossary contains invalid control characters.");
+  return raw.replace(/\r\n?/g, "\n");
+}
+var initialSettings = {
+  baseUrl: "https://api.deepseek.com",
+  model: "deepseek-flash",
+  apiKey: "",
+  targetLanguage: DEFAULT_TARGET_LANGUAGE,
+  glossary: "",
+  vaultPath: "",
+  zoteroLibraryId: "",
+  zoteroLibraryType: "user",
+  zoteroApiKey: ""
+};
+function zoteroModeFor(settings) {
+  return !settings.zoteroLibraryId || settings.zoteroMode === "desktop" ? "desktop" : "web";
+}
+function updatedSecret(current, submitted, clear) {
+  if (clear === true) return "";
+  if (submitted === void 0 || submitted === "") return current;
+  if (typeof submitted !== "string" || submitted.length > 4096 || !/^[\x21-\x7e]+$/.test(submitted)) {
+    throw new ServiceError(400, "API keys must be a single line of printable characters.");
+  }
+  return submitted;
+}
+function mergeSettings(current, input) {
+  const baseUrl = input.baseUrl === void 0 ? current.baseUrl : modelBase(input.baseUrl === "" ? initialSettings.baseUrl : input.baseUrl);
+  const model = single(input.model ?? current.model, "model name", 250, true);
+  const vault = single(input.vaultPath ?? current.vaultPath, "Obsidian vault directory", 4096);
+  if (vault && (!path.isAbsolute(vault) || path.resolve(vault) === path.parse(path.resolve(vault)).root)) {
+    throw new ServiceError(400, "Enter the absolute directory of your Obsidian vault.");
+  }
+  const type = input.zoteroLibraryType ?? current.zoteroLibraryType;
+  if (type !== "user" && type !== "group") throw new ServiceError(400, "Choose a user or group Zotero library.");
+  const id = single(input.zoteroLibraryId ?? current.zoteroLibraryId, "Zotero library ID", 24);
+  const zoteroMode = input.zoteroMode ?? current.zoteroMode ?? "web";
+  if (zoteroMode !== "web" && zoteroMode !== "desktop") throw new ServiceError(400, "Choose a Zotero connection.");
+  if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, "The Zotero library ID must be a positive integer.");
+  const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
+  const targetLanguage = input.targetLanguage === void 0 ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
+  const glossary = input.glossary === void 0 ? current.glossary : readGlossary(input.glossary);
+  return {
+    questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
+    model,
+    baseUrl,
+    apiKey: updatedSecret(sameOrigin ? current.apiKey : "", input.apiKey, input.clearApiKey),
+    targetLanguage,
+    glossary,
+    vaultPath: vault ? path.resolve(vault) : "",
+    zoteroLibraryType: type,
+    zoteroLibraryId: id,
+    zoteroMode,
+    zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
+  };
+}
+function readQuestionModel(value) {
+  if (value === void 0 || value === null) return;
+  const data = inputObject(value);
+  const provider = single(data.provider, "DSH provider", 1024, true);
+  const model = single(data.model, "DSH model", 1024, true);
+  return { provider, model, ...data.reasoningEffort !== void 0 && {
+    reasoningEffort: single(data.reasoningEffort, "reasoning effort", 1024, true)
+  } };
+}
+
+// src/server/library-meta.ts
+var YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
+var STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/;
+var DOI_RE = /^10\.\d{4,9}\/\S+$/i;
+var META_KEYS = ["paperTitle", "authors", "venue", "year", "doi", "publisher", "abstract"];
+function bad(msg) {
+  throw new ServiceError(400, msg);
+}
+function optionalText(value, max, multiline = false) {
+  if (typeof value !== "string") return void 0;
+  const cleaned = multiline ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\r\n?/g, "\n").trim() : value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned ? cleaned.slice(0, max) : void 0;
+}
+function optionalDoi(value) {
+  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+  return raw && DOI_RE.test(raw) ? raw : void 0;
+}
+function sanitizeDocMeta(input) {
+  const out = {};
+  const entries = [
+    ["paperTitle", optionalText(input.paperTitle, 500)],
+    ["authors", optionalText(input.authors, 2e3)],
+    ["venue", optionalText(input.venue, 500)],
+    ["year", optionalText(input.year, 32)?.match(YEAR_RE)?.[1]],
+    ["doi", optionalDoi(input.doi)],
+    ["publisher", optionalText(input.publisher, 500)],
+    ["abstract", optionalText(input.abstract, 8e3, true)]
+  ];
+  for (const [k, v] of entries) if (v) out[k] = v;
+  return out;
+}
+function missingDocMeta(existing, incoming) {
+  const patch = {};
+  if (incoming) {
+    for (const k of META_KEYS) if (!existing[k] && incoming[k]) patch[k] = incoming[k];
+  }
+  return patch;
+}
+function applyMetaPatch(saved, input) {
+  const assign = (key2, val) => {
+    if (val) saved[key2] = val;
+    else delete saved[key2];
+  };
+  for (const key2 of ["paperTitle", "venue"]) if (input[key2] !== void 0) {
+    if (typeof input[key2] !== "string") bad("Invalid " + key2 + " value.");
+    assign(key2, optionalText(input[key2], 500));
+  }
+  if (input.authors !== void 0) {
+    if (Array.isArray(input.authors)) {
+      if (input.authors.length > 200 || !input.authors.every((a) => typeof a === "string")) bad("Invalid authors format.");
+      assign("authors", input.authors.map((a) => optionalText(a, 250)).filter(Boolean).join("; ").slice(0, 2e3) || void 0);
+    } else if (typeof input.authors === "string") assign("authors", optionalText(input.authors, 2e3));
+    else bad("Invalid authors format.");
+  }
+  if (input.year !== void 0) {
+    if (typeof input.year !== "string") bad("Enter a valid 4-digit year.");
+    const trimmed = input.year.trim();
+    if (trimmed && !STRICT_YEAR_RE.test(trimmed)) bad("Enter a valid 4-digit year.");
+    assign("year", trimmed || void 0);
+  }
+  if (input.doi !== void 0) {
+    if (typeof input.doi !== "string") bad("Enter a valid DOI.");
+    const trimmed = input.doi.trim(), doi = trimmed ? optionalDoi(trimmed) : void 0;
+    if (trimmed && !doi) bad("Enter a valid DOI.");
+    assign("doi", doi);
+  }
 }
 
 // src/server/openstax.ts
@@ -660,18 +856,14 @@ function isFsError(error, code) {
   return isRecord(error) && error.code === code;
 }
 var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
-function optionalText(value, max, multiline = false) {
-  if (typeof value !== "string") return void 0;
-  const cleaned = multiline ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\r\n?/g, "\n").trim() : value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-  return cleaned ? cleaned.slice(0, max) : void 0;
-}
-function optionalDoi(value) {
-  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
-  return raw && /^10\.\d{4,9}\/\S+$/i.test(raw) ? raw : void 0;
-}
-function optionalYear(value) {
-  const raw = optionalText(value, 32);
-  return raw?.match(/(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/)?.[1];
+async function writeAtomic(file, content) {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, { flag: "wx" });
+  try {
+    await rename(tmp, file);
+  } finally {
+    await rm(tmp, { force: true });
+  }
 }
 async function writeOnce(file, bytes) {
   const temporary = file + "." + randomUUID() + ".tmp";
@@ -691,9 +883,9 @@ var Library = class {
   constructor(root, readBook = publicResource, onDelete) {
     this.readBook = readBook;
     this.onDelete = onDelete;
-    this.directory = path.join(root, "documents");
-    this.translationDir = path.join(root, "translations");
-    this.imageDir = path.join(root, "article-images");
+    this.directory = path2.join(root, "documents");
+    this.translationDir = path2.join(root, "translations");
+    this.imageDir = path2.join(root, "article-images");
   }
   readBook;
   onDelete;
@@ -703,16 +895,17 @@ var Library = class {
   imageJobs = /* @__PURE__ */ new Map();
   jobs = /* @__PURE__ */ new Map();
   bookJobs = /* @__PURE__ */ new Map();
+  metaJobs = /* @__PURE__ */ new Map();
   async store(doc) {
     await mkdir(this.directory, { recursive: true });
-    await writeOnce(path.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
+    await writeOnce(path2.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
     return this.get(doc.id);
   }
   async get(id) {
     if (!validDocId(id)) fail("Invalid document ID.", 404);
     if (id === sample.id) return sample;
     try {
-      const value = JSON.parse(await readFile(path.join(this.directory, id + ".json"), "utf8"));
+      const value = JSON.parse(await readFile(path2.join(this.directory, id + ".json"), "utf8"));
       if (!isRecord(value) || value.id !== id || typeof value.title !== "string" || !["pdf", "web"].includes(String(value.kind))) fail("The document index is damaged.", 500);
       if (id.startsWith("book-")) {
         if (value.kind !== "web" || !isRecord(value.book) || !bookSlug(value.book.slug) || !Array.isArray(value.book.sections) || !value.book.sections.length || !value.book.sections.every((section) => isRecord(section) && bookSlug(section.slug) && typeof section.title === "string" && typeof section.chapterId === "string" && typeof section.chapterTitle === "string" && typeof section.url === "string")) fail("The saved book contents are damaged.", 500);
@@ -722,14 +915,14 @@ var Library = class {
       const doc = value;
       if (doc.kind === "pdf" && !doc.url) {
         try {
-          doc.url = await readFile(path.join(this.directory, id + ".source-url"), "utf8");
+          doc.url = await readFile(path2.join(this.directory, id + ".source-url"), "utf8");
         } catch (error) {
           if (!isFsError(error, "ENOENT")) throw error;
         }
       }
       if (doc.kind === "web") {
         try {
-          doc.articleLayout = JSON.parse(await readFile(path.join(this.directory, id + ".layout.json"), "utf8"));
+          doc.articleLayout = JSON.parse(await readFile(path2.join(this.directory, id + ".layout.json"), "utf8"));
         } catch (error) {
           if (!isFsError(error, "ENOENT")) throw error;
         }
@@ -746,36 +939,53 @@ var Library = class {
     const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
     return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
+  async mutateMeta(id, mutate) {
+    const prev = this.metaJobs.get(id);
+    const job = (async () => {
+      if (prev) await prev.catch(() => void 0);
+      await this.get(id);
+      const file = path2.join(this.directory, id + ".json");
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
+      return this.get(id);
+    })();
+    this.metaJobs.set(id, job);
+    try {
+      return await job;
+    } finally {
+      if (this.metaJobs.get(id) === job) this.metaJobs.delete(id);
+    }
+  }
   async rename(id, title) {
     if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
     const nextTitle = typeof title === "string" ? title.trim().slice(0, 250) : "";
     if (!nextTitle) fail("A document title is required.");
     const doc = await this.get(id);
-    const file = path.join(this.directory, doc.id + ".json");
-    const saved = JSON.parse(await readFile(file, "utf8"));
-    saved.title = nextTitle;
-    const tmp = file + "." + randomUUID() + ".tmp";
-    try {
-      await writeFile(tmp, JSON.stringify(saved));
-      await rename(tmp, file);
-    } finally {
-      await rm(tmp, { force: true });
-    }
-    return this.get(doc.id);
+    return this.mutateMeta(doc.id, (saved) => {
+      saved.title = nextTitle;
+    });
+  }
+  async updateMeta(input) {
+    if (!isRecord(input)) fail("Invalid metadata payload.");
+    if (input.id === sample.id) fail("The bundled sample paper metadata cannot be edited.");
+    const doc = await this.get(input.id);
+    return this.mutateMeta(doc.id, (saved) => {
+      applyMetaPatch(saved, input);
+    });
   }
   async delete(id) {
     if (id === sample.id) fail("The bundled sample paper cannot be deleted.");
     if (!validDocId(id)) fail("Invalid document ID.", 404);
-    const file = path.join(this.directory, id + ".json");
+    const file = path2.join(this.directory, id + ".json");
     const existed = existsSync(file);
     await Promise.all([
       rm(file, { force: true }),
-      rm(path.join(this.directory, id + ".pdf"), { force: true }),
-      rm(path.join(this.directory, id + ".source-url"), { force: true }),
-      rm(path.join(this.directory, id + ".layout.json"), { force: true }),
-      rm(path.join(this.directory, "book-sections", id), { recursive: true, force: true }),
-      rm(path.join(this.translationDir, id), { recursive: true, force: true }),
-      rm(path.join(this.imageDir, id), { recursive: true, force: true })
+      rm(path2.join(this.directory, id + ".pdf"), { force: true }),
+      rm(path2.join(this.directory, id + ".source-url"), { force: true }),
+      rm(path2.join(this.directory, id + ".layout.json"), { force: true }),
+      rm(path2.join(this.directory, "book-sections", id), { recursive: true, force: true }),
+      rm(path2.join(this.translationDir, id), { recursive: true, force: true }),
+      rm(path2.join(this.imageDir, id), { recursive: true, force: true })
     ]);
     this.onDelete?.(id);
     return { id, deleted: existed };
@@ -788,7 +998,7 @@ var Library = class {
     return job;
   }
   sectionFile(id, slug) {
-    return path.join(this.directory, "book-sections", id, hash(slug) + ".json");
+    return path2.join(this.directory, "book-sections", id, hash(slug) + ".json");
   }
   /** Export uses only already-imported material, even when the publisher is offline. */
   cachedSection(doc, page) {
@@ -802,12 +1012,12 @@ var Library = class {
   }
   pdfFile(doc) {
     if (doc.kind !== "pdf" || !validDocId(doc.id)) fail("This document has no saved PDF.");
-    if (doc.id !== sample.id) return path.join(this.directory, doc.id + ".pdf");
+    if (doc.id !== sample.id) return path2.join(this.directory, doc.id + ".pdf");
     const bundled = fileURLToPath(new URL("../web/assets/pagedattention.pdf", import.meta.url));
     return existsSync(bundled) ? bundled : fileURLToPath(new URL("../../public/assets/pagedattention.pdf", import.meta.url));
   }
   async saveSection(file, article) {
-    await mkdir(path.dirname(file), { recursive: true });
+    await mkdir(path2.dirname(file), { recursive: true });
     await writeOnce(file, JSON.stringify({ paragraphs: article.paragraphs, articleLayout: article.articleLayout }));
   }
   async openBook(location) {
@@ -885,43 +1095,44 @@ var Library = class {
     if (structured) {
       const layout = readArticleLayout(input.articleLayout, paragraphs);
       await mkdir(this.directory, { recursive: true });
-      await writeOnce(path.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
+      await writeOnce(path2.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
     }
-    const paperTitle = optionalText(input.paperTitle, 500);
-    const authors = optionalText(input.authors, 2e3);
-    const venue = optionalText(input.venue, 500);
-    const year = optionalYear(input.year);
-    const doi = optionalDoi(input.doi);
-    const publisher = optionalText(input.publisher, 500);
-    const abstract = optionalText(input.abstract, 8e3, true);
     return { doc: await this.store({
       kind: "web",
       id,
       url: url.href,
       title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname,
-      ...paperTitle ? { paperTitle } : {},
-      ...authors ? { authors } : {},
-      ...venue ? { venue } : {},
-      ...year ? { year } : {},
-      ...doi ? { doi } : {},
-      ...publisher ? { publisher } : {},
-      ...abstract ? { abstract } : {},
+      ...sanitizeDocMeta(input),
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       defaultPage: 1,
       paragraphs
     }) };
   }
-  async importPdf(title, bytes, url) {
+  async importPdf(title, bytes, url, meta) {
     if (bytes.length > PDF_LIMIT || !bytes.subarray(0, 1024).includes("%PDF-")) fail("Choose a valid PDF of up to 80 MB.");
     const digest = hash(bytes);
     if (digest === sampleDigest) return sample;
     const id = "pdf-" + digest;
+    const safeUrl = articleUrl(url)?.href;
+    const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
     await mkdir(this.directory, { recursive: true });
-    await writeOnce(path.join(this.directory, id + ".pdf"), bytes);
-    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", url, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
-    if (!doc.url && url) {
-      await writeOnce(path.join(this.directory, id + ".source-url"), url);
-      return this.get(id);
+    await writeOnce(path2.join(this.directory, id + ".pdf"), bytes);
+    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl ? { url: safeUrl } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
+    const missing = missingDocMeta({ ...doc }, cleanMeta);
+    const needUrl = !doc.url && Boolean(safeUrl);
+    if (needUrl || Object.keys(missing).length) {
+      return this.mutateMeta(id, (saved) => {
+        let changed = false;
+        if (!saved.url && safeUrl) {
+          saved.url = safeUrl;
+          changed = true;
+        }
+        for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
+          saved[k] = v;
+          changed = true;
+        }
+        return changed;
+      });
     }
     return doc;
   }
@@ -934,8 +1145,8 @@ var Library = class {
     if (!validDocId(id) || !/^(?:web|book)-/.test(id) || typeof anchor !== "string" || !/^p-[1-9]\d{0,3}$/.test(anchor)) fail("Unknown article illustration.", 404);
     const book = id.startsWith("book-");
     if (book && (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1)) fail("A book illustration needs its section number.", 404);
-    const directory = book ? path.join(this.imageDir, id, String(page)) : path.join(this.imageDir, id);
-    const file = path.join(directory, anchor);
+    const directory = book ? path2.join(this.imageDir, id, String(page)) : path2.join(this.imageDir, id);
+    const file = path2.join(directory, anchor);
     const read = async () => {
       const saved = await readFile(file);
       const end = saved.indexOf(10), type = end > 0 && end < 40 ? saved.toString("ascii", 0, end) : "";
@@ -970,7 +1181,7 @@ var Library = class {
   pageFile(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
     if (!validDocId(id) || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 1e5) fail("Invalid document or page number.");
     const slug = translationCacheSlug(targetLanguage);
-    return slug ? path.join(this.translationDir, id, slug, page + ".json") : path.join(this.translationDir, id, page + ".json");
+    return slug ? path2.join(this.translationDir, id, slug, page + ".json") : path2.join(this.translationDir, id, page + ".json");
   }
   async translations(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
     const file = this.pageFile(id, page, targetLanguage);
@@ -1002,7 +1213,7 @@ var Library = class {
       if (previous) await previous.catch(() => void 0);
       const result = await this.translations(id, page, targetLanguage);
       const pending = force ? blocks3 : blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
-      await mkdir(path.dirname(file), { recursive: true });
+      await mkdir(path2.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i, i + 8);
         const translated = await translate(batch, doc.kind);
@@ -1012,13 +1223,7 @@ var Library = class {
           if (problem) fail(problem, 502);
           result[key2] = translated[key2];
         }
-        const tmp = file + "." + randomUUID() + ".tmp";
-        try {
-          await writeFile(tmp, JSON.stringify(result));
-          await rename(tmp, file);
-        } finally {
-          await rm(tmp, { force: true });
-        }
+        await writeAtomic(file, JSON.stringify(result));
       }
       return result;
     })();
@@ -1030,37 +1235,6 @@ var Library = class {
     }
   }
 };
-
-// src/server/web-article.ts
-import { parse as parse2 } from "parse5";
-function parseWebArticle(html, url) {
-  return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "").article;
-}
-async function openWebArticle(library, raw) {
-  const book = openStaxLocation(raw);
-  if (book) return library.openBook(book);
-  const { url, bytes, type, charset } = await publicResource(raw, "document");
-  if (bytes.subarray(0, 1024).includes("%PDF-")) {
-    let filename = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
-    try {
-      filename = decodeURIComponent(filename);
-    } catch {
-    }
-    if (!filename.toLowerCase().endsWith(".pdf")) filename += ".pdf";
-    return { doc: await library.importPdf(filename, bytes, url.href) };
-  }
-  if (type === "application/pdf" || bytes.length > 5 * 1024 * 1024) fail("This link did not return a readable HTML article or PDF.", 415);
-  const sniff = bytes.subarray(0, 4096).toString("latin1");
-  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
-  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
-  let decoder;
-  try {
-    decoder = new TextDecoder(encoding);
-  } catch {
-    decoder = new TextDecoder();
-  }
-  return library.importWebDocument(parseWebArticle(decoder.decode(bytes), url.href));
-}
 
 // src/server/notebook.ts
 import { createHash as createHash6 } from "node:crypto";
@@ -1171,132 +1345,6 @@ import { createHash as createHash2, randomInt, randomUUID as randomUUID2 } from 
 import { closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import path3 from "node:path";
 import { DatabaseSync } from "node:sqlite";
-
-// src/server/service-types.ts
-import path2 from "node:path";
-var ServiceError = class extends Error {
-  status;
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-};
-function isObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function inputObject(value) {
-  if (!isObject(value)) throw new ServiceError(400, "Request parameters must be an object.");
-  return value;
-}
-function stringValue(value, name2, limit, required = false, preserveWhitespace = false) {
-  if (value === void 0 || value === null) {
-    if (!required) return "";
-  }
-  if (typeof value !== "string" || value.includes("\0") || value.length > limit || required && !value.trim()) {
-    throw new ServiceError(400, "Check the " + name2 + " length and format.");
-  }
-  return preserveWhitespace ? value : value.trim();
-}
-function single(value, name2, limit, required = false) {
-  const result = stringValue(value, name2, limit, required);
-  if (/[\u0000-\u001f\u007f]/.test(result)) throw new ServiceError(400, name2 + " contains invalid characters.");
-  return result;
-}
-function address(value, required = false) {
-  const raw = single(value, "URL", 8192, required);
-  if (!raw) return "";
-  try {
-    const url = new URL(raw);
-    if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password) return url.href;
-  } catch {
-  }
-  throw new ServiceError(400, "Enter a valid HTTP(S) URL without embedded credentials.");
-}
-function onLoopback(url) {
-  return url.hostname === "[::1]" || url.hostname === "localhost" || /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
-}
-function modelBase(value) {
-  const url = new URL(address(value, true));
-  if (url.protocol === "http:" && !onLoopback(url) || url.search || url.hash) {
-    throw new ServiceError(400, "Use HTTPS or loopback HTTP for the model endpoint and remove its query and fragment.");
-  }
-  return url.href.replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
-}
-function pageNumber(value) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new ServiceError(400, "The page number must be a positive integer.");
-  return value;
-}
-function readTargetLanguage(value) {
-  const parsed = parseTargetLanguage(value);
-  if (!parsed.ok) throw new ServiceError(400, parsed.error);
-  return parsed.value;
-}
-function readGlossary(value) {
-  const raw = stringValue(value, "glossary", 8e3, false, true);
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, "Glossary contains invalid control characters.");
-  return raw.replace(/\r\n?/g, "\n");
-}
-var initialSettings = {
-  baseUrl: "https://api.deepseek.com",
-  model: "deepseek-flash",
-  apiKey: "",
-  targetLanguage: DEFAULT_TARGET_LANGUAGE,
-  glossary: "",
-  vaultPath: "",
-  zoteroLibraryId: "",
-  zoteroLibraryType: "user",
-  zoteroApiKey: ""
-};
-function zoteroModeFor(settings) {
-  return !settings.zoteroLibraryId || settings.zoteroMode === "desktop" ? "desktop" : "web";
-}
-function updatedSecret(current, submitted, clear) {
-  if (clear === true) return "";
-  if (submitted === void 0 || submitted === "") return current;
-  if (typeof submitted !== "string" || submitted.length > 4096 || !/^[\x21-\x7e]+$/.test(submitted)) {
-    throw new ServiceError(400, "API keys must be a single line of printable characters.");
-  }
-  return submitted;
-}
-function mergeSettings(current, input) {
-  const baseUrl = input.baseUrl === void 0 ? current.baseUrl : modelBase(input.baseUrl === "" ? initialSettings.baseUrl : input.baseUrl);
-  const model = single(input.model ?? current.model, "model name", 250, true);
-  const vault = single(input.vaultPath ?? current.vaultPath, "Obsidian vault directory", 4096);
-  if (vault && (!path2.isAbsolute(vault) || path2.resolve(vault) === path2.parse(path2.resolve(vault)).root)) {
-    throw new ServiceError(400, "Enter the absolute directory of your Obsidian vault.");
-  }
-  const type = input.zoteroLibraryType ?? current.zoteroLibraryType;
-  if (type !== "user" && type !== "group") throw new ServiceError(400, "Choose a user or group Zotero library.");
-  const id = single(input.zoteroLibraryId ?? current.zoteroLibraryId, "Zotero library ID", 24);
-  const zoteroMode = input.zoteroMode ?? current.zoteroMode ?? "web";
-  if (zoteroMode !== "web" && zoteroMode !== "desktop") throw new ServiceError(400, "Choose a Zotero connection.");
-  if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, "The Zotero library ID must be a positive integer.");
-  const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
-  const targetLanguage = input.targetLanguage === void 0 ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
-  const glossary = input.glossary === void 0 ? current.glossary : readGlossary(input.glossary);
-  return {
-    questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
-    model,
-    baseUrl,
-    apiKey: updatedSecret(sameOrigin ? current.apiKey : "", input.apiKey, input.clearApiKey),
-    targetLanguage,
-    glossary,
-    vaultPath: vault ? path2.resolve(vault) : "",
-    zoteroLibraryType: type,
-    zoteroLibraryId: id,
-    zoteroMode,
-    zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
-  };
-}
-function readQuestionModel(value) {
-  if (value === void 0 || value === null) return;
-  const data = inputObject(value);
-  const provider = single(data.provider, "DSH provider", 1024, true);
-  const model = single(data.model, "DSH model", 1024, true);
-  return { provider, model, ...data.reasoningEffort !== void 0 && {
-    reasoningEffort: single(data.reasoningEffort, "reasoning effort", 1024, true)
-  } };
-}
 
 // src/server/annotations.ts
 var annotationSchema = `
@@ -3472,6 +3520,208 @@ var PdfOutlines = class {
   }
 };
 
+// src/server/web-article.ts
+import { parse as parse2 } from "parse5";
+
+// src/shared/citation-export.ts
+var ARXIV_NEW = "\\d{4}\\.\\d{4,5}";
+var ARXIV_OLD = "[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}";
+var ARXIV_ID_SOURCE = `(?:${ARXIV_NEW}|${ARXIV_OLD})`;
+var ARXIV_PATH_RE = new RegExp(`^\\/(?:abs|pdf|html|e-print|format)\\/(${ARXIV_ID_SOURCE})(?:v\\d+)?(?:\\.pdf)?\\/?$`, "i");
+var ARXIV_DOI_RE = new RegExp(`^(?:https?:\\/\\/(?:dx\\.)?doi\\.org\\/|doi:\\s*)?10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, "i");
+var ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`, "i");
+function nonEmpty(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed && normalizeInline(trimmed) ? trimmed : void 0;
+}
+function normalizeInline(value) {
+  return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function extractArxivId(url, doi) {
+  const rawUrl = nonEmpty(url);
+  if (rawUrl) {
+    const parsed = URL.parse(rawUrl);
+    if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+      if (/(?:^|\.)arxiv\.org$/i.test(parsed.hostname)) {
+        const match = ARXIV_PATH_RE.exec(parsed.pathname);
+        if (match) return match[1].toLowerCase();
+      }
+      if (/^(?:dx\.)?doi\.org$/i.test(parsed.hostname)) {
+        const doiPath = parsed.pathname.slice(1);
+        if (doiPath.startsWith("10.")) {
+          const match = ARXIV_DOI_RE.exec(doiPath);
+          if (match) return match[1].toLowerCase();
+        }
+      }
+    } else if (!parsed || parsed.protocol === "arxiv:" || parsed.protocol === "doi:") {
+      const bare = ARXIV_BARE_RE.exec(rawUrl);
+      if (bare) return bare[1].toLowerCase();
+      const doiInUrl = ARXIV_DOI_RE.exec(rawUrl);
+      if (doiInUrl) return doiInUrl[1].toLowerCase();
+    }
+  }
+  const rawDoi = nonEmpty(doi);
+  if (rawDoi) {
+    const match = ARXIV_DOI_RE.exec(rawDoi);
+    if (match) return match[1].toLowerCase();
+  }
+  return void 0;
+}
+
+// src/shared/academic-intake.ts
+var ARXIV_URL_RE = /^\/(?:abs|pdf)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
+var DOI_RE2 = /^10\.\d{4,9}\/[^\s<>"]+$/i;
+var arxiv = (id, versionedId) => ({ kind: "arxiv", id, versionedId, absUrl: "https://arxiv.org/abs/" + versionedId, pdfUrl: "https://arxiv.org/pdf/" + versionedId + ".pdf" });
+function doiTarget(raw) {
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+  }
+  const doi = raw.replace(/[.,;]+$/, "").trim();
+  return DOI_RE2.test(doi) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? { kind: "doi", doi, url: "https://doi.org/" + encodeURI(doi) } : null;
+}
+function parseAcademicInput(raw) {
+  if (typeof raw !== "string") return null;
+  const text2 = raw.trim();
+  if (!text2 || text2.length > 8192 || /[\u0000-\u001f\u007f]/.test(text2)) return null;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(text2)?.[1]?.toLowerCase();
+  if (scheme && !["http", "https", "arxiv", "doi"].includes(scheme)) return null;
+  const ver = (s) => /(v\d+)\/?$/i.exec(s)?.[1]?.toLowerCase() ?? "";
+  if (scheme === "http" || scheme === "https") {
+    const url = URL.parse(text2);
+    if (!url || url.username || url.password) return null;
+    if (/(?:^|\.)arxiv\.org$/i.test(url.hostname)) {
+      const m = ARXIV_URL_RE.exec(url.pathname);
+      return m ? arxiv(extractArxivId(url.href) ?? m[1].toLowerCase().replace(/v\d+$/, ""), m[1].toLowerCase()) : { kind: "url", url: url.href };
+    }
+    if (/^(?:dx\.)?doi\.org$/i.test(url.hostname)) {
+      const id2 = extractArxivId(url.href);
+      return id2 ? arxiv(id2, id2 + ver(url.pathname)) : doiTarget(url.pathname.slice(1).replace(/\/+$/, ""));
+    }
+    return { kind: "url", url: url.href };
+  }
+  const id = extractArxivId(text2);
+  return id ? arxiv(id, id + ver(text2)) : doiTarget(text2.replace(/^doi:\s*/i, "").trim());
+}
+
+// src/server/academic-intake.ts
+var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
+function pdfFilename(url) {
+  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+  try {
+    name2 = decodeURIComponent(name2);
+  } catch {
+  }
+  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
+}
+function decodeHtml(bytes, type, charset) {
+  if (type === "application/pdf" || bytes.length > 5 * 1024 * 1024) fail("This link did not return a readable HTML article or PDF.", 415);
+  const sniff = bytes.subarray(0, 4096).toString("latin1");
+  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
+  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return new TextDecoder().decode(bytes);
+  }
+}
+var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
+var mergeMeta = (p, f, doi) => ({
+  paperTitle: p.paperTitle ?? f.paperTitle,
+  authors: p.authors ?? f.authors,
+  venue: p.venue ?? f.venue,
+  year: p.year ?? f.year,
+  doi: p.doi ?? f.doi ?? doi,
+  publisher: p.publisher ?? f.publisher,
+  abstract: p.abstract ?? f.abstract
+});
+function parseCrossref(bytes) {
+  try {
+    const body = JSON.parse(bytes.toString("utf8"));
+    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
+    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
+    const authors = Array.isArray(m.author) ? m.author.map(
+      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
+    ).filter(Boolean).join("; ") : void 0;
+    let year;
+    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
+      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
+      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
+        year = String(part);
+        break;
+      }
+    }
+    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
+    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
+    return {
+      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
+      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
+    };
+  } catch {
+    return { meta: {} };
+  }
+}
+function readHtmlMeta(parseArticle, html, url) {
+  try {
+    const parsed = parseArticle(html, url);
+    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
+  } catch {
+    try {
+      const stub = parseArticle(html + "<p>.</p>", url);
+      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
+    } catch {
+      return { meta: {} };
+    }
+  }
+}
+async function resolveAcademicIntake(library, target, readResource, parseArticle) {
+  if (target.kind === "arxiv") {
+    const [absRes, pdfRes] = await Promise.allSettled([readResource(target.absUrl, "document"), readResource(target.pdfUrl, "document")]);
+    const absInfo = absRes.status === "fulfilled" && !isPdfBytes(absRes.value.bytes) ? readHtmlMeta(parseArticle, decodeHtml(absRes.value.bytes, absRes.value.type, absRes.value.charset), absRes.value.url.href) : void 0;
+    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
+      const meta = absInfo?.meta ?? {};
+      return { doc: await library.importPdf(meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf", pdfRes.value.bytes, target.absUrl, meta) };
+    }
+    if (absInfo?.parsed) return library.importWebDocument(absInfo.parsed);
+    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
+  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
+  const tryPdf = async (candidate, sourceUrl2, meta) => {
+    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
+    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
+  };
+  if (landRes.status === "fulfilled") {
+    const land = landRes.value;
+    if (isPdfBytes(land.bytes)) {
+      const meta = mergeMeta({}, cr.meta, target.doi);
+      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
+    }
+    const landInfo = readHtmlMeta(parseArticle, decodeHtml(land.bytes, land.type, land.charset), land.url.href);
+    const merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
+    const pdfDoc = await tryPdf(redirected?.kind === "arxiv" ? redirected.pdfUrl : landInfo.pdfUrl ?? cr.pdfUrl, redirected?.kind === "arxiv" ? redirected.absUrl : land.url.href, merged);
+    if (pdfDoc) return pdfDoc;
+    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
+  }
+  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? (landRes.status === "rejected" ? Promise.reject(landRes.reason) : fail("This link did not return a readable HTML article or PDF.", 415));
+}
+
+// src/server/web-article.ts
+function parseWebArticle(html, url) {
+  return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "").article;
+}
+async function openWebArticle(library, raw, readResource = publicResource) {
+  const book = openStaxLocation(raw);
+  if (book) return library.openBook(book);
+  const target = parseAcademicInput(raw);
+  if (target && target.kind !== "url") return resolveAcademicIntake(library, target, readResource, parseWebArticle);
+  const { url, bytes, type, charset } = await readResource(target ? target.url : raw, "document");
+  if (isPdfBytes(bytes)) return { doc: await library.importPdf(pdfFilename(url), bytes, url.href) };
+  return library.importWebDocument(parseWebArticle(decodeHtml(bytes, type, charset), url.href));
+}
+
 // src/server/zotero-attachment.ts
 import { open } from "node:fs/promises";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -3982,15 +4232,29 @@ var ZoteroLibrary = class {
 };
 
 // src/server/services.ts
-function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian() }) {
-  const documents = new Library(root);
-  const database = new ReaderStore(root);
+function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian(), library, store, readResource = publicResource }) {
+  const database = store ?? new ReaderStore(root);
+  const documents = library ?? new Library(root, readResource, (id) => database.deleteDocument(id));
   const notebooks = new PaperNotebooks(database, documents, openObsidian);
   const model = new ReaderModel(ctx, fetchImpl);
   const discussions = new PaperDiscussions(database, model);
   const outlines = new PdfOutlines(documents, database, model);
   const zotero = () => new ZoteroLibrary(database.settings(), fetchImpl, database);
   const handlers = {
+    "library.list": async () => ({ docs: await documents.list() }),
+    "library.get": async (input) => ({ doc: await documents.get(input.id) }),
+    "library.rename": async (input) => ({ doc: await documents.rename(input.id, input.title) }),
+    "library.updateMeta": async (input) => ({ doc: await documents.updateMeta(input) }),
+    "library.delete": (input) => documents.delete(input.id),
+    "web.import": (input) => documents.importWebDocument(input),
+    "web.open": (input) => openWebArticle(documents, input.url, readResource),
+    "book.section": async (input) => ({ doc: await documents.bookSection(input.docId, input.page) }),
+    "translation.get": async (input) => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === void 0 ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
+    "translation.page": async (input) => {
+      if (input.force !== void 0 && typeof input.force !== "boolean") throw new ServiceError(400, "Invalid force option.");
+      const targetLanguage = input.targetLanguage === void 0 ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
+      return { translations: await documents.translate(input.docId, input.page, input.blocks, async (blocks3, documentKind) => (await model.blocks(database.settings(), { blocks: blocks3, documentKind, targetLanguage })).translations, targetLanguage, input.force === true) };
+    },
     "article.capture.save": (input) => database.saveArticleCapture(input, hostAttachments(ctx)),
     "article.capture.get": (input) => database.articleCapture(input),
     "outline.get": (input) => outlines.get(input),
@@ -4154,7 +4418,7 @@ function apply(ctx) {
       if (models.attachments === store2) delete models.attachments;
     };
   });
-  const service = createServices({ root, ctx: models });
+  const service = createServices({ root, ctx: models, library, store, readResource: publicResource });
   const route = (suffix, methods, fetch, requestBody = "buffered") => ctx.connection.fetch.register({
     path: "/api/paper-reader/" + suffix,
     methods,
@@ -4196,7 +4460,9 @@ function apply(ctx) {
   });
   route("import-pdf", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);
-    return json({ doc: await library.importPdf(new URL(req.url).searchParams.get("title") || "Document.pdf", await boundedBody(req, PDF_LIMIT)) });
+    const params = new URL(req.url).searchParams;
+    const meta = { paperTitle: params.get("paperTitle") ?? void 0, authors: params.get("authors") ?? void 0, venue: params.get("venue") ?? void 0, year: params.get("year") ?? void 0, doi: params.get("doi") ?? void 0 };
+    return json({ doc: await library.importPdf(params.get("title") || "Document.pdf", await boundedBody(req, PDF_LIMIT), params.get("url") ?? void 0, meta) });
   }, "streaming");
   route("action", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/json") fail("A JSON request is required.", 415);
@@ -4213,33 +4479,6 @@ function apply(ctx) {
       case "notebook.open": {
         if (!localDesktopRequest(req, listener)) fail("Use the notebook link to open Obsidian on this device.", 403);
         return json(await service(body.op, input));
-      }
-      case "library.list":
-        return json({ docs: await library.list() });
-      case "library.get":
-        return json({ doc: await library.get(input.id) });
-      case "library.rename":
-        return json({ doc: await library.rename(input.id, input.title) });
-      case "library.delete":
-        return json(await library.delete(input.id));
-      case "web.import":
-        return json(await library.importWebDocument(input));
-      case "web.open":
-        return json(await openWebArticle(library, input.url));
-      case "book.section":
-        return json({ doc: await library.bookSection(input.docId, input.page) });
-      case "translation.get": {
-        const targetLanguage = input.targetLanguage === void 0 ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
-        return json({ translations: await library.translations(input.docId, input.page, targetLanguage) });
-      }
-      case "translation.page": {
-        if (input.force !== void 0 && typeof input.force !== "boolean") fail("Invalid force option.", 400);
-        const targetLanguage = input.targetLanguage === void 0 ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
-        return json({ translations: await library.translate(input.docId, input.page, input.blocks, async (blocks3, documentKind) => {
-          const result = await service("ai.blocks", { blocks: blocks3, documentKind, targetLanguage });
-          if (!isRecord(result) || !isRecord(result.translations) || !Object.values(result.translations).every((v) => typeof v === "string")) fail("The model returned an invalid translation.", 502);
-          return result.translations;
-        }, targetLanguage, input.force === true) });
       }
       case "ai":
       case "chat.ask": {

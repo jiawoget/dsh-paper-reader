@@ -4,11 +4,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Library, PDF_LIMIT, fail, isRecord } from './library.js';
-import { openWebArticle } from './web-article.js';
 import { publicResource } from './public-resource.js';
 import { createServices } from './services.js';
 import { ReaderStore } from './reader-store.js';
-import { onLoopback, readTargetLanguage } from './service-types.js';
+import { onLoopback } from './service-types.js';
 
 type Method = 'GET'|'HEAD'|'POST';
 interface HostRoute { path:string; methods:Method[]; requestBody:'buffered'|'streaming'; fetch(request:Request):Promise<Response> }
@@ -87,7 +86,7 @@ export function apply(ctx:ReaderHost):void {
     models.attachments = store;
     return () => { if (models.attachments === store) delete models.attachments; };
   });
-  const service = createServices({root,ctx:models});
+  const service = createServices({root,ctx:models,library,store,readResource:publicResource});
   const route=(suffix:string,methods:Method[],fetch:HostRoute['fetch'],requestBody:HostRoute['requestBody']='buffered') => ctx.connection.fetch.register({
     path:'/api/paper-reader/'+suffix,methods,requestBody,
     async fetch(request) {
@@ -123,7 +122,9 @@ export function apply(ctx:ReaderHost):void {
   });
   route('import-pdf',['POST'],async req => {
     if(req.headers.get('content-type')?.split(';')[0]!=='application/pdf') fail('Choose a PDF file.',415);
-    return json({doc:await library.importPdf(new URL(req.url).searchParams.get('title') || 'Document.pdf',await boundedBody(req,PDF_LIMIT))});
+    const params = new URL(req.url).searchParams;
+    const meta = { paperTitle: params.get('paperTitle') ?? undefined, authors: params.get('authors') ?? undefined, venue: params.get('venue') ?? undefined, year: params.get('year') ?? undefined, doi: params.get('doi') ?? undefined };
+    return json({doc:await library.importPdf(params.get('title') || 'Document.pdf', await boundedBody(req,PDF_LIMIT), params.get('url') ?? undefined, meta)});
   },'streaming');
   route('action',['POST'],async req => {
     if(req.headers.get('content-type')?.split(';')[0]!=='application/json') fail('A JSON request is required.',415);
@@ -140,26 +141,6 @@ export function apply(ctx:ReaderHost):void {
       case 'notebook.open': {
         if(!localDesktopRequest(req,listener))fail('Use the notebook link to open Obsidian on this device.',403);
         return json(await service(body.op,input));
-      }
-      case 'library.list': return json({docs:await library.list()});
-      case 'library.get': return json({doc:await library.get(input.id)});
-      case 'library.rename': return json({doc:await library.rename(input.id,input.title)});
-      case 'library.delete': return json(await library.delete(input.id));
-      case 'web.import': return json(await library.importWebDocument(input));
-      case 'web.open': return json(await openWebArticle(library, input.url));
-      case 'book.section': return json({doc:await library.bookSection(input.docId,input.page)});
-      case 'translation.get': {
-        const targetLanguage = input.targetLanguage === undefined ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
-        return json({translations:await library.translations(input.docId,input.page,targetLanguage)});
-      }
-      case 'translation.page': {
-        if (input.force !== undefined && typeof input.force !== 'boolean') fail('Invalid force option.', 400);
-        const targetLanguage = input.targetLanguage === undefined ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
-        return json({translations:await library.translate(input.docId,input.page,input.blocks,async (blocks,documentKind)=>{
-          const result:unknown=await service('ai.blocks',{blocks,documentKind,targetLanguage});
-          if(!isRecord(result)||!isRecord(result.translations)||!Object.values(result.translations).every(v=>typeof v==='string')) fail('The model returned an invalid translation.',502);
-          return result.translations as Record<string,string>;
-        },targetLanguage,input.force===true)});
       }
       case 'ai':
       case 'chat.ask': {

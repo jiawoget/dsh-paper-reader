@@ -20,6 +20,7 @@ import { readRegion, regionBox, figureAtRegion } from './pdf/region-geometry.js'
 import { PdfFocus, type TranslationFocus } from './pdf/focus.js';
 import { pageText } from './pdf/reading-text.js';
 import { mountPdfLinks } from './pdf/links.js';
+import { extractPdfMetadata, type PdfMetadata } from './pdf/metadata.js';
 import { readOutlinePages, readPdfOutline, type PdfLinkDestination } from './pdf/outline.js';
 import { sampleDigest } from './pdf/sample.js';
 import { findQuote, listenForSelections, paintRange } from './pdf/selection.js';
@@ -79,6 +80,7 @@ export interface PdfDocument {
   outlinePages(onProgress?: (done: number, total: number) => void, signal?: AbortSignal): Promise<PdfOutlinePage[]>;
   cropRegion(page: number, anchor: string): Promise<string>;
   textContent(page: number): Promise<TextContent>;
+  metadata(): Promise<PdfMetadata>;
   render(options: PdfRenderOptions): Promise<PdfPageView>;
   destroy(): Promise<void>;
 }
@@ -662,6 +664,7 @@ export async function openPdf(bytes: Uint8Array): Promise<PdfDocument> {
       return cropPdfPage(page, regionBox(region, {x: 0, y: 0, width, height}));
     },
     async textContent(page) { return (await pdf.getPage(page)).getTextContent(); },
+    metadata() { return extractPdfMetadata(pdf); },
     async render(options) {
       if (closed) throw new Error(label('This document is closed.', '文档已关闭。'));
       if (!Number.isInteger(options.page) || options.page < 1 || options.page > pdf.numPages) throw new RangeError(label('Page number is out of range.', '页码超出范围。'));

@@ -1,15 +1,69 @@
-import type { ZoteroItem } from '../shared/types.js';
+import type { DocumentInfo, ZoteroItem } from '../shared/types.js';
 import { buildCitationMetadata, buildCiteKey, formatBibTeX, formatRIS } from '../shared/citation-export.js';
 import { settingsDialog } from './settings-dialog.js';
-import { api, button, copyText, downloadFile, el, icon, message, readerLabel as label, safeWeb, toast, zoteroStatusText, type ReaderPort } from './ui.js';
+import { api, bindTablist, button, byId, copyText, downloadFile, el, icon, inputField, message, readerLabel as label, safeWeb, toast, zoteroStatusText, type ReaderPort } from './ui.js';
 
 export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
-  const doc = app.doc, title = doc.paperTitle || doc.title;
+  const doc = app.doc;
+  type MetaDraft = Partial<Pick<DocumentInfo, 'paperTitle' | 'authors' | 'venue' | 'year' | 'doi'>>;
+  let draft: MetaDraft | null = null;
+  const currentTitle = () => doc.paperTitle || doc.title;
+  const effectiveDoc = (): DocumentInfo => draft ? { ...doc, ...draft } : doc;
   const trail = el('div', 'trail');
   trail.append(icon('folder', 13), label('Library / Reference', '资料库 / 文献'));
-  parent.append(trail, el('h1', '', title));
-  const byline = [doc.authors, doc.venue, doc.year && !doc.venue?.includes(doc.year) ? doc.year : undefined].filter(Boolean).join(' · ');
-  if (byline) parent.append(el('p', '', byline));
+  const head = el('div', 'ref-meta-head'), heading = el('h1', '', currentTitle()), bylineEl = el('p', 'ref-byline');
+  head.append(heading);
+  const syncHeader = () => {
+    heading.textContent = currentTitle();
+    const text = [doc.authors, doc.venue, doc.year && !doc.venue?.includes(doc.year) ? doc.year : undefined].filter(Boolean).join(' · ');
+    bylineEl.textContent = text; bylineEl.hidden = !text;
+    if (!doc.book && app.doc.id === doc.id) byId('docMeta').textContent = doc.authors ? [doc.authors, doc.venue].filter(Boolean).join(' · ') : doc.kind === 'web' && doc.url ? new URL(doc.url).hostname : '';
+  };
+  let editBtn: HTMLButtonElement | undefined, metaForm: HTMLFormElement | undefined;
+  let syncPreview = () => {};
+  if (doc.id !== 'pagedattention') {
+    const fTitle = inputField(label('Paper title', '论文标题'), doc.paperTitle ?? '');
+    const fAuthors = inputField(label('Authors', '作者'), doc.authors ?? '', 'text', label('Semicolon-separated', '多位作者用分号分隔'));
+    const fVenue = inputField(label('Venue / Journal', '期刊 / 会议'), doc.venue ?? '');
+    const fYear = inputField(label('Year', '年份'), doc.year ?? '', 'text', '2024'), fDoi = inputField('DOI', doc.doi ?? '', 'text', '10.1145/…');
+    const grid = el('div', 'ref-meta-grid'); grid.append(fYear.row, fDoi.row);
+    const errEl = el('p', 'ref-meta-error'); errEl.setAttribute('role', 'alert'); errEl.hidden = true;
+    const saveBtn = el('button', 'btn primary', label('Save metadata', '保存元数据')); saveBtn.type = 'submit';
+    const closeEdit = (restoreFocus = false) => {
+      if (!metaForm || metaForm.hidden) return;
+      metaForm.hidden = true; draft = null; errEl.hidden = true; errEl.textContent = '';
+      editBtn?.setAttribute('aria-expanded', 'false'); syncPreview();
+      if (restoreFocus) editBtn?.focus({ preventScroll: true });
+    };
+    const actions = el('div', 'ref-meta-actions'); actions.append(saveBtn, button(label('Cancel', '取消'), () => closeEdit(true), 'btn'));
+    metaForm = el('form', 'ref-meta-form'); metaForm.hidden = true;
+    metaForm.append(fTitle.row, fAuthors.row, fVenue.row, grid, errEl, actions);
+    editBtn = button(label('Edit metadata', '编辑元数据'), () => {
+      if (!metaForm) return;
+      if (!metaForm.hidden) { closeEdit(); return; }
+      fTitle.input.value = doc.paperTitle ?? ''; fAuthors.input.value = doc.authors ?? ''; fVenue.input.value = doc.venue ?? '';
+      fYear.input.value = doc.year ?? ''; fDoi.input.value = doc.doi ?? ''; errEl.hidden = true; errEl.textContent = '';
+      metaForm.hidden = false; editBtn?.setAttribute('aria-expanded', 'true'); fTitle.input.focus();
+    }, 'text-btn', 'edit');
+    editBtn.setAttribute('aria-expanded', 'false'); head.append(editBtn);
+    metaForm.addEventListener('input', () => {
+      draft = { paperTitle: fTitle.input.value.trim() || undefined, authors: fAuthors.input.value.trim() || undefined, venue: fVenue.input.value.trim() || undefined, year: fYear.input.value.trim() || undefined, doi: fDoi.input.value.trim() || undefined };
+      syncPreview();
+    });
+    metaForm.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeEdit(true); } });
+    metaForm.addEventListener('submit', async e => {
+      e.preventDefault(); saveBtn.disabled = true; errEl.hidden = true; errEl.textContent = '';
+      try {
+        const { doc: updated } = await api('library.updateMeta', { id: doc.id, paperTitle: fTitle.input.value, authors: fAuthors.input.value, venue: fVenue.input.value, year: fYear.input.value, doi: fDoi.input.value });
+        doc.paperTitle = updated.paperTitle; doc.authors = updated.authors; doc.venue = updated.venue; doc.year = updated.year; doc.doi = updated.doi;
+        draft = null; metaForm!.hidden = true; editBtn?.setAttribute('aria-expanded', 'false');
+        syncHeader(); syncPreview(); toast(label('Metadata updated.', '元数据已更新。'));
+      } catch (error) { errEl.textContent = message(error); errEl.hidden = false; }
+      finally { saveBtn.disabled = false; }
+    });
+  }
+  syncHeader();
+  parent.append(trail, head, bylineEl, ...(metaForm ? [metaForm] : []));
   const web = safeWeb(doc.url);
   if (web) {
     const link = el('a', 'external', doc.doi ? label('Original paper ↗', '原始论文 ↗') : label('Original article ↗', '原始文章 ↗'));
@@ -26,11 +80,20 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
   exportStatus.setAttribute('role', 'status'); exportStatus.setAttribute('aria-live', 'polite');
 
   const buildCitationPayload = (format: 'bibtex' | 'ris') => {
-    const meta = buildCitationMetadata(doc, linkedZotero);
+    const meta = buildCitationMetadata(effectiveDoc(), linkedZotero);
     const content = format === 'bibtex' ? formatBibTeX(meta) : formatRIS(meta);
     const key = buildCiteKey(meta).toLowerCase().replace(/[^a-z0-9]+/g, '') || 'reference';
     return { content, filename: `${key}.${format === 'bibtex' ? 'bib' : 'ris'}` };
   };
+  const previewDetails = el('details', 'citation-preview-box'), previewBody = el('div', 'citation-preview-body'), previewTabs = el('div', 'citation-preview-tabs');
+  const bibTab = el('button', 'citation-preview-tab', 'BibTeX'), risTab = el('button', 'citation-preview-tab', 'RIS');
+  const previewPre = el('pre', 'citation-preview-code'), previewCode = el('code');
+  previewBody.hidden = true; previewTabs.append(bibTab, risTab); previewPre.append(previewCode); previewBody.append(previewTabs, previewPre);
+  previewDetails.append(el('summary', 'citation-preview-toggle', label('Preview BibTeX / RIS', '预览 BibTeX / RIS')), previewBody);
+  let previewFormat: 'bibtex' | 'ris' = 'bibtex';
+  syncPreview = () => { if (previewDetails.open) previewCode.textContent = buildCitationPayload(previewFormat).content; };
+  bindTablist(previewTabs, [{ key: 'bibtex', button: bibTab }, { key: 'ris', button: risTab }], 'bibtex', key => { previewFormat = key; syncPreview(); });
+  previewDetails.addEventListener('toggle', () => { previewBody.hidden = !previewDetails.open; if (previewDetails.open) syncPreview(); });
   const waitForZotero = async () => {
     if (!zoteroSettled && zoteroPending) await Promise.race([zoteroPending.catch(() => undefined), new Promise<void>(resolve => window.setTimeout(resolve, 1500))]);
   };
@@ -58,7 +121,7 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
     button(label('Copy RIS', '复制 RIS'), () => copyCitation('ris'), 'btn'),
     button(label('Download .ris', '下载 .ris'), () => downloadCitation('ris'), 'btn')
   );
-  exportSection.append(el('h3', '', label('Export citation', '导出引文')), exportActions, exportStatus);
+  exportSection.append(el('h3', '', label('Export citation', '导出引文')), exportActions, exportStatus, previewDetails);
   parent.append(exportSection, el('hr', 'rule'), el('h3', '', 'Zotero'));
 
   const connection = el('section', 'zotero-connection'), status = el('p'), connectionActions = el('div', 'row');
@@ -112,7 +175,7 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
     const oldKey = desktop ? null : localStorage.getItem(legacyKey);
     const result = await api('zotero.get', { docId: doc.id, key: oldKey || undefined });
     if (!summary.isConnected || app.doc.id !== doc.id) return;
-    const item = result.item; linkedZotero = item; zoteroSettled = true;
+    const item = result.item; linkedZotero = item; zoteroSettled = true; syncPreview();
     summary.replaceChildren(); addItem.hidden = Boolean(item);
     if (!item) { summary.append(el('p', 'hint', label('Find an existing item or save this document to a collection.', '查找已有条目，或将当前文档保存到 Zotero 分类。'))); return; }
     const titleLine = el('p'); titleLine.append(el('strong', '', item.title));
@@ -151,7 +214,7 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
     editor.append(button(item ? label('Update Zotero item', '更新 Zotero 条目') : label('Save to Zotero', '保存到 Zotero'), async () => {
       progress.textContent = desktop ? label('Saving… Check Zotero for an approval dialog.', '正在保存…请在 Zotero 中确认授权弹窗。') : label('Saving…', '正在保存…');
       try {
-        await api('zotero.save', { docId: doc.id, key: item?.key, title, url: doc.url, doi: doc.doi, collections: [...checked] });
+        await api('zotero.save', { docId: doc.id, key: item?.key, title: currentTitle(), url: doc.url, doi: doc.doi, collections: [...checked] });
         found.replaceChildren(); editor.replaceChildren(); await restore(); await test(false);
         toast(label('Saved to your Zotero library.', '已保存到 Zotero 资料库。'));
       } catch (error) { progress.textContent = zoteroStatusText(message(error)); }

@@ -14,18 +14,14 @@ export interface BookSection {
   url: string;
 }
 export interface BookInfo { slug: string; sections: BookSection[] }
-export interface DocumentInfo {
+export interface DocMetadata {
+  paperTitle?: string; authors?: string; venue?: string; year?: string; doi?: string; publisher?: string; abstract?: string;
+}
+export interface DocumentInfo extends DocMetadata {
   id: string;
   kind: 'pdf' | 'web';
   title: string;
   url?: string;
-  paperTitle?: string;
-  authors?: string;
-  venue?: string;
-  doi?: string;
-  year?: string;
-  publisher?: string;
-  abstract?: string;
   paragraphs?: string[];
   articleLayout?: ArticleLayout;
   book?: BookInfo;
@@ -149,6 +145,7 @@ export interface Operations {
   'library.list': [Record<string, never>, { docs: DocumentInfo[] }];
   'library.get': [{ id: string }, { doc: DocumentInfo }];
   'library.rename': [{ id: string; title: string }, { doc: DocumentInfo }];
+  'library.updateMeta': [{ id: string; paperTitle?: string; authors?: string | string[]; venue?: string; year?: string; doi?: string }, { doc: DocumentInfo }];
   'library.delete': [{ id: string }, { id: string; deleted: boolean }];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];

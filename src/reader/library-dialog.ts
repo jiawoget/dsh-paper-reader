@@ -1,6 +1,8 @@
+import { parseAcademicInput } from '../shared/academic-intake.js';
 import type { DocumentInfo, OpenDocument } from '../shared/types.js';
 import { localBookPlace } from './book-position.js';
 import { openStaxLocation } from '../shared/openstax.js';
+import { bindPdfDropTarget } from './pdf-import.js';
 import { settingsDialog } from './settings-dialog.js';
 import { api, bindTablist, button, byId, el, icon, message, modal, readerLabel as t, safeWeb, toast, webPageError, type ReaderPort } from './ui.js';
 import { browseZotero, type ZoteroBrowsePosition } from './zotero-browser.js';
@@ -189,21 +191,26 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
     if (active()) dialog.close();
   }
   const file = el('input');
-  file.type = 'file'; file.accept = 'application/pdf,.pdf'; file.hidden = true;
-  const pdf = button(t('Open a PDF', '打开 PDF'), () => file.click(), 'btn', 'note');
-  file.addEventListener('change', async () => {
-    const picked = file.files?.[0];
-    if (!picked) return;
+  file.type = 'file'; file.accept = 'application/pdf,.pdf'; file.multiple = true; file.hidden = true;
+  const pdf = button(t('Open a PDF', '打开 PDF'), () => file.click(), 'btn', 'note'), importStatus = el('p', 'library-status');
+  importStatus.setAttribute('role', 'status');
+  async function handlePdfFiles(files: readonly File[]) {
+    if (!files.length) return;
     pdf.disabled = true;
-    try { await app.importFile(picked); if (active()) dialog.close(); }
+    try { if (await app.importFiles(files, text => { if (active()) importStatus.textContent = text; }) && active()) dialog.close(); }
     catch (error) { if (active()) toast(message(error)); }
-    finally { pdf.disabled = false; file.value = ''; }
-  });
+    finally { pdf.disabled = false; importStatus.textContent = ''; file.value = ''; }
+  }
+  file.addEventListener('change', () => { void handlePdfFiles(Array.from(file.files ?? [])); });
+  const dropController = new AbortController();
+  dialog.addEventListener('close', () => dropController.abort(), { once: true });
+  bindPdfDropTarget(root, files => { void handlePdfFiles(files); }, { signal: dropController.signal });
   const imports = el('div', 'library-imports');
   const form = el('form', 'library-url');
   form.id = 'library-url-form'; form.hidden = true;
   const address = el('input', 'search'), field = el('label');
-  address.id = 'library-url'; address.type = 'url'; address.required = true; address.placeholder = 'https://…';
+  address.id = 'library-url'; address.type = 'text'; address.inputMode = 'url'; address.spellcheck = false; address.autocomplete = 'off'; address.required = true;
+  address.placeholder = t('https://…, 2309.06180, or 10.1145/…', 'https://…、arXiv 编号（2309.06180）或 DOI（10.1145/…）');
   field.htmlFor = address.id; field.textContent = t('Web address', '网页地址');
   const submit = el('button', 'btn primary', t('Read article', '阅读文章'));
   submit.type = 'submit';
@@ -222,23 +229,30 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   let openRequest = 0;
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    const url = safeWeb(address.value.trim());
-    if (!url) { urlStatus.textContent = t('Enter an http or https web address.', '请输入以 http 或 https 开头的网页地址。'); return; }
+    const raw = address.value.trim(), parsed = parseAcademicInput(raw);
+    if (!parsed) {
+      urlStatus.textContent = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)
+        ? t('Enter an http or https web address.', '请输入以 http 或 https 开头的网页地址。')
+        : t('Enter an http/https URL, arXiv ID, or DOI.', '请输入 http/https 网址、arXiv 编号或 DOI。');
+      return;
+    }
     const version = ++openRequest;
     submit.disabled = true;
-    urlStatus.textContent = openStaxLocation(url) ? t('Opening book…','正在打开书籍…') : t('Opening web page…', '正在打开网页…');
+    urlStatus.textContent = openStaxLocation(raw) ? t('Opening book…','正在打开书籍…') : parsed.kind !== 'url' ? t('Importing paper…', '正在导入论文…') : t('Opening web page…', '正在打开网页…');
     try {
-      const opened = await api('web.open', { url });
+      const opened = await api('web.open', { url: raw });
       if (version === openRequest && !form.hidden) await read(opened);
     } catch (error) {
       if (version !== openRequest || !active()) return;
-      urlStatus.replaceChildren(document.createTextNode(webPageError(error) + ' '), webLink(url, t('Open original page', '打开原网页')));
+      const fallback = safeWeb(parsed.kind === 'arxiv' ? parsed.absUrl : parsed.url);
+      urlStatus.replaceChildren(document.createTextNode(webPageError(error) + (fallback ? ' ' : '')), ...(fallback ? [webLink(fallback, t('Open original page', '打开原网页'))] : []));
     } finally { if (version === openRequest) submit.disabled = false; }
   });
   function clearRequest() { ++openRequest; submit.disabled = false; urlStatus.replaceChildren(); }
   address.addEventListener('input', () => {
     clearRequest();
-    submit.textContent = openStaxLocation(address.value.trim()) ? t('Open book', '打开书籍') : t('Read article', '阅读文章');
+    const raw = address.value.trim(), parsed = parseAcademicInput(raw);
+    submit.textContent = openStaxLocation(raw) ? t('Open book', '打开书籍') : parsed && parsed.kind !== 'url' ? t('Import paper', '导入论文') : t('Read article', '阅读文章');
   });
   openWeb.addEventListener('click', clearRequest);
   imports.append(openWeb, pdf, file);
@@ -247,7 +261,7 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   const toolbar = el('div', 'library-toolbar');
   toolbar.append(tabs, imports);
   const holder = el('div');
-  root.append(toolbar, form, holder);
+  root.append(toolbar, importStatus, form, holder);
   const zotero = el('button', 'library-tab', 'Zotero');
   zotero.id = 'library-tab-zotero';
   zotero.dataset.source = 'zotero';

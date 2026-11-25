@@ -11,7 +11,7 @@ export interface ReaderPort {
   view?: PageView;
   navigate(id: string, page?: number, anchor?: string, quote?: string, target?: TranslatedLocator, range?: SavedSelectionRange): Promise<void>;
   openDocument(opened: OpenDocument): Promise<void>;
-  importFile(file: File): Promise<void>;
+  importFiles(files: readonly File[], onProgress?: (text: string) => void): Promise<boolean>;
   discardDocument?(docId: string): void;
   refresh(): Promise<void>;
   repaintNotes(): void;
@@ -86,7 +86,10 @@ const localizedErrors: Record<string, string> = {
   'Some passages on this page were missing from the translation. Try again.': '本页部分段落缺少译文，请重试。',
   'The model omitted a paragraph. Retry to resume the translation.': '模型漏译了部分段落，请点击重试继续翻译。',
   'The model returned repeated text. Retry the page translation.': '模型返回了重复文本，请重试本页翻译。',
-  'The model returned the original English passage. Retry the page translation.': '模型返回了英文原文而非译文，请重试本页翻译。'
+  'The model returned the original English passage. Retry the page translation.': '模型返回了英文原文而非译文，请重试本页翻译。',
+  'Enter a valid 4-digit year.': '请输入有效的 4 位年份。',
+  'Enter a valid DOI.': '请输入有效的 DOI。',
+  'The bundled sample paper metadata cannot be edited.': '内置示例论文的元数据不可编辑。'
 };
 export const message = (error: unknown) => {
   if (!(error instanceof Error)) return readerLabel('The request failed.', '请求失败。');
@@ -132,6 +135,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 export function toast(text:string, action?:{label:string; run:()=>unknown}):void {
   const node=byId('toast');
   const openDialog=document.querySelector<HTMLDialogElement>('dialog[open]');
+  if(openDialog && node.parentElement!==openDialog) openDialog.addEventListener('close',()=>{if(node.parentElement===openDialog)document.body.append(node);},{once:true});
   (openDialog ?? document.body).append(node);
   clearTimeout(timer); node.textContent=text; node.hidden=false;
   if(action) node.append(button(action.label,async()=>{node.hidden=true;await action.run();},'toast-action'));
