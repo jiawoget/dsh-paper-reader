@@ -11,6 +11,10 @@ interface ShortcutActions {
   canPrevPage: () => boolean;
   canNextSection: () => boolean;
   canPrevSection: () => boolean;
+  canJumpBack: () => boolean;
+  canJumpForward: () => boolean;
+  jumpBack: () => void;
+  jumpForward: () => void;
   toggleBilingual: () => void;
   toggleSidebar: (tab: 'contents' | 'notes') => void;
   setZoom: (value: number) => void;
@@ -32,6 +36,7 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
     const groups: [string, [string[], string][]][] = [
       [label('Reading', '阅读'), [
         [['←', '→'], label('Previous or next page / book section', '上一页或下一页 / 书籍上一节或下一节')],
+        [['Alt+←', 'Alt+→'], label('Jump back or forward in reading history', '在阅读跳转历史中后退或前进')],
         [['b'], label('Toggle original and bilingual view', '切换原文与双语对照')],
         [['+', '=', '-'], label('Zoom in or zoom out', '放大或缩小页面')],
         [['?'], label('Open keyboard shortcuts', '打开快捷键帮助')],
@@ -76,6 +81,14 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
       if (!byId('menu').hidden) { actions.closeMenu(); return; }
       if (actions.dismissDrawer()) return;
       if (!byId('card').hidden) { actions.dismissCard(); return; }
+    }
+    if (!e.defaultPrevented && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !openDialog && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      if (actions.isCapturing() || actions.isPlacingPin() || !byId('menu').hidden || byId('rail').hasAttribute('aria-modal')) return;
+      if (e.target instanceof Element && e.target.closest('input,textarea,select,dialog,#menu,[contenteditable]:not([contenteditable="false"]),.cm-editor')) return;
+      e.preventDefault();
+      if (e.key === 'ArrowLeft' && actions.canJumpBack()) actions.jumpBack();
+      else if (e.key === 'ArrowRight' && actions.canJumpForward()) actions.jumpForward();
+      return;
     }
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || openDialog) return;
     if (e.shiftKey && e.key !== '?' && e.key !== '+') return;

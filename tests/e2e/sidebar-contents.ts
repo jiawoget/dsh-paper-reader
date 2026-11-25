@@ -147,9 +147,15 @@ async function nativePdf(page: Page, host: HostFixture, model: OutlineModel) {
   await panel(page).waitFor({ state: 'hidden' });
   await toggle(page).press('Enter');
   await current(entry(page, controls), controls);
+  const beforeFindingsTop = await scroll.evaluate(element => element.scrollTop);
   await entry(page, findings).click();
   await sourcePage(page, 3);
   await current(entry(page, findings), findings);
+  await page.locator('#jumpBack').click();
+  await sourcePage(page, 2);
+  assert.ok(Math.abs(await scroll.evaluate(element => element.scrollTop) - beforeFindingsTop) <= 8);
+  await page.locator('#jumpForward').click();
+  await sourcePage(page, 3);
   assert.equal(model.received(), 0, 'PDF bookmarks must take priority without contacting the model.');
   console.log('PASS Native PDF bookmarks preserve hierarchy, jump to named and same-page destinations, restore the current entry after reload, and make no model requests.');
 }

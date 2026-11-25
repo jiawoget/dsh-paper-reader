@@ -549,7 +549,7 @@ await withHost(async host => {
     assert.equal(await log.getByRole('link', { name: 'original paper' }).getAttribute('href'), 'https://arxiv.org/abs/1512.03385');
     assert.equal(await card.getByRole('button', { name: 'Translate to Chinese' }).count(), 0);
     await log.getByRole('button', { name: 'References 34, 49', exact: true }).focus();
-    const references = reader.getByRole('tooltip');
+    const references = reader.locator('.citation-preview');
     await references.getByText('Pattern recognition and neural networks', { exact: true }).waitFor();
     await references.getByText('Modern applied statistics with s-plus', { exact: true }).waitFor();
     await reader.keyboard.press('Escape');

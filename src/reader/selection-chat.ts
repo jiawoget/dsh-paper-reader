@@ -38,8 +38,8 @@ export class SelectionChat {
   readonly root = el('aside', 'selection-chat');
   readonly heading = el('header', 'chat-heading');
   readonly action = button(label('Ask AI', '提问'), () => this.open('ask'), 'btn primary selection-chat-action');
-  private log = createChatLog('selection-chat-log', label('Selection chat history', '选段讨论记录'));
-  private stream = createStreamSlot(this.log);
+  private log = createChatLog('selection-chat-log', label('Selection chat history', '选段讨论记录'), p => { void this.app.navigate(this.app.doc.id, p).catch(e => toast(message(e))); });
+  private stream = createStreamSlot(this.log, () => this.app.pageCount);
   private quoteBar = el('div', 'answer-selection');
   private connection = el('div', 'chat-notice');
   private form = el('form', 'chat-composer');
@@ -277,7 +277,7 @@ export class SelectionChat {
         if (!actions) this.answerActions.set(index, actions = new AnswerNotebookAction(this.app, turn.source ?? chatSource(this.item), turn.content, turn.requestId!, 'discussion'));
         return renderAnswerRow({
           rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'),
-          bodyClass: 'selection-answer selection-prose', actionsClass: 'selection-reply-actions', content: turn.content,
+          bodyClass: 'selection-answer selection-prose', actionsClass: 'selection-reply-actions', content: turn.content, maxPage: this.app.pageCount,
           dataset: { turn: String(index), replyId: turn.requestId },
           quote: turn.quote ? { css: 'answer-quote', text: turn.quote.text } : undefined,
           actions: [actions.root], onDelete: turn.requestId ? () => this.deleteTurn(turn.requestId!) : undefined
@@ -305,7 +305,7 @@ export class SelectionChat {
     if (stopped && !pending && !this.stoppedRow) {
       const question = rowFor({ role: 'user', content: stopped.request.prompt, quote: stopped.request.quote, source: stopped.request.item && chatSource(stopped.request.item) }, turns.length);
       const reply = renderStoppedReply({
-        rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'), answer: stopped.answer,
+        rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'), answer: stopped.answer, maxPage: this.app.pageCount,
         onRetry: () => this.ask({ ...stopped.request, requestId: crypto.randomUUID(), payload: undefined }),
         onDelete: () => { this.state.stopped = undefined; this.render(); }
       });
@@ -437,7 +437,6 @@ export class SelectionChat {
     const controller = request.controller = new AbortController();
     request.streamText = ''; state.stopped = state.failure = undefined; state.pending = request;
     this.changed();
-    let dispatched = false;
     try {
       if (!request.payload && request.mode !== 'translate') {
         if (this.notes.saving) request.savingNotes ??= this.notes;
@@ -471,7 +470,6 @@ export class SelectionChat {
         record: { docId: item.source.docId, requestId: request.requestId, thread: this.thread,
           question: request.prompt, source: chatSource(item), answerQuote: request.quote?.text, answerTurn: request.quote?.turn } };
       if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      dispatched = true;
       const reply = await apiStream('ai', { ...request.payload, questionModel }, delta => {
         request.streamText = (request.streamText ?? '') + delta;
         if (this.pendingRow?.request === request) this.stream.push(request.streamText);
@@ -488,7 +486,7 @@ export class SelectionChat {
     } catch (error) {
       if (this.pendingRow?.request === request) this.stream.finish();
       settleStreamFailure({
-        aborted: controller.signal.aborted, dispatched, streamText: request.streamText,
+        aborted: controller.signal.aborted, streamText: request.streamText,
         restoreDraft: () => { if (draft && !draft.text) draft.text = request.prompt; },
         onStopped: answer => { state.stopped = { request, answer }; },
         onError: () => { state.failure = { request, error: message(error) }; }

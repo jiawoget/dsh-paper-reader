@@ -6,6 +6,7 @@ import type { DiscussionRef } from './discussion-drafts.js';
 export interface ReaderPort {
   doc: DocumentInfo;
   page: number;
+  readonly pageCount: number;
   state: ReaderState;
   view?: PageView;
   navigate(id: string, page?: number, anchor?: string, quote?: string, target?: TranslatedLocator, range?: SavedSelectionRange): Promise<void>;
@@ -54,6 +55,7 @@ const paths = {
   capture:'M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M8 12h8m-4-4v8',
   library:'M3 4h7v7H3zM14 4h7v7h-7zM3 15h7v6H3zM14 15h7v6h-7z',
   back:'m14 6-6 6 6 6', next:'m10 6 6 6-6 6', close:'m6 6 12 12M18 6 6 18',
+  arrowLeft:'M19 12H5m6-6-6 6 6 6', arrowRight:'M5 12h14m-6-6 6 6-6 6',
   columns:'M3 4h18v16H3zM12 4v16', more:'M4 12h.1M12 12h.1M20 12h.1',
   book:'M3 5q5-2 9 1 4-3 9-1v14q-5-2-9 1-4-3-9-1zM12 6v14',
   note:'M5 3h10l4 4v14H5zM14 3v5h5M8 13h8M8 17h6', edit:'M4 20h4l13-13-4-4L4 16zM14 6l4 4',

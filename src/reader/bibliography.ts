@@ -1,7 +1,12 @@
 import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api.js';
+import { extractArxivId } from '../shared/citation-export.js';
+import { safeWeb } from './ui.js';
 
 interface ReferencePaper { pages: number; textContent(page: number): Promise<TextContent> }
-interface BibliographyEntry { entry: string; title?: string }
+export interface BibliographyEntry {
+  entry: string; page?: number; title?: string; authors?: string; year?: string;
+  arxivId?: string; doi?: string; url?: string;
+}
 export interface CitationGroup { text: string; numbers: number[]; from: number; to: number }
 const indices = new WeakMap<ReferencePaper, Promise<ReadonlyMap<number, BibliographyEntry>>>();
 const heading = /^(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+)?(?:references|bibliography|works cited|literature cited|参考文献)\s*[:.]?$/iu;
@@ -53,11 +58,27 @@ function printedTitle(entry: string): string | undefined {
   if (title && /\p{L}/u.test(title)) return title;
 }
 
-export function parseBibliography(pages: string[][]): Map<number, BibliographyEntry> {
-  const lines = pages.flat();
+function extractAuthors(joined: string, title?: string): string | undefined {
+  let prefix = '';
+  if (title) {
+    const idx = joined.indexOf(title);
+    if (idx > 0) prefix = joined.slice(0, idx);
+  }
+  if (!prefix) {
+    const stop = /\b(?:18|19|20)\d{2}[a-z]?\b|https?:\/\/|doi:|arXiv:/iu.exec(joined);
+    if (stop && stop.index > 0) prefix = joined.slice(0, stop.index);
+  }
+  prefix = prefix
+    .replace(/\s*\(?\b(?:18|19|20)\d{2}[a-z]?\)?\.?\s*$/u, '')
+    .replace(/[\s.,;:("“]+$/u, '')
+    .trim();
+  if (prefix && /\p{L}/u.test(prefix) && !/^(?:https?:\/\/|doi:|arXiv:)/iu.test(prefix)) return prefix;
+}
+
+export function parseBibliography(pages: string[][], firstPage = 1): Map<number, BibliographyEntry> {
+  const tagged = pages.flatMap((pageLines, i) => pageLines.map(text => ({ text, page: firstPage + i })));
+  const lines = tagged.map(item => item.text);
   let first = lines.findIndex(line => heading.test(line)) + 1;
-  // Some PDFs omit the heading. Require a numbered bibliography beginning with
-  // two publication records before accepting numbers elsewhere on the page.
   if (!first) {
     first = lines.findIndex((line, index) => {
       const start = /^\[1\]\s/u.test(line);
@@ -68,18 +89,34 @@ export function parseBibliography(pages: string[][]): Map<number, BibliographyEn
     if (first < 0) return new Map();
   }
   const refs = new Map<number, BibliographyEntry>();
-  let number = 0, parts: string[] = [], bracketed: boolean | undefined;
+  let number = 0, entryPage = firstPage, parts: string[] = [], bracketed: boolean | undefined;
   const finish = () => {
     if (number && parts.length) {
-      const printed = parts.join('\n').replace(/(https?:\/\/\S+[-/])\n(?=\S)/gu, '$1');
+      let printed = parts.join('\n');
+      for (let prev = ''; prev !== printed;) {
+        prev = printed;
+        printed = printed.replace(/((?:https?:\/\/|doi:\s*10\.\d{4,9}\/)(?:\S*[-/.])?)\n(?=\S)/giu, '$1');
+      }
       const entry = printed.replace(/\s+/gu, ' ').trim();
       const joined = printed.replace(/(\p{L})-\n(?=(?:aware|based|level|scale|free|efficient)\b)/giu, '$1-')
         .replace(/\b(self|cross|fine|multi|single|real|large|fixed|end)-\n(?=\p{Ll})/gu, '$1-')
         .replace(/(\p{L})-\n(?=\p{Ll})/gu, '$1').replace(/\s+/gu, ' ').trim();
-      refs.set(number, { entry, title: printedTitle(joined) });
+      const rawUrl = /https?:\/\/[^\s<>()[\]"']+/u.exec(joined)?.[0]?.replace(/[.,;:)\]]+$/u, '');
+      const url = safeWeb(rawUrl);
+      const doi = /\b(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)?(10\.\d{4,9}\/[^\s<>()[\]"']+)/iu.exec(joined)?.[1]?.replace(/[.,;:)\]]+$/u, '');
+      const arxivId = extractArxivId(url, doi) ?? /\barXiv:\s*(\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?\b/iu.exec(joined)?.[1]?.toLowerCase();
+      const noUrl = joined.replace(/https?:\/\/\S+/gu, '');
+      const year = /\b((?:18|19|20)\d{2})[a-z]?\b/u.exec(noUrl)?.[1] ?? /\b((?:18|19|20)\d{2})[a-z]?\b/u.exec(joined)?.[1];
+      const title = printedTitle(joined);
+      const authors = extractAuthors(joined, title);
+      refs.set(number, {
+        entry, page: entryPage,
+        ...(title && { title }), ...(authors && { authors }), ...(year && { year }),
+        ...(arxivId && { arxivId }), ...(doi && { doi }), ...(url && { url })
+      });
     }
   };
-  for (const line of lines.slice(first)) {
+  for (const { text: line, page } of tagged.slice(first)) {
     if (/^\s*(?:appendi(?:x|ces)|supplementary (?:material|information))\b/iu.test(line)) break;
     if (!line.trim() || /^\s*\d{1,3}\s*$/u.test(line) || heading.test(line)) continue;
     const start = entryStart.exec(line);
@@ -87,6 +124,7 @@ export function parseBibliography(pages: string[][]): Map<number, BibliographyEn
       finish();
       bracketed = Boolean(start[1]);
       number = Number(start[1] || start[2]);
+      entryPage = page;
       parts = start[3] ? [start[3]] : [];
     } else if (number) parts.push(line);
   }
@@ -104,7 +142,7 @@ export function bibliography(paper: ReferencePaper): Promise<ReadonlyMap<number,
       pages.push(lines);
       if (lines.some(line => heading.test(line))) break;
     }
-    return parseBibliography(pages.reverse());
+    return parseBibliography(pages.reverse(), paper.pages - pages.length + 1);
   };
   const request = read();
   indices.set(paper, request);

@@ -18,7 +18,8 @@ import { pdfRegionPicker } from './pdf/region-picker.js';
 import { readRegion, regionBox, figureAtRegion } from './pdf/region-geometry.js';
 import { PdfFocus, type TranslationFocus } from './pdf/focus.js';
 import { pageText } from './pdf/reading-text.js';
-import { readOutlinePages, readPdfOutline } from './pdf/outline.js';
+import { mountPdfLinks } from './pdf/links.js';
+import { readOutlinePages, readPdfOutline, type PdfLinkDestination } from './pdf/outline.js';
 import { sampleDigest } from './pdf/sample.js';
 import { findQuote, listenForSelections, paintRange } from './pdf/selection.js';
 import { readerLabel as label } from './ui.js';
@@ -33,6 +34,7 @@ export interface PdfRenderOptions {
   /** Text and interaction are ready. The render promise also waits for the first full-resolution artwork. */
   onMounted?: (view: PdfPageView) => void;
   onSelect?: (selection: SelectionHit) => void;
+  onLink?: (dest: PdfLinkDestination) => void;
   onRegion?: RegionAction;
   canContinueRegion?: (anchor: string) => boolean;
   onAmbiguousQuote?: () => void;
@@ -615,6 +617,7 @@ async function renderPdfPage(pdf: PDFDocumentProxy, options: PdfRenderOptions, d
     signal.throwIfAborted();
     const view = mount({ source, target, options, layout, raster, nativeLayer, nativeContainer, controller,
       pageWidth: viewport.width, pageHeight: viewport.height });
+    void mountPdfLinks(pdf, page, viewport, source.plane, signal, options.onLink);
     options.onMounted?.(view);
     await raster.refresh();
     signal.throwIfAborted();

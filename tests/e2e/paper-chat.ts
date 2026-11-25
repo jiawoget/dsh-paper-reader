@@ -89,6 +89,18 @@ await withHost(async host => {
       assert.match(await firstReply.innerText(), /8[.]9/);
       assert.match(await firstReply.innerText(), /9(?:[.]0)?\s*%/);
       assert.match(await firstReply.innerText(), /12/);
+      if (!live) {
+        const chip = firstReply.locator('.page-cite-chip[data-page="12"]').first();
+        await chip.waitFor();
+        await chip.click();
+        await reader.waitForFunction(() => document.getElementById('pageCount')?.textContent?.startsWith('12 / '));
+        await reader.locator('#jumpBack').click();
+        await reader.waitForFunction(() => document.getElementById('pageCount')?.textContent?.startsWith('2 / '));
+        await reader.locator('#jumpForward').click();
+        await reader.waitForFunction(() => document.getElementById('pageCount')?.textContent?.startsWith('12 / '));
+        await reader.locator('#jumpBack').click();
+        await reader.waitForFunction(() => document.getElementById('pageCount')?.textContent?.startsWith('2 / '));
+      }
       await selectedWord(reader);
       await attach.waitFor();
       await field.fill(followup); await field.press('Enter');

@@ -11,7 +11,10 @@ const cleanText = (text: string) => text.replace(/[\u0000-\u0008\u000b\u000c\u00
 const clipLine = (text: string, length = maxOutlineLineLength) => text.slice(0, length).replace(/[\uD800-\uDBFF]$/u, '');
 const yieldToReader = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-function destinationTop(view: Viewport, dest: unknown[]): number | undefined {
+export interface PdfLinkDestination { page: number; top?: number }
+export interface PdfDestCache { pages: Map<string, number>; viewports: Map<number, Viewport> }
+
+export function destinationTop(view: Viewport, dest: unknown[]): number | undefined {
   const [, kind, first, second, third, fourth] = dest as [unknown, { name: string }, number | null, number | null, number, number];
   const [left, bottom, right, top] = view.viewBox;
   const y = (x: number, y: number) => view.convertToViewportPoint(x, y)[1] / view.height;
@@ -33,6 +36,30 @@ function destinationTop(view: Viewport, dest: unknown[]): number | undefined {
   }
 }
 
+export async function resolvePdfDestination(
+  pdf: PDFDocumentProxy, rawDest: string | unknown[], cache?: PdfDestCache
+): Promise<PdfLinkDestination | undefined> {
+  const dest = typeof rawDest === 'string' ? await pdf.getDestination(rawDest) : rawDest;
+  if (!dest || !isValidExplicitDest(dest) || dest.slice(2).some(n => n != null && !Number.isFinite(n))) return;
+  const ref = dest[0];
+  let index: number;
+  if (typeof ref === 'number') index = ref;
+  else {
+    const key = ref.num + 'R' + ref.gen;
+    index = cache?.pages.get(key) ?? await pdf.getPageIndex(ref);
+    cache?.pages.set(key, index);
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= pdf.numPages) return;
+  const target: PdfLinkDestination = { page: index + 1 };
+  if (dest[2] != null || dest[3] != null) {
+    const view = cache?.viewports.get(target.page) ?? (await pdf.getPage(target.page)).getViewport({ scale: 1 });
+    cache?.viewports.set(target.page, view);
+    const top = destinationTop(view, dest);
+    if (top !== undefined && Number.isFinite(top)) target.top = top;
+  }
+  return target;
+}
+
 /** Only destinations with coordinates need a page's geometry. No page text or graphics are requested. */
 export async function readPdfOutline(pdf: PDFDocumentProxy, signal?: AbortSignal): Promise<PdfOutlineEntry[]> {
   signal?.throwIfAborted();
@@ -40,29 +67,13 @@ export async function readPdfOutline(pdf: PDFDocumentProxy, signal?: AbortSignal
   signal?.throwIfAborted();
   const result: PdfOutlineEntry[] = [];
   const pending = (roots ?? []).map(node => ({ node, level: 1 })).reverse();
-  const pageIndexes = new Map<string, number>(), viewports = new Map<number, Viewport>();
+  const cache: PdfDestCache = { pages: new Map(), viewports: new Map() };
   async function resolve(node: Bookmark, level: number): Promise<PdfOutlineEntry | undefined> {
     const title = cleanText(node.title ?? '');
     if (!title || node.url || node.unsafeUrl || !node.dest) return;
-    const dest = typeof node.dest === 'string' ? await pdf.getDestination(node.dest) : node.dest;
-    if (!dest || !isValidExplicitDest(dest) || dest.slice(2).some(n => n != null && !Number.isFinite(n))) return;
-    const ref = dest[0];
-    let index: number;
-    if (typeof ref === 'number') index = ref;
-    else {
-      const key = ref.num + 'R' + ref.gen;
-      index = pageIndexes.get(key) ?? await pdf.getPageIndex(ref);
-      pageIndexes.set(key, index);
-    }
-    if (!Number.isInteger(index) || index < 0 || index >= pdf.numPages) return;
-    const entry: PdfOutlineEntry = { title, page: index + 1, level };
-    if (dest[2] != null || dest[3] != null) {
-      const view = viewports.get(entry.page) ?? (await pdf.getPage(entry.page)).getViewport({ scale: 1 });
-      viewports.set(entry.page, view);
-      const top = destinationTop(view, dest);
-      if (top !== undefined && Number.isFinite(top)) entry.top = top;
-    }
-    return entry;
+    const target = await resolvePdfDestination(pdf, node.dest, cache);
+    if (!target) return;
+    return { title, page: target.page, level, ...(target.top !== undefined && { top: target.top }) };
   }
   let lastYield = performance.now();
   while (pending.length) {

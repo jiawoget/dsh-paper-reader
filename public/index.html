@@ -27,6 +27,10 @@
         <button id="contentsToggle" class="icon-btn" type="button" aria-controls="contentsPanel" aria-expanded="false">Contents</button>
         <div class="doc-heading"><strong id="docTitle">Paper Reader</strong><span id="docMeta"></span></div>
         <div class="toolbar" aria-label="Reading tools">
+          <div class="jump-history" role="group" aria-label="Jump history">
+            <button id="jumpBack" type="button" class="icon-btn" aria-label="Jump back" disabled></button>
+            <button id="jumpForward" type="button" class="icon-btn" aria-label="Jump forward" disabled></button>
+          </div>
           <div class="page-navigation">
             <button id="prev" aria-label="Previous page" class="icon-btn" disabled></button>
             <button id="pageCount" type="button" aria-label="Go to page" title="Go to page" popovertarget="pageJump" disabled></button>

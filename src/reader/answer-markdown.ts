@@ -2,6 +2,7 @@ import { cjkFriendly } from '@mdit/plugin-cjk-friendly';
 import { katex } from '@mdit/plugin-katex';
 import { renderToString, type KatexOptions } from 'katex';
 import MarkdownIt from 'markdown-it/browser';
+import { readerLabel as label } from './ui.js';
 
 const mathOptions: KatexOptions = { throwOnError: false, trust: false, maxSize: 20, maxExpand: 1000 };
 const markdown = new MarkdownIt({ html: false }).use(cjkFriendly).use(katex, {
@@ -37,7 +38,62 @@ markdown.renderer.rules.link_open = (tokens, index, options, _env, renderer) => 
 };
 markdown.renderer.rules.image = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content);
 
-export const answerMarkdown = (text: string): string => markdown.render(text);
+const citeParenRe = /([(\uFF08])(?:(pp?\.\s*|pp?\s+|pages?\s+)(\d+(?:\s*[-–—]\s*\d+)?(?:\s*[,;]\s*(?:pp?\.\s*|pp?\s+)?\d+(?:\s*[-–—]\s*\d+)?)*)|(第\s*)(\d+(?:\s*[-–—~～至到]\s*\d+)?(?:\s*[,，、]\s*\d+(?:\s*[-–—~～至到]\s*\d+)?)*)(\s*页))([)\uFF09])/giu;
+
+function parseCitePage(part: string, maxPage: number): number | undefined {
+  const m = /^(?:pp?\.\s*|pp?\s+)?(\d+)(?:\s*[-–—~～至到]\s*(\d+))?$/iu.exec(part.trim());
+  const start = m ? Number(m[1]) : 0, end = m?.[2] ? Number(m[2]) : start;
+  if (Number.isInteger(start) && Number.isInteger(end) && start >= 1 && end >= start && end <= maxPage) return start;
+}
+
+markdown.core.ruler.after('inline', 'page_citations', state => {
+  const maxPage = typeof state.env?.maxPage === 'number' ? Math.floor(state.env.maxPage) : 0;
+  if (maxPage < 1) return;
+  const emit = (out: typeof state.tokens, type: string, content: string, page?: number) => {
+    if (!content) return;
+    const tok = new state.Token(type, page ? 'button' : '', 0);
+    tok.content = content;
+    if (page) tok.meta = { page };
+    out.push(tok);
+  };
+  for (const block of state.tokens) {
+    if (block.type !== 'inline' || !block.children?.length) continue;
+    let linkDepth = 0, changed = false;
+    const next: typeof block.children = [];
+    for (const token of block.children) {
+      if (token.type === 'link_open') { linkDepth++; next.push(token); continue; }
+      if (token.type === 'link_close') { linkDepth = Math.max(0, linkDepth - 1); next.push(token); continue; }
+      if (token.type !== 'text' || linkDepth > 0) { next.push(token); continue; }
+      let last = 0;
+      citeParenRe.lastIndex = 0;
+      for (const m of token.content.matchAll(citeParenRe)) {
+        const index = m.index!, full = m[0], open = m[1], close = m[7];
+        const prefix = m[2] ?? m[4] ?? '', items = m[3] ?? m[5] ?? '', suffix = m[6] ?? '';
+        const segs = items.split(/(\s*[,;，、]\s*)/u), pages = segs.map((s, i) => i % 2 === 0 ? parseCitePage(s, maxPage) : undefined);
+        if (!pages.some(Boolean)) continue;
+        changed = true;
+        emit(next, 'text', token.content.slice(last, index));
+        if (segs.length === 1) emit(next, 'page_cite_chip', full, pages[0]);
+        else {
+          emit(next, 'text', open + prefix);
+          segs.forEach((seg, i) => emit(next, pages[i] ? 'page_cite_chip' : 'text', seg, pages[i]));
+          emit(next, 'text', suffix + close);
+        }
+        last = index + full.length;
+      }
+      if (last > 0) emit(next, 'text', token.content.slice(last)); else next.push(token);
+    }
+    if (changed) block.children = next;
+  }
+});
+
+markdown.renderer.rules.page_cite_chip = (tokens, index) => {
+  const page = Number(tokens[index].meta?.page);
+  const aria = markdown.utils.escapeHtml(label('Jump to page ' + page, '跳转到第 ' + page + ' 页'));
+  return `<button type="button" class="page-cite-chip" data-page="${page}" aria-label="${aria}">${markdown.utils.escapeHtml(tokens[index].content)}</button>`;
+};
+
+export const answerMarkdown = (text: string, maxPage = 0): string => markdown.render(text, { maxPage });
 
 export function selectedAnswer(log: HTMLElement): { body: HTMLElement; text: string } | undefined {
   const selection = document.getSelection();

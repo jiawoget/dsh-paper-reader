@@ -153,6 +153,20 @@ try {
           assert.equal(await page.locator('#reader').getAttribute('data-reading-mode'), 'source');
           assert.equal(await page.locator('#reader').getAttribute('data-notebook-open'), 'false');
 
+          const internalLink = page.locator('#original .pdf-link-internal[data-link-kind="internal"]').first();
+          await internalLink.waitFor();
+          await internalLink.click();
+          await page.waitForFunction(() => document.getElementById('pageCount')?.textContent !== '6 / 16');
+          await page.locator('#jumpBack').click();
+          await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '6 / 16');
+          await page.locator('#pageCount').click();
+          await page.locator('#pageNumber').fill('1');
+          await page.locator('#pageJump button[type="submit"]').click();
+          const extLink = page.locator('#original .pdf-link-external[href*="github.com/vllm-project/vllm"]').first();
+          await extLink.waitFor();
+          assert.equal(await extLink.getAttribute('target'), '_blank');
+          assert.equal(await extLink.getAttribute('rel'), 'noopener noreferrer');
+
           await resetSettings(ctx.request, host.origin);
           console.log('PASS T3-10: 1440px Japanese bilingual floor + #saveState >= 12px + Shift++/- + n + layout reset.');
         } finally {

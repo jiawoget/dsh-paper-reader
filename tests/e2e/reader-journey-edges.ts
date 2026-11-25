@@ -99,7 +99,7 @@ async function citation(page: Page) {
   const original = page.locator('#original');
   const match = original.getByRole('button', {name:'Reference 1', exact:true}).first();
   await match.focus(); await match.press('Enter');
-  const tip = page.getByRole('tooltip');
+  const tip = page.locator('.citation-preview');
   await tip.getByText(/A named reference/).waitFor();
   await match.press('Escape'); await tip.waitFor({state:'hidden'});
   const missing = original.getByRole('button', {name:'Reference 7', exact:true}).first();
