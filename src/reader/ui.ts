@@ -1,4 +1,35 @@
-import type { Operations } from '../shared/types.js';
+import type { ChatSource, DocumentInfo, NotebookSnapshot, OpenDocument, Operations, PageView, ReaderState, SourceRecord } from '../shared/types.js';
+import type { PaperAnnotation } from '../shared/annotations.js';
+import type { SavedSelectionRange, TranslatedLocator } from '../shared/source-link.js';
+import type { DiscussionRef } from './discussion-drafts.js';
+
+export interface ReaderPort {
+  doc: DocumentInfo;
+  page: number;
+  state: ReaderState;
+  view?: PageView;
+  navigate(id: string, page?: number, anchor?: string, quote?: string, target?: TranslatedLocator, range?: SavedSelectionRange): Promise<void>;
+  openDocument(opened: OpenDocument): Promise<void>;
+  importFile(file: File): Promise<void>;
+  discardDocument?(docId: string): void;
+  refresh(): Promise<void>;
+  repaintNotes(): void;
+  showNotebook(): void;
+  openNotebookSource(url: URL): Promise<void>;
+  addDiscussionScreenshot(): void;
+  discussionScreenshot(source: ChatSource): Promise<string>;
+  resumeDiscussion(ref: DiscussionRef, requestId?: string): Promise<void>;
+  notebookHighlights(): readonly PaperAnnotation[];
+  editNotebookHighlight(id: string, trigger: HTMLElement): void;
+  attachDiscussionPosition?(header: HTMLElement, signal: AbortSignal): void;
+  saveHighlight?(source: SourceRecord, quote: string): Promise<void>;
+  paperSelection?(source?: ChatSource): void;
+  showReadingSide?(side: 'source' | 'translation'): void;
+  discussionChanged?(docId: string): void;
+  regionDiscussionClosed?(explicit: boolean): void;
+  notebook?: NotebookSnapshot;
+  notebookError?: string;
+}
 
 export function readerLabel(english: string, chinese: string): string {
   return /^zh(?:-|$)/i.test(navigator.language) ? chinese : english;
@@ -30,7 +61,8 @@ const paths = {
   settings:'M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M9 15v6', import:'M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5',
   clock:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M12 6v6l4 2', refresh:'M20 12a8 8 0 1 1-2.3-5.6L20 9m0-5v5h-5', globe:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18z',
   folder:'M3 6h7l2 2h9v12H3z', popout:'M13 3h8v8M21 3 10 14M9 6H4v14h15v-5',
-  keyboard:'M3 6h18v12H3zM7 10h.1M11 10h.1M15 10h.1M17 10h.1M7 14h10'
+  keyboard:'M3 6h18v12H3zM7 10h.1M11 10h.1M15 10h.1M17 10h.1M7 14h10',
+  trash:'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'
 } as const;
 export type Glyph = keyof typeof paths;
 export function icon(name: Glyph, size = 16): SVGSVGElement {
@@ -191,4 +223,64 @@ export function inputField(label:string,value='',type='text',placeholder='') {
   const row=el('label','field'); const input=el('input');
   input.type=type;input.value=value;input.placeholder=placeholder;input.autocomplete='off';
   row.append(el('span','',label),input); return {row,input};
+}
+export async function copyText(text: string): Promise<boolean> {
+  if (!navigator.clipboard?.writeText) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+export function downloadFile(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = el('a');
+  link.href = url;
+  link.download = filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+export function bindTablist<T extends string>(
+  tablist: HTMLElement,
+  tabs: readonly { key: T; button: HTMLButtonElement; panel?: HTMLElement }[],
+  initial: T,
+  onSelect?: (key: T) => void
+): (key: T, focus?: boolean) => void {
+  let current = initial;
+  tablist.setAttribute('role', 'tablist');
+  const select = (key: T, focus = false) => {
+    current = key;
+    for (const item of tabs) {
+      const active = item.key === key;
+      item.button.setAttribute('aria-selected', String(active));
+      item.button.tabIndex = active ? 0 : -1;
+      if (item.panel) {
+        item.panel.hidden = !active;
+        if (active) item.panel.setAttribute('aria-labelledby', item.button.id);
+      }
+    }
+    onSelect?.(key);
+    if (focus) tabs.find(item => item.key === key)?.button.focus({ preventScroll: true });
+  };
+  for (const item of tabs) {
+    item.button.type = 'button';
+    item.button.setAttribute('role', 'tab');
+    if (item.panel) item.button.setAttribute('aria-controls', item.panel.id);
+    item.button.addEventListener('click', () => select(item.key));
+  }
+  tablist.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = tabs.findIndex(item => item.key === current);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    select(tabs[next].key, true);
+  });
+  select(initial, false);
+  return select;
 }

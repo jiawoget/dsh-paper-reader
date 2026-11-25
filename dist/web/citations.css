@@ -17,7 +17,7 @@
 }
 .pdf-citation-focus:focus-visible, .pdf-citation-focus.citation-active {
   border-radius: 2px;
-  outline: 1px solid #9366ac;
+  outline: 1px solid var(--quote-border);
   outline-offset: 1px;
   background: rgb(193 157 212 / 14%);
 }

@@ -65,21 +65,13 @@
 .question-model-form .hint:empty { display: none; }
 .paper-chat-notice { flex:none; flex-wrap:wrap; gap:2px 8px; padding:3px 12px; background:var(--surface-tint); color:var(--desk-ink); font-size:12px; }
 .paper-chat-notice .text-btn { padding:0; }
-.zotero-connection { border:1px solid var(--line); background:var(--surface-sunken); border-radius:7px; padding:9px 10px; margin:7px 0 12px; }
-.zotero-connection [role="status"] { margin:0 0 7px; font-size:12px; }
-.zotero-connection[data-connected="true"] [role="status"] { color:var(--success); }
-.zotero-connection .row { flex-wrap:wrap; gap:5px; }
-.zotero-connection .btn { padding:3px 7px; font-size:12px; }
-.zotero-settings-test { display:flex; align-items:center; flex-wrap:wrap; gap:5px 9px; font-size:12px; }
 @media (pointer: coarse), (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
   .paper-chat-toggle, .paper-chat[data-open="true"] .paper-chat-toggle { min-height: 44px; }
   .paper-reply-actions .text-btn, .paper-chat-input :is(textarea, button), .paper-chat-notice .text-btn,
-  .paper-chat-attachment :is(.text-btn, .question-model-trigger), .paper-chat-drafts .text-btn, .paper-chat-origin .source-chip,
-  .zotero-connection .btn, #railBody :is(.search, .btn, .text-btn, .doc-row) { min-height: 44px; }
-  .paper-chat-input button, .paper-chat-notice .text-btn, .paper-chat-attachment .question-model-trigger, .zotero-connection .btn, #railBody .btn { min-width: 44px; }
+  .paper-chat-attachment :is(.text-btn, .question-model-trigger), .paper-chat-drafts .text-btn, .paper-chat-origin .source-chip {
+    min-height: 44px;
+  }
+  .paper-chat-input button, .paper-chat-notice .text-btn, .paper-chat-attachment .question-model-trigger { min-width: 44px; }
   .paper-chat-attachment .icon-btn { min-width: 44px; height: 44px; }
   .paper-chat-lookups summary, .paper-chat-drafts summary { min-height: 44px; padding-block: 13px; }
-  #railBody a.external { display: inline-flex; align-items: center; min-height: 44px; }
-  #railBody .check-row { min-height: 44px; align-items: center; gap: 8px; }
-  #railBody .check-row input { width: 24px; height: 24px; flex: none; margin: 0; }
 }

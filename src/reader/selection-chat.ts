@@ -5,13 +5,13 @@ import { answerMarkdown, selectedAnswer } from './answer-markdown.js';
 import { AnswerNotebookAction } from './answer-notebook.js';
 import { readQuestions, saveQuestions, type AnswerQuote, type MessageDraft } from './discussion-drafts.js';
 import { compactReader } from './reading-desk.js';
-import { settingsDialog, type ReaderPort } from './panels.js';
+import { settingsDialog } from './settings-dialog.js';
 import { questionConnected, questionModelButton } from './question-model.js';
 import { chatSource, isScreenshotAnchor, materialKey, notesForRecordedSource, notesForSelection, previousDiscussionSources, readerNoteTexts, selectionKey, type SelectionContext } from './selection-context.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import type { SelectionNotes } from './selection-notes.js';
-import { activateAfterTouchDrag, api, apiStream, button, byId, el, icon, message, readerLabel as label, toast } from './ui.js';
+import { activateAfterTouchDrag, api, apiStream, button, byId, el, icon, message, readerLabel as label, toast, type ReaderPort } from './ui.js';
 
 interface Turn { role: 'user' | 'assistant'; content: string; quote?: AnswerQuote; source?: ChatSource; requestId?: string }
 interface Request {

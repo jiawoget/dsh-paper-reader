@@ -2,12 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-const RATCHET_SLACK = 10, CSS_MAX_LINE_CHARS = 240, CSS_OVERLAP_CAP = 28, DUP_WINDOW = 8, TEST_DUP_CAP = 7, I18N_REPEAT_CAP = 8;
+const RATCHET_SLACK = 10, CSS_MAX_LINE_CHARS = 240, CSS_OVERLAP_CAP = 0, DUP_WINDOW = 8, TEST_DUP_CAP = 7, I18N_REPEAT_CAP = 8;
 
 const SRC_RATCHET: Record<string, number> = {
-  'src/reader/app.ts': 1000, 'src/reader/pdf-view.ts': 679, 'src/reader/notebook.ts': 585,
+  'src/reader/app.ts': 933, 'src/reader/pdf-view.ts': 679, 'src/reader/notebook.ts': 585,
   'src/reader/selection-chat.ts': 534, 'src/reader/selection-card.ts': 508, 'src/server/reader-store.ts': 480,
-  'src/reader/panels.ts': 469, 'src/shared/citation-export.ts': 437, 'src/reader/paper-chat.ts': 413,
+  'src/shared/citation-export.ts': 437, 'src/reader/paper-chat.ts': 413,
   'src/reader/article-view.ts': 395, 'src/reader/annotation-layer.ts': 377, 'src/server/library.ts': 362,
   'src/reader/reading-desk.ts': 358, 'src/server/reader-model.ts': 351
 };
@@ -18,8 +18,8 @@ const TEST_RATCHET: Record<string, number> = {
   'tests/e2e/book-reading.ts': 602, 'tests/e2e/discussion-continuity.ts': 553
 };
 
-const CSS_RATCHET: Record<string, number> = { 'public/reading-desk.css': 1127 };
-const CSS_LONG_LINE_CAP: Record<string, number> = { 'public/reader.css': 6, 'public/annotations.css': 1 };
+const CSS_RATCHET: Record<string, number> = { 'public/reading-desk.css': 954 };
+const CSS_LONG_LINE_CAP: Record<string, number> = { 'public/annotations.css': 1 };
 const AS_UNKNOWN_RATCHET: Record<string, number> = {
   'src/server/library.ts': 2, 'src/reader/pdf/extract.ts': 1, 'tests/pdf-outline-extraction.test.ts': 2
 };
@@ -121,7 +121,7 @@ function checkFileSizes(root: string, srcFiles: string[], testFiles: string[], s
 }
 
 function checkCss(root: string, cssFiles: string[], failures: string[]): void {
-  const impRe = /!\s*important\b/gi;
+  const impRe = /!\s*important\b/gi, pdfSheetRe = /(?:^|[\s>+~,])\.pdf-sheet(?![\w-])/;
   const parsedByRel = new Map<string, ReturnType<typeof parseCss>>();
   for (const rel of cssFiles) {
     const text = readFileSync(path.join(root, rel), 'utf8'), lines = text.split(/\r?\n/);
@@ -138,7 +138,7 @@ function checkCss(root: string, cssFiles: string[], failures: string[]): void {
       const parts = splitTopLevelCommas(rule.selector).map(s => s.trim()).filter(Boolean);
       const allowed =
         rel === 'public/reader.css' ? parts.length > 0 && parts.every(p => p.includes('[hidden]')) :
-        rel === 'public/pdf-view.css' ? parts.length > 0 && parts.every(p => p.includes('.pdf-sheet')) :
+        rel === 'public/pdf-view.css' ? parts.length > 0 && parts.every(p => pdfSheetRe.test(p)) :
         false;
       if (!allowed) badImp += hits;
     }

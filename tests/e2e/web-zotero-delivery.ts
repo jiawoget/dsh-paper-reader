@@ -75,7 +75,9 @@ function row(dialog: Locator, title: string) {
 function collection(dialog: Locator) { return dialog.getByRole('combobox', { name: 'Collection', exact: true }); }
 
 async function configureZotero(page: Page, mode: 'desktop' | 'web'): Promise<void> {
-  await (await library(page)).getByRole('button', { name: 'Connection settings', exact: true }).click();
+  const lib = await library(page);
+  await zotero(lib).click();
+  await lib.getByRole('button', { name: 'Connection settings', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Zotero connection', exact: true });
   await dialog.getByLabel('Zotero connection').selectOption(mode);
   if (mode === 'web') {

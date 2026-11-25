@@ -1,10 +1,10 @@
 import type { ChatSource } from '../shared/types.js';
 import { goToNoteChapter, type NotebookInsertion } from './notebook.js';
-import { paperNotebook, type ReaderPort } from './panels.js';
+import { paperNotebook } from './notes-panel.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
 import { markdownPassageLabel } from './passage-links.js';
-import { button, el, message, readerLabel as label } from './ui.js';
+import { button, el, message, readerLabel as label, type ReaderPort } from './ui.js';
 
 interface SaveState {
   entries: Map<string, NotebookInsertion>;

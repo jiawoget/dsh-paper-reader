@@ -119,6 +119,7 @@ async function desktop(): Promise<void> {
         await page.locator('#loading').waitFor({ state: 'hidden' });
         await page.getByRole('button', { name: 'Open library' }).click();
         const libraryDialog = page.getByRole('dialog');
+        await libraryDialog.getByRole('tab', { name: 'Zotero', exact: true }).click();
         const row = libraryDialog.getByRole('button', { name: paperTitle, exact: true });
         await row.waitFor();
         assert.equal(await libraryDialog.getByRole('tab', { name: 'Zotero', exact: true }).getAttribute('aria-selected'), 'true');

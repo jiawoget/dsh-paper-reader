@@ -26,8 +26,6 @@
   padding: 8px 0;
 }
 #card .selection-saved-note + .selection-saved-note { border-top: 1px solid var(--line); }
-#card .selection-saved-note > .text-btn,
-#card .selection-note-footer .text-btn { display: inline-flex; align-items: center; gap: 4px; }
 #card .selection-note-footer { justify-content: space-between; margin: 8px 0 0; }
 #card .selection-status { color: var(--success); font-size: 12px; }
 #card .selection-note-field { display: grid; gap: 5px; }
@@ -140,6 +138,7 @@
   font: inherit;
 }
 #card .material-source {
+  display: inline-block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

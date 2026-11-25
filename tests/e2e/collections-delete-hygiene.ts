@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { chromium, type Page, type Response, type Route } from 'playwright-core';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
+import { assertMobilePanelTargets } from './helpers/dom-probes.js';
 import { assertZeroSqliteRows, countRows } from './helpers/fixtures.js';
 import { attachErrorGuards, makePdf, rpc, type ErrorScope } from './helpers/reader.js';
 import { withHost } from './host.js';
@@ -35,8 +36,8 @@ try {
     const sourceUrl = host.origin + appPath + '?doc=pagedattention&page=6&anchor=block-tables';
     for (const word of ['alpha-term', 'beta-term']) {
       const r = await rpc(context.request, host.origin, 'vocab.save', {
-        docId: 'pagedattention', title: 'PagedAttention.pdf', page: 6, anchor: 'block-tables',
-        label: 'Left column', sourceUrl, text: word, meaning: 'Meaning for ' + word, context: 'Context'
+        docId: 'pagedattention', title: word === 'alpha-term' ? 'PagedAttention.pdf' : '2309_06180_Efficient_Memory_Management_PagedAttention_vLLM.pdf', page: 6, anchor: 'block-tables',
+        label: 'Left column', sourceUrl, text: word, meaning: word === 'alpha-term' ? 'Meaning for ' + word : '', context: 'Context for ' + word
       });
       assert.equal(r.status, 200);
     }
@@ -115,6 +116,10 @@ try {
     await vocabTab.click();
     await search.fill('');
     assert.equal(await panel.locator('.list-row').count(), 2);
+    assert.equal(await panel.locator('summary').count(), 1);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await assertMobilePanelTargets(page, '#dialog');
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     // Delete first vocabulary item and verify focus remains valid inside dialog (not lost to document.body)
     await panel.locator('.list-row').first().getByRole('button', { name: 'Remove', exact: true }).click();
@@ -193,9 +198,22 @@ try {
     // Delete active Doc A through Library UI two-step confirmation
     await page.locator('#library').click();
     await dialog.waitFor({ state: 'visible' });
-    await dialog.getByRole('tab', { name: 'On this device', exact: true }).click();
+    assert.equal(await dialog.getByRole('tab', { name: 'On this device', exact: true }).getAttribute('aria-selected'), 'true');
     const rowA = dialog.locator('.library-device-item').filter({ hasText: 'Alpha-Delete.pdf' });
-    await rowA.getByRole('button', { name: 'Delete document', exact: true }).click();
+    await rowA.waitFor({ state: 'visible' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await assertMobilePanelTargets(page, '#dialog');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const delA = rowA.getByRole('button', { name: 'Delete document', exact: true });
+    assert.ok((await delA.locator('path').getAttribute('d'))?.startsWith('M4 7h16'));
+    await delA.click();
+    const cancelDel = rowA.getByRole('button', { name: 'Cancel', exact: true });
+    await cancelDel.waitFor({ state: 'visible' });
+    assert.equal(await cancelDel.evaluate(el => document.activeElement === el), true);
+    await cancelDel.click();
+    assert.equal(await rowA.count(), 1);
+    assert.equal(await delA.evaluate(el => document.activeElement === el), true);
+    await delA.click();
     await rowA.getByRole('button', { name: 'Confirm delete', exact: true }).click();
 
     await dialog.getByText('Document removed from this device.', { exact: true }).waitFor();

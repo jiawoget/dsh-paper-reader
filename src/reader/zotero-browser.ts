@@ -34,7 +34,13 @@ function problem(error: unknown): string {
   return detail;
 }
 
-export function browseZotero(panel: HTMLElement, position: ZoteroBrowsePosition, read: (opened: OpenDocument) => Promise<void>, settings: () => void): void {
+export function browseZotero(
+  panel: HTMLElement,
+  position: ZoteroBrowsePosition,
+  read: (opened: OpenDocument) => Promise<void>,
+  settings: () => void,
+  onConnected?: () => void
+): void {
   const search = el('input', 'search');
   search.type = 'search'; search.ariaLabel = t('Search Zotero', '搜索 Zotero');
   search.placeholder = t('Search title, author or year', '搜索标题、作者或年份');
@@ -137,6 +143,7 @@ export function browseZotero(panel: HTMLElement, position: ZoteroBrowsePosition,
     try {
       const page = await api('zotero.browse', { query, collection: collection || undefined, start, library: position.library });
       if (!live() || version !== generation) return;
+      onConnected?.();
       mode = page.mode; position.library = page.library;
       showLocation();
       for (const item of page.items) {

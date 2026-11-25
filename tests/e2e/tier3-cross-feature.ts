@@ -129,8 +129,8 @@ try {
 
           for (const width of [1440, 1380]) {
             await page.setViewportSize({ width, height: 900 });
-            const saveSize = await page.locator('#saveState').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
-            assert.ok(saveSize >= 12, `#saveState fontSize at ${width}px must be >= 12px, got ${saveSize}`);
+            const statusSize = await page.locator('.notebook-status').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+            assert.ok(statusSize >= 12, `.notebook-status fontSize at ${width}px must be >= 12px, got ${statusSize}`);
           }
           await page.setViewportSize({ width: 1440, height: 900 });
 

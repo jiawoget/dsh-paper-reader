@@ -11,7 +11,11 @@ import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelection
 import { renderArticle } from './article-view.js';
 import { installCitationPreviews } from './citation-preview.js';
 import { openPdf, bundledPdfUrl, type PdfDocument, type PdfPageView } from './pdf-view.js';
-import { collectionsDialog, notesPanel, referencePanel, settingsDialog, type ReaderPort } from './panels.js';
+import { collectionsDialog } from './collections-dialog.js';
+import { notesPanel } from './notes-panel.js';
+import { referencePanel } from './reference-panel.js';
+import { settingsDialog } from './settings-dialog.js';
+import { installShortcuts } from './shortcuts.js';
 import { libraryDialog } from './library-dialog.js';
 import { SelectionCard } from './selection-card.js';
 import { PaperChat } from './paper-chat.js';
@@ -22,7 +26,7 @@ import { readRegion } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
 import { discussionId } from './passage-links.js';
 import type { DiscussionRef } from './discussion-drafts.js';
-import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, toast, type Glyph } from './ui.js';
+import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, toast, type Glyph, type ReaderPort } from './ui.js';
 
 interface ReadingPosition {
   doc: string; page: number; mode: ReadingMode; text: boolean;
@@ -47,7 +51,13 @@ function syncTheme(): void {
         dark = attr !== null && attr !== 'false' && attr !== '0';
       }
     } catch { /* Standalone or cross-origin: fall back to system preference. */ }
-    document.documentElement.dataset.theme = (dark ?? media.matches) ? 'dark' : 'light';
+    const root = document.documentElement, next = (dark ?? media.matches) ? 'dark' : 'light';
+    if (root.dataset.theme && root.dataset.theme !== next) {
+      root.dataset.themeSwitching = '1';
+      root.dataset.theme = next;
+      void root.offsetWidth;
+      delete root.dataset.themeSwitching;
+    } else root.dataset.theme = next;
   };
   apply();
   media.addEventListener('change', apply);
@@ -68,7 +78,6 @@ class Reader implements ReaderPort {
   private pdf?:PdfDocument;
   private loadedId='';
   private leaveBookReading?: (save?: boolean) => void;
-  private shortcutsReturn?: HTMLElement;
   private readonly card=new SelectionCard(this);
   private readonly chat=new PaperChat(this);
   private readonly desk=new ReadingDesk();
@@ -85,7 +94,7 @@ class Reader implements ReaderPort {
       if(note.docId===this.doc.id && note.page===this.page)this.markLayer.locate(note);
     },
     cite: (note, excerpt) => insertNotebookPassage(this,note,excerpt),
-    repaintPage: () => { this.paintMarks(); refreshNotebookHighlights(this); },
+    repaintPage: () => { this.paintMarks(); refreshNotebookHighlights(this); this.syncHighlightPreference(); },
     trigger: id => this.markLayer.trigger(id),
     refresh: () => this.refresh()
   });
@@ -299,31 +308,27 @@ class Reader implements ReaderPort {
     byId(mode==='source'?'originalMode':'parallel').focus({preventScroll:true});
   }
   discussionChanged(docId: string):void { void this.chat.reload(docId); }
+  private syncHighlightPreference():void {
+    byId<HTMLSelectElement>('highlightDisplay').closest('label')!.hidden = this.tab !== 'notes' || this.marks.savedHighlights().length === 0;
+  }
   repaintNotes():void {
     const body=byId('railBody');
     const contents=this.tab==='contents';
     this.desk.setContents(contents);
     byId('contentsPanel').hidden=!contents;
     body.hidden=contents;
-    const title=byId('notebookHandle');
-    title.textContent=contents ? this.doc.title.replace(/\.pdf$/i,'') : label('Notes','笔记');
+    const activeTabId=Object.entries(sidebarTabs).find(([,tab])=>tab===this.tab)?.[0] ?? 'notesTab';
+    byId('notebookHandle').textContent=byId(activeTabId).textContent;
     byId('rail').ariaLabel=contents ? label('Contents','目录') : label('Reading notes','阅读笔记');
     byId('closeRail').ariaLabel=byId('closeRail').title=contents ? label('Close contents','关闭目录') : label('Close notes','关闭笔记');
     byId('notebookPose').ariaLabel=byId('notebookPose').title=contents ? label('Sidebar position','侧边栏位置') : label('Notes position','笔记位置');
-    byId<HTMLSelectElement>('highlightDisplay').closest('label')!.hidden = this.tab !== 'notes';
+    this.syncHighlightPreference();
     for (const [id, tab] of Object.entries(sidebarTabs)) {
       const button=byId(id), selected=this.tab===tab;
       button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;
       if(selected && !contents)body.setAttribute('aria-labelledby',id);
     }
-    const status=byId('saveState');
-    status.hidden=this.tab!=='notes';
     if(contents)return;
-    const connected=Boolean(this.notebook?.uri && !this.notebookError && this.notebook.localConflict===undefined);
-    status.classList.toggle('exported',connected);
-    status.textContent=this.notebookError?label('File unavailable','文件不可用'):this.notebook?.localConflict!==undefined?label('Merge needed','需要合并'):connected?label('Vault','笔记库'):this.notebook?.vaultPending?'Obsidian':label('Local','本机');
-    status.title=this.notebookError || this.notebook?.path || (this.notebook?.vaultPending
-      ? label('The first note creates this chapter’s file in your vault.','写下第一条笔记时，会在 Obsidian 笔记库中创建本章文件。') : label('Stored on this DSH host','保存在当前 DSH 主机'));
     if(this.tab==='marks')this.marks.attach(body);
     else if(this.tab==='notes')notesPanel(this,body);
     else {body.replaceChildren();referencePanel(this,body);}
@@ -411,6 +416,7 @@ class Reader implements ReaderPort {
         this.contents.document(doc,number,pdf);
         if(newNotebook){this.notebook=undefined;this.notebookError=undefined;}
         this.marks.switchDocument(id,doc.book);
+        this.syncHighlightPreference();
         this.chat.document(doc,pdf);
         await this.refresh();
         if(version!==this.epoch)return;
@@ -624,8 +630,7 @@ class Reader implements ReaderPort {
     capture.setAttribute('aria-pressed',String(this.capturing));
     const captureLabel=this.capturing ? label('Cancel screenshot','取消截图') : label('Ask with a screenshot','截图问 AI');
     capture.ariaLabel=capture.title=captureLabel;
-    capture.querySelector('.capture-label')!.textContent=captureLabel;
-    capture.querySelector('.capture-short')!.textContent=this.capturing ? label('Cancel','取消') : label('Capture','截图');
+    capture.querySelector('.capture-label')!.textContent=this.capturing ? label('Cancel','取消') : label('Capture','截图');
     pin.textContent=this.placingPin?label('Cancel placement','取消放置'):
       reading || this.desk.visibleLanguage==='translation' ? label('Pin on PDF','在 PDF 原页标注') : label('Add page note','添加页边笔记');
     pin.setAttribute('aria-pressed',String(this.placingPin));
@@ -759,7 +764,7 @@ class Reader implements ReaderPort {
       click(id,()=>this.navigate(this.doc.id,this.page+step));
     }
     byId('mobileRail').append(el('span','',label('Notes','笔记')));
-    byId('captureRegion').append(icon('capture'),el('span','capture-label'),el('span','capture-short'));
+    byId('captureRegion').append(icon('capture'),el('span','capture-label'));
     click('captureRegion',()=>this.beginCapture());
     byId('originalMode').querySelector('.mode-full')!.textContent=label('Original','原文');byId('originalMode').querySelector('.mode-compact')!.textContent=label('Orig','原文');
     byId('parallel').querySelector('.mode-wide')!.textContent=label('Bilingual','双语对照');
@@ -857,20 +862,28 @@ class Reader implements ReaderPort {
       });
     }
     click('closeDialog',()=>byId<HTMLDialogElement>('dialog').close());
-    const shortcutsDialog=byId<HTMLDialogElement>('shortcutsDialog');
-    click('closeShortcuts',()=>shortcutsDialog.close());
-    shortcutsDialog.addEventListener('close',()=>{
-      const target=this.shortcutsReturn;
-      this.shortcutsReturn=undefined;
-      if(target?.isConnected)target.focus({preventScroll:true});
+    const shortcuts=installShortcuts({
+      isCapturing:()=>this.capturing,
+      isPlacingPin:()=>this.placingPin,
+      cancelCapture:()=>this.cancelCapture(true),
+      closeMenu:()=>this.closeMenu(true),
+      dismissDrawer:()=>this.desk.dismissDrawer(),
+      dismissCard:()=>this.card.dismiss(true),
+      canNextPage:()=>Boolean(this.pdf && this.page<this.pdf.pages),
+      canPrevPage:()=>Boolean(this.pdf && this.page>1),
+      canNextSection:()=>Boolean(this.doc.book && this.page<this.doc.book.sections.length),
+      canPrevSection:()=>Boolean(this.doc.book && this.page>1),
+      toggleBilingual:()=>this.setReadingMode(this.desk.mode==='bilingual'?'source':'bilingual'),
+      toggleSidebar:tab=>this.toggleSidebar(tab),
+      setZoom:resizePages
     });
     click('more',()=>{const menu=byId('menu');if(!menu.hidden){this.closeMenu(true);return;}this.syncMenuActions();menu.hidden=false;
       menu.style.right=Math.max(6,innerWidth-byId('more').getBoundingClientRect().right)+'px';
       menu.style.top=byId('more').getBoundingClientRect().bottom+4+'px';
       byId('more').setAttribute('aria-expanded','true');menu.querySelector<HTMLElement>('button:not([hidden])')?.focus();});
     const items:[string,Glyph,()=>unknown][]=[
-      [label('Library','资料库'),'library',()=>libraryDialog(this)],[label('Vocabulary and history','生词与历史'),'clock',async()=>{await this.refresh();collectionsDialog(this);}],
-      [label('Keyboard shortcuts','快捷键'),'keyboard',()=>this.openShortcuts()],
+      [label('Vocabulary and history','生词与历史'),'clock',async()=>{await this.refresh();collectionsDialog(this);}],
+      [label('Keyboard shortcuts','快捷键'),'keyboard',()=>shortcuts.open()],
       [label('Reset reading layout','重置阅读布局'),'columns',()=>{
         this.readingText=false;this.desk.reset();this.updatePageFormat();resizePages(1);byId<HTMLSelectElement>('zoom').value='1';
         if(this.view && 'setFocusMode' in this.view){
@@ -893,96 +906,6 @@ class Reader implements ReaderPort {
       if(!e.target.closest('#menu,#more'))this.closeMenu();
       if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,dialog'))this.card.dismiss();
     });
-    document.addEventListener('keydown',e=>{
-      if(document.querySelector(':popover-open'))return;
-      if(e.isComposing || e.keyCode===229)return;
-      const openDialog=document.querySelector('dialog[open]');
-      if(e.key==='Escape' && !e.defaultPrevented && !openDialog){
-        if(this.capturing){e.preventDefault();this.cancelCapture(true);return;}
-        if(!byId('menu').hidden){this.closeMenu(true);return;}
-        if(this.desk.dismissDrawer())return;
-        if(!byId('card').hidden){this.card.dismiss(true);return;}
-      }
-      if(e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || openDialog)return;
-      if(e.shiftKey && e.key!=='?' && e.key!=='+')return;
-      if(this.capturing || this.placingPin || !byId('menu').hidden || byId('rail').hasAttribute('aria-modal'))return;
-      if(e.target instanceof Element && e.target.closest('#card,#selectionDock,.annotation-popover,input,textarea,select,dialog,#menu,.desk-split,.paper-chat-grip,[contenteditable]:not([contenteditable="false"]),.cm-editor'))return;
-      if(e.key==='?'){e.preventDefault();this.openShortcuts();return;}
-      const caret=document.getSelection()?.focusNode;
-      const inPdfText=Boolean(caret?.parentElement?.closest('.pdf-native-text,.pdf-reading-text'));
-      if(e.key==='ArrowRight' && !inPdfText){
-        if(this.pdf && this.page<this.pdf.pages){e.preventDefault();byId('next').click();}
-        else if(this.doc.book && this.page<this.doc.book.sections.length){e.preventDefault();byId('nextSection').click();}
-      }
-      if(e.key==='ArrowLeft' && !inPdfText){
-        if(this.pdf && this.page>1){e.preventDefault();byId('prev').click();}
-        else if(this.doc.book && this.page>1){e.preventDefault();byId('previousSection').click();}
-      }
-      if(e.key==='b'){e.preventDefault();this.setReadingMode(this.desk.mode==='bilingual'?'source':'bilingual');}
-      if(e.key==='n'){e.preventDefault();this.toggleSidebar('notes');}
-      if(e.key==='c'){e.preventDefault();this.toggleSidebar('contents');}
-      if(e.key==='='||e.key==='+'||e.key==='-'){
-        const select=byId<HTMLSelectElement>('zoom');
-        const next=Math.max(0,Math.min(select.options.length-1,select.selectedIndex+(e.key==='-'?-1:1)));
-        if(next!==select.selectedIndex){e.preventDefault();select.selectedIndex=next;resizePages(Number(select.value));}
-      }
-    });
-  }
-  private openShortcuts():void {
-    const dialog=byId<HTMLDialogElement>('shortcutsDialog');
-    if(dialog.open)return;
-    this.shortcutsReturn=document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    const body=byId('shortcutsBody');
-    body.replaceChildren();
-    const groups:[string,[string[],string][]][]=[
-      [label('Reading','阅读'),[
-        [['←','→'],label('Previous or next page / book section','上一页或下一页 / 书籍上一节或下一节')],
-        [['b'],label('Toggle original and bilingual view','切换原文与双语对照')],
-        [['+','=','-'],label('Zoom in or zoom out','放大或缩小页面')],
-        [['?'],label('Open keyboard shortcuts','打开快捷键帮助')],
-        [['Esc'],label('Cancel screenshot, close menu, card, or dialog','取消截图，关闭菜单、卡片或弹窗')]
-      ]],
-      [label('Panels','侧边栏与弹窗'),[
-        [['n'],label('Toggle Notes sidebar','打开或收起笔记栏')],
-        [['c'],label('Toggle Contents sidebar','打开或收起目录栏')],
-        [['←','→','Home','End'],label('Switch tabs in sidebar, Library, or Vocabulary and history','切换侧边栏、资料库或生词与历史标签')]
-      ]],
-      [label('Notes editor','笔记编辑器'),[
-        [['Ctrl/Cmd+S'],label('Save notes','保存笔记')],
-        [['Ctrl/Cmd+B'],label('Bold text','加粗文字')],
-        [['Ctrl/Cmd+I'],label('Italic text','斜体文字')],
-        [['Ctrl/Cmd+Z','Ctrl/Cmd+Y'],label('Undo or redo','撤销或重做')]
-      ]],
-      [label('Composers','输入与问答'),[
-        [['Enter','Shift+Enter'],label('Send Paper chat or selection message / new line','发送全文问答或选段提问 / 换行')],
-        [['Ctrl/Cmd+Enter'],label('Save selection note or mark','保存选区笔记或标记')]
-      ]]
-    ];
-    for(const [heading,rows] of groups){
-      const group=el('section','shortcuts-group');
-      group.append(el('h3','',heading));
-      const table=el('table','shortcuts-table');
-      const headRow=el('tr');
-      const keyHead=el('th','',label('Key','按键')); keyHead.scope='col';
-      const actionHead=el('th','',label('Action','操作')); actionHead.scope='col';
-      headRow.append(keyHead,actionHead);
-      const thead=el('thead'); thead.append(headRow);
-      const tbody=el('tbody');
-      for(const [keys,description] of rows){
-        const tr=el('tr'), keyCell=el('td'), descCell=el('td','',description);
-        keys.forEach((key,index)=>{
-          if(index>0)keyCell.append(' / ');
-          keyCell.append(el('kbd','',key));
-        });
-        tr.append(keyCell,descCell);
-        tbody.append(tr);
-      }
-      table.append(thead,tbody);
-      group.append(table);
-      body.append(group);
-    }
-    dialog.showModal();
-    dialog.scrollTop=0;
   }
   private selectTab(tab:SidebarTab):void {
     this.tab=tab;
