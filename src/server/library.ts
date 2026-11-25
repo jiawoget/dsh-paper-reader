@@ -339,13 +339,13 @@ export class Library {
     const job = (async () => {
       if (previous) await previous.catch(() => undefined);
       const result = await this.translations(id, page, targetLanguage);
-      const pending = blocks.filter(b => !result[b.id]?.trim() || (checkChineseQuality && translationQualityError(b.text, result[b.id])));
+      const pending = blocks.filter(b => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || (checkChineseQuality && translationQualityError(b.text, result[b.id])));
       await mkdir(path.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i,i+8);
         const translated = await translate(batch, doc.kind);
         for (const {id:key,text} of batch) {
-          if (!translated[key]?.trim()) fail('The model omitted a paragraph. Retry to resume the translation.', 502);
+          if (!Object.hasOwn(translated, key) || !translated[key]?.trim()) fail('The model omitted a paragraph. Retry to resume the translation.', 502);
           const problem = checkChineseQuality && translationQualityError(text, translated[key]);
           if (problem) fail(problem, 502);
           result[key] = translated[key];

@@ -270,7 +270,7 @@ export class ReadingDesk {
     this.apply();
   }
   private notebookKey(event: KeyboardEvent): void {
-    if (event.defaultPrevented) return;
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       this.showNotebook(false);

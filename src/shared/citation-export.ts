@@ -295,7 +295,7 @@ export function buildCiteKey(meta: CitationMetadata): string {
 
 function resolveBibTeXType(meta: CitationMetadata): string {
   const zoteroKey = nonEmpty(meta.zoteroType)?.toLowerCase();
-  if (zoteroKey && ZOTERO_BIBTEX_TYPES[zoteroKey]) return ZOTERO_BIBTEX_TYPES[zoteroKey];
+  if (zoteroKey && Object.hasOwn(ZOTERO_BIBTEX_TYPES, zoteroKey)) return ZOTERO_BIBTEX_TYPES[zoteroKey];
   if (meta.kind === 'book') return 'book';
   const venue = nonEmpty(meta.venue);
   if (venue) return CONFERENCE_VENUE_RE.test(venue) ? 'inproceedings' : 'article';
@@ -373,7 +373,7 @@ export function formatBibTeX(meta: CitationMetadata): string {
 
 function resolveRISType(meta: CitationMetadata): string {
   const zoteroKey = nonEmpty(meta.zoteroType)?.toLowerCase();
-  if (zoteroKey && ZOTERO_RIS_TYPES[zoteroKey]) return ZOTERO_RIS_TYPES[zoteroKey];
+  if (zoteroKey && Object.hasOwn(ZOTERO_RIS_TYPES, zoteroKey)) return ZOTERO_RIS_TYPES[zoteroKey];
   if (meta.kind === 'book') return 'BOOK';
   const venue = nonEmpty(meta.venue);
   if (venue) return CONFERENCE_VENUE_RE.test(venue) ? 'CONF' : 'JOUR';

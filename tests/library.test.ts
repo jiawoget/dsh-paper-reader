@@ -85,3 +85,30 @@ test('importWeb sanitizes optional bibliographic metadata without altering conte
   assert.equal(enriched.publisher?.length, 500);
   assert.equal(enriched.abstract, 'Line 1\nLine 2');
 });
+
+test('translate guards Object.prototype block IDs such as toString on cache lookup and model results', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-ts-proto-block-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const library = new Library(root);
+  const doc = await library.importPdf('Proto.pdf', Buffer.from('%PDF-1.7\nprototype id test'));
+
+  let calls = 0;
+  const first = await library.translate(doc.id, 1, [{ id: 'toString', text: 'Hello world.' }], async () => {
+    calls += 1;
+    return { toString: '你好世界。' };
+  });
+  assert.equal(calls, 1);
+  assert.equal(first.toString, '你好世界。');
+
+  const cached = await library.translate(doc.id, 1, [{ id: 'toString', text: 'Hello world.' }], async () => {
+    calls += 1;
+    return { toString: '不应重复调用。' };
+  });
+  assert.equal(calls, 1);
+  assert.equal(cached.toString, '你好世界。');
+
+  await assert.rejects(
+    library.translate(doc.id, 2, [{ id: 'toString', text: 'Hello world.' }], async () => ({})),
+    (error: unknown) => error instanceof Error && (error as Error & { status?: number }).status === 502 && /omitted a paragraph/i.test(error.message)
+  );
+});
