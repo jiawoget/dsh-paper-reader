@@ -37,7 +37,7 @@ try {
     for (const word of ['alpha-term', 'beta-term']) {
       const r = await rpc(context.request, host.origin, 'vocab.save', {
         docId: 'pagedattention', title: 'PagedAttention.pdf', page: 6, anchor: 'block-tables',
-        label: 'Left column', sourceUrl, text: word, meaning: 'Meaning for ' + word, context: 'Context'
+        label: 'Left column', sourceUrl, text: word, meaning: word === 'alpha-term' ? 'Meaning for ' + word : '', context: 'Context for ' + word
       });
       assert.equal(r.status, 200);
     }
@@ -116,6 +116,7 @@ try {
     await vocabTab.click();
     await search.fill('');
     assert.equal(await panel.locator('.list-row').count(), 2);
+    assert.equal(await panel.locator('summary').count(), 1);
     await page.setViewportSize({ width: 390, height: 844 });
     await assertMobilePanelTargets(page, '#dialog');
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -199,6 +200,10 @@ try {
     await dialog.waitFor({ state: 'visible' });
     assert.equal(await dialog.getByRole('tab', { name: 'On this device', exact: true }).getAttribute('aria-selected'), 'true');
     const rowA = dialog.locator('.library-device-item').filter({ hasText: 'Alpha-Delete.pdf' });
+    await rowA.waitFor({ state: 'visible' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await assertMobilePanelTargets(page, '#dialog');
+    await page.setViewportSize({ width: 1440, height: 900 });
     const delA = rowA.getByRole('button', { name: 'Delete document', exact: true });
     assert.ok((await delA.locator('path').getAttribute('d'))?.startsWith('M4 7h16'));
     await delA.click();
