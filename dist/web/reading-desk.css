@@ -337,8 +337,8 @@
 .rail-head { display: flex; align-items: center; flex: none; gap: 3px; height: 37px; min-width: 0; padding-inline: 12px; border-bottom: 1px solid var(--line); overflow: hidden; }
 .rail-head [role="tablist"] { height: 100%; display: flex; min-width: 0; flex: 1 1 auto; gap: 8px; overflow-x: auto; scrollbar-width: none; }
 .rail-head [role="tablist"]::-webkit-scrollbar { display: none; }
-.rail-head [role="tab"] { flex: none; font-size: 12px; padding: 0 2px; border-bottom: 2px solid transparent; color: var(--muted); }
-.rail-head [role="tab"][aria-selected="true"] { color: var(--purple); border-bottom-color: var(--purple); font-weight: 650; }
+.rail-head [role="tab"] { flex: none; font-size: 12px; font-weight: 500; padding: 0 2px; border-bottom: 2px solid transparent; color: var(--muted); }
+.rail-head [role="tab"][aria-selected="true"] { color: var(--purple); border-bottom-color: var(--purple); }
 #contentsPanel {
   flex: 1;
   min-height: 0;

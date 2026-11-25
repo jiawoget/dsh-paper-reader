@@ -192,37 +192,61 @@ export async function assertMobilePanelTargets(page: Page, rootSelector: string)
 
 export async function assertDesktopChromeCraft(page: Page): Promise<void> {
   const prevSize = page.viewportSize() ?? { width: 1440, height: 900 };
-  for (const width of [1440, 1280, 1024]) {
-    await page.setViewportSize({ width, height: 900 });
+  const railTabs = [['contentsTab', 'Contents'], ['annotationsTab', 'Marks'], ['refsTab', 'Reference'], ['notesTab', 'Notes']] as const;
+  for (const [width, height] of [[1440, 900], [1280, 800], [1024, 768]] as const) {
+    await page.setViewportSize({ width, height });
     if (await page.locator('#rail').isVisible()) await page.locator('#closeRail').click();
     const closedTop = await page.locator('.topbar').evaluate(el => el.getBoundingClientRect().height);
     await page.locator('#mobileRail').click();
     await page.locator('#rail').waitFor({ state: 'visible' });
+    const tabIds = railTabs.map(([id]) => id);
+    const baseLefts = await page.evaluate(ids => ids.map(id => document.getElementById(id)!.getBoundingClientRect().left), tabIds);
+    for (const [id, name] of railTabs) {
+      await page.locator('#' + id).click();
+      assert.equal((await page.locator('#notebookHandle').innerText()).trim(), name);
+      const tabCheck = await page.evaluate(ids => {
+        const tablist = document.querySelector<HTMLElement>('.rail-head [role="tablist"]')!;
+        return {
+          overflow: tablist.scrollWidth - tablist.clientWidth,
+          lefts: ids.map(tabId => document.getElementById(tabId)!.getBoundingClientRect().left)
+        };
+      }, tabIds);
+      assert.ok(tabCheck.overflow <= 0, `Rail tablist clipped on ${id} at ${width}px: overflow=${tabCheck.overflow}`);
+      for (let i = 0; i < railTabs.length; i++) {
+        const shift = Math.abs(tabCheck.lefts[i] - baseLefts[i]);
+        assert.ok(shift <= 0.5, `Rail tab ${railTabs[i][0]} shifted ${shift}px on ${id} at ${width}px`);
+      }
+    }
+    await page.locator('.notebook-toolbar').waitFor({ state: 'visible' });
     const metrics = await page.evaluate(() => {
       const topbar = document.querySelector('.topbar')!.getBoundingClientRect();
       const title = document.getElementById('docTitle')!.getBoundingClientRect();
-      const tablist = document.querySelector<HTMLElement>('.rail-head [role="tablist"]')!;
       const footer = document.querySelector<HTMLElement>('.notebook-footer');
       const footerRect = footer?.getBoundingClientRect();
+      const toolbar = document.querySelector<HTMLElement>('.notebook-toolbar');
+      const toolbarButtons = toolbar ? [...toolbar.querySelectorAll<HTMLElement>('button')].filter(el => !el.hidden && el.getBoundingClientRect().width > 0) : [];
+      const clippedToolbarButtons = toolbarButtons
+        .filter(el => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1)
+        .map(el => ({ text: el.textContent?.trim() || el.getAttribute('aria-label') || '', sh: el.scrollHeight, ch: el.clientHeight, sw: el.scrollWidth, cw: el.clientWidth }));
       return {
         topbarHeight: topbar.height,
         titleWidth: title.width,
         saveStateExists: Boolean(document.getElementById('saveState')),
-        tablistOverflow: tablist.scrollWidth - tablist.clientWidth,
         footerHeight: footerRect?.height ?? 0,
-        footerOverflow: footer ? footer.scrollWidth - footer.clientWidth : 0
+        footerOverflow: footer ? footer.scrollWidth - footer.clientWidth : 0,
+        toolbarOverflow: toolbar ? toolbar.scrollWidth - toolbar.clientWidth : -1,
+        toolbarButtonCount: toolbarButtons.length,
+        clippedToolbarButtons
       };
     });
     assert.equal(metrics.saveStateExists, false, '#saveState must be removed');
     assert.ok(Math.abs(metrics.topbarHeight - closedTop) <= 1, `Topbar jumped at ${width}px: ${closedTop} -> ${metrics.topbarHeight}`);
     assert.ok(metrics.titleWidth >= 80, `#docTitle width ${metrics.titleWidth} < 80px at ${width}px`);
-    assert.ok(metrics.tablistOverflow <= 1, `Rail tablist clipped at ${width}px: overflow=${metrics.tablistOverflow}`);
     assert.ok(metrics.footerHeight > 0 && metrics.footerHeight <= 42 && metrics.footerOverflow <= 1,
       `Notebook footer wrapped or overflowed at ${width}px: ${JSON.stringify(metrics)}`);
-  }
-  for (const [id, name] of [['annotationsTab', 'Marks'], ['refsTab', 'Reference'], ['contentsTab', 'Contents'], ['notesTab', 'Notes']] as const) {
-    await page.locator('#' + id).click();
-    assert.equal((await page.locator('#notebookHandle').innerText()).trim(), name);
+    assert.ok(metrics.toolbarButtonCount >= 4 && metrics.toolbarOverflow >= 0 && metrics.toolbarOverflow <= 1,
+      `Notebook toolbar overflowed at ${width}px: ${JSON.stringify(metrics)}`);
+    assert.deepEqual(metrics.clippedToolbarButtons, [], `Notebook toolbar buttons clipped/wrapped at ${width}px: ${JSON.stringify(metrics.clippedToolbarButtons)}`);
   }
   await page.locator('#closeRail').click();
   await page.setViewportSize({ width: 1440, height: 900 });

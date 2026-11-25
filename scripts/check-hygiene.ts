@@ -121,7 +121,7 @@ function checkFileSizes(root: string, srcFiles: string[], testFiles: string[], s
 }
 
 function checkCss(root: string, cssFiles: string[], failures: string[]): void {
-  const impRe = /!\s*important\b/gi, pdfSheetRe = /(?:^|[\s>+~,(])\.pdf-sheet(?![\w-])/;
+  const impRe = /!\s*important\b/gi, pdfSheetRe = /(?:^|[\s>+~,])\.pdf-sheet(?![\w-])/;
   const parsedByRel = new Map<string, ReturnType<typeof parseCss>>();
   for (const rel of cssFiles) {
     const text = readFileSync(path.join(root, rel), 'utf8'), lines = text.split(/\r?\n/);

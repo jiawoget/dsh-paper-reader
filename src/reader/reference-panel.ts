@@ -81,6 +81,7 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
       readOnly = result.access === 'read';
       if (configured) addItem.disabled = readOnly || !result.connected;
       if (autoRestore && result.connected && configured && !linkedZotero && !summary.hasChildNodes()) {
+        zoteroSettled = false;
         zoteroPending = restore().catch(showRestoreError);
       }
       return result.connected;

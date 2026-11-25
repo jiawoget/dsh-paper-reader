@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { chromium, type Page, type Response, type Route } from 'playwright-core';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
+import { assertMobilePanelTargets } from './helpers/dom-probes.js';
 import { assertZeroSqliteRows, countRows } from './helpers/fixtures.js';
 import { attachErrorGuards, makePdf, rpc, type ErrorScope } from './helpers/reader.js';
 import { withHost } from './host.js';
@@ -115,6 +116,9 @@ try {
     await vocabTab.click();
     await search.fill('');
     assert.equal(await panel.locator('.list-row').count(), 2);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await assertMobilePanelTargets(page, '#dialog');
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     // Delete first vocabulary item and verify focus remains valid inside dialog (not lost to document.body)
     await panel.locator('.list-row').first().getByRole('button', { name: 'Remove', exact: true }).click();

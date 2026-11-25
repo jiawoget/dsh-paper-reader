@@ -40,7 +40,7 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
       [label('Panels', '侧边栏与弹窗'), [
         [['n'], label('Toggle Notes sidebar', '打开或收起笔记栏')],
         [['c'], label('Toggle Contents sidebar', '打开或收起目录栏')],
-        [['←', '→', 'Home', 'End'], label('Switch tabs in sidebar, Library, or Vocabulary and history', '切换侧边栏、资料库或生词与历史标签')]
+        [['←', '→', 'Home', 'End'], label('Switch tabs in sidebar, Library, Connections, or Vocabulary and history', '在侧栏、资料库、连接设置或生词与历史中切换标签页')]
       ]],
       [label('Notes editor', '笔记编辑器'), [
         [['Ctrl/Cmd+S'], label('Save notes', '保存笔记')],
