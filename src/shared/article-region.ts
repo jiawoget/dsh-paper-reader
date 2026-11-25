@@ -1,4 +1,4 @@
-export interface ArticleRegion {
+interface ArticleRegion {
   side: 'source' | 'translation' | 'both';
   start: string;
   end: string;

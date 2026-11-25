@@ -1,7 +1,7 @@
 import type { Box } from './model.js';
 
-export interface PaperPoint { x: number; y: number }
-export interface PaperRegion { left: number; top: number; right: number; bottom: number }
+interface PaperPoint { x: number; y: number }
+interface PaperRegion { left: number; top: number; right: number; bottom: number }
 const units = 10_000;
 
 /** Store the two corners relative to the full rotated PDF page, independent of zoom and margins. */

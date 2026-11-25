@@ -36,6 +36,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "check": "tsx scripts/check-hygiene.ts",
     "install:translation-model": "tsx scripts/install-translation-model.ts",
     "build": "npm run typecheck && tsx scripts/build.ts",
     "dev": "tsx scripts/build.ts --watch",

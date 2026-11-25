@@ -51,7 +51,7 @@ export function selectedAnswer(log: HTMLElement): { body: HTMLElement; text: str
 }
 
 /** KaTeX includes a visual tree and a screen-reader tree. Quote a touched equation exactly once. */
-export function excerptFromAnswer(selected: Range): string {
+function excerptFromAnswer(selected: Range): string {
   const range = selected.cloneRange();
   function mathAt(node: Node): Element | null | undefined {
     const element = node instanceof Element ? node : node.parentElement;

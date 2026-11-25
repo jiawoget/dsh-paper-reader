@@ -2,17 +2,28 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { chromium, type APIRequestContext, type BrowserContext, type Download, type FrameLocator, type Locator, type Page } from 'playwright-core';
+import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import type { DocumentInfo, ReaderState } from '../../src/shared/types.js';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
 import { cardElement, clickCard, openToolbar, until } from './extension-controls.js';
-import { withHost, type HostFixture } from './host.js';
-import { startJsonFixture } from './integration-fixtures.js';
+import { assertDarkAndContrast, computeElementMetrics, inspectShadowCardMetrics, type RawElementSample } from './helpers/contrast.js';
+import {
+  failClipboardExecCommand, inspectTranslatedBlocks, mockClipboardFallback, readClipboardFallback, restoreClipboard
+} from './helpers/dom-probes.js';
+import {
+  assertZeroSqliteRows, closeServer, snapshotDocSqliteCounts,
+  startCompositePublisher, startRichZoteroFixture, startVersatileLlmFixture
+} from './helpers/fixtures.js';
+import { assertNoZhEnglishLeaks, collectChromeStrings } from './helpers/i18n.js';
+import {
+  attachErrorGuards, authContext, makePdf, openReaderInShell, openReaderPage,
+  readDownload, resetSettings, rpc, saveTargetLanguage, selectFirstPdfRun, type ErrorScope
+} from './helpers/reader.js';
+import { withHost } from './host.js';
 import { dragBox } from './selection-gestures.js';
 import { markdownLinks, vaultSource, visibleMarkdown } from './vault-links.js';
 
@@ -22,572 +33,13 @@ const zoteroPreload = new URL('./integration-zotero-preload.ts', import.meta.url
 const publisherPreload = new URL('./book-reading-preload.ts', import.meta.url).href;
 const appPath = '/api/paper-reader/app/index.html';
 
-interface ColorMetrics {
-  fg: string;
-  bg: string;
-  fgLum: number;
-  bgLum: number;
-  ratio: number;
-  fontSize: number;
-  colorScheme: string;
-}
-
-interface ErrorScope {
-  allowZotero503: boolean;
-  allowExpected502: boolean;
-}
-
-const CONTRAST_HELPER = `
-function parseCssColor(raw) {
-  if (!raw || raw === 'transparent') return [0, 0, 0, 0];
-  const srgb = /color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+))?\\)/.exec(raw);
-  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] !== undefined ? Number(srgb[4]) : 1];
-  const rgba = /rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:[,/\\s]+([\\d.]+%?))?\\s*\\)/.exec(raw);
-  if (!rgba) return [0, 0, 0, 1];
-  let a = 1;
-  if (rgba[4] !== undefined) a = rgba[4].endsWith('%') ? parseFloat(rgba[4]) / 100 : Number(rgba[4]);
-  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), a];
-}
-function composite(top, bottom) {
-  const a = top[3], outA = a + bottom[3] * (1 - a);
-  if (outA <= 0) return [0, 0, 0, 0];
-  return [
-    (top[0] * a + bottom[0] * bottom[3] * (1 - a)) / outA,
-    (top[1] * a + bottom[1] * bottom[3] * (1 - a)) / outA,
-    (top[2] * a + bottom[2] * bottom[3] * (1 - a)) / outA,
-    outA
-  ];
-}
-function relLum(rgb) {
-  const c = v => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
-  return 0.2126 * c(rgb[0]) + 0.7152 * c(rgb[1]) + 0.0722 * c(rgb[2]);
-}
-function contrastRatio(a, b) {
-  const l1 = Math.max(a, b), l2 = Math.min(a, b);
-  return (l1 + 0.05) / (l2 + 0.05);
-}
-function effectiveBg(el) {
-  const layers = [];
-  for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) {
-    layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
-  }
-  const darkRoot = document.documentElement.dataset.theme === 'dark' ||
-    getComputedStyle(document.documentElement).colorScheme.includes('dark');
-  let acc = darkRoot ? [19, 22, 31, 1] : [255, 255, 255, 1];
-  for (let i = layers.length - 1; i >= 0; i--) {
-    if (layers[i][3] > 0) acc = composite(layers[i], acc);
-  }
-  return acc;
-}
-function measureElement(el) {
-  const style = getComputedStyle(el);
-  const bg = effectiveBg(el);
-  const fgRaw = parseCssColor(style.color);
-  const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
-  const fgLum = relLum(fg), bgLum = relLum(bg);
-  return {
-    fg: style.color,
-    bg: 'rgb(' + Math.round(bg[0]) + ', ' + Math.round(bg[1]) + ', ' + Math.round(bg[2]) + ')',
-    fgLum, bgLum,
-    ratio: contrastRatio(fgLum, bgLum),
-    fontSize: parseFloat(style.fontSize) || 0,
-    colorScheme: style.colorScheme
-  };
-}
-`;
-
-const ZH_ENGLISH_ALLOWLIST = new Set([
-  'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown',
-  'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
-  'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
-  'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
-  'woosuk', 'et', 'al', 'key', 'value', 'kv', 'tier', 'llm', 'fixture'
-]);
-const BANNED_ZH_RE = /(?:阅读笔记本|笔记本|批注索引|批注|Obsidian\s*仓库|已存入仓库|存入仓库)/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise<void>(resolve => {
-    server.close(() => resolve());
-    server.closeAllConnections();
+async function importPdf(ctx: BrowserContext, origin: string, file: string, title: string, paragraphs: string[], twoColumn = false): Promise<DocumentInfo> {
+  const bytes = await makePdf(ctx, title, paragraphs, twoColumn);
+  const res = await ctx.request.post(`${origin}/api/paper-reader/import-pdf?title=${encodeURIComponent(file)}`, {
+    headers: { 'content-type': 'application/pdf' }, data: bytes
   });
-}
-
-async function measureLocator(locator: Locator): Promise<ColorMetrics> {
-  return locator.evaluate((el, helper) => {
-    const fn = new Function('el', helper + '\nreturn measureElement(el);') as (node: Element) => ColorMetrics;
-    return fn(el);
-  }, CONTRAST_HELPER);
-}
-
-async function assertDarkAndContrast(locator: Locator, label: string, maxBgLum = 0.12, minRatio = 4.5): Promise<ColorMetrics> {
-  const m = await measureLocator(locator);
-  assert.ok(m.bgLum <= maxBgLum, `${label}: expected dark bg lum <= ${maxBgLum}, got ${m.bgLum.toFixed(4)} (${m.bg})`);
-  assert.ok(m.ratio >= minRatio, `${label}: expected contrast >= ${minRatio}:1, got ${m.ratio.toFixed(2)}:1 (fg=${m.fg}, bg=${m.bg})`);
-  return m;
-}
-
-async function collectChromeStrings(page: Page): Promise<{ text: string; source: string }[]> {
-  return page.evaluate(() => {
-    const excluded = '.pdf-sheet, .pdf-reading-text p, .pdf-reading-text h2, .meaning, #card blockquote, .web-reading-sheet, .cm-content, .quote, .selection-excerpt blockquote, .selection-heading h2, #docTitle, #docMeta, #railBody h1, .list-row strong, .toc-entry, .toc-fold, .paper-answer, .selection-answer, .library-row-text strong, .library-row-text small, .doc-row strong, .doc-row small, #sourceInfo, .citation-export-status';
-    const items: { text: string; source: string }[] = [];
-    const seen = new Set<string>();
-    for (const el of document.querySelectorAll<HTMLElement>('body *')) {
-      if (el.closest(excluded)) continue;
-      if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'SVG' || el.closest('svg')) continue;
-      const hidden = el.closest('[hidden]') && !el.closest('dialog[open]');
-      const idTag = el.id ? '#' + el.id : el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : el.tagName.toLowerCase();
-      const candidates: [string | null | undefined, string][] = [
-        [el.getAttribute('aria-label'), `${idTag}[aria-label]`],
-        [el.getAttribute('title'), `${idTag}[title]`],
-        [el.getAttribute('placeholder'), `${idTag}[placeholder]`]
-      ];
-      if (!hidden) {
-        for (const child of el.childNodes) {
-          if (child.nodeType === Node.TEXT_NODE) candidates.push([child.textContent, `${idTag}:text`]);
-        }
-      }
-      for (const [raw, source] of candidates) {
-        const value = (raw ?? '').replace(/\s+/gu, ' ').trim();
-        if (!value) continue;
-        const key = source + '|' + value;
-        if (!seen.has(key)) { seen.add(key); items.push({ text: value, source }); }
-      }
-    }
-    return items;
-  });
-}
-
-function assertNoZhEnglishLeaks(items: { text: string; source: string }[], label: string): void {
-  const leaks: string[] = [];
-  for (const item of items) {
-    assert.equal(item.text.match(BANNED_ZH_RE), null, `[${label}] Banned ZH term in ${item.source}: ${JSON.stringify(item.text)}`);
-    const bad = (item.text.match(/[A-Za-z]{3,}/g) ?? []).filter(w => !ZH_ENGLISH_ALLOWLIST.has(w.toLowerCase()));
-    if (bad.length) leaks.push(`${item.source}: "${item.text}" -> [${bad.join(', ')}]`);
-  }
-  assert.deepEqual(leaks, [], `[${label}] Untranslated English in zh-CN:\n${leaks.join('\n')}`);
-}
-
-function attachErrorGuards(page: Page, tag: string, scope: ErrorScope, pageErrors: string[], consoleErrors: string[]): void {
-  page.setDefaultTimeout(12_000);
-  page.on('pageerror', err => pageErrors.push(`${tag}: ${err.message}`));
-  page.on('console', msg => {
-    if (msg.type() !== 'error') return;
-    const text = msg.text();
-    const url = msg.location().url;
-    if (url.endsWith('/favicon.ico')) return;
-    if (scope.allowZotero503 && text.includes('503') && url.endsWith('/api/paper-reader/action')) return;
-    if (scope.allowExpected502 && text.includes('502') && url.endsWith('/api/paper-reader/action')) return;
-    consoleErrors.push(`${tag}: ${text} (${url})`);
-  });
-}
-
-async function rpc<T = Record<string, unknown>>(
-  request: APIRequestContext,
-  origin: string,
-  op: string,
-  payload: Record<string, unknown> = {}
-): Promise<{ status: number; body: T }> {
-  const res = await request.post(origin + '/api/paper-reader/action', {
-    headers: { 'content-type': 'application/json' },
-    data: { op, payload }
-  });
-  const text = await res.text();
-  try {
-    return { status: res.status(), body: JSON.parse(text) as T };
-  } catch {
-    throw new Error(`RPC ${op} returned HTTP ${res.status()} non-JSON: ${text.slice(0, 120)}`);
-  }
-}
-
-async function authContext(ctx: BrowserContext, host: HostFixture): Promise<void> {
-  const res = await ctx.request.get(host.authenticatedUrl);
-  assert.ok(res.ok(), `Failed to authenticate context: HTTP ${res.status()}`);
-}
-
-async function resetSettings(request: APIRequestContext, origin: string, overrides: Record<string, unknown> = {}): Promise<void> {
-  const res = await rpc(request, origin, 'settings.save', {
-    baseUrl: '',
-    model: 'deepseek-flash',
-    clearApiKey: overrides.apiKey === undefined,
-    targetLanguage: 'Simplified Chinese',
-    vaultPath: '',
-    zoteroMode: 'desktop',
-    zoteroLibraryId: '',
-    clearZoteroKey: overrides.zoteroApiKey === undefined,
-    ...overrides
-  });
-  assert.equal(res.status, 200, 'resetSettings failed: HTTP ' + res.status);
-}
-
-async function openReaderInShell(page: Page, authenticatedUrl: string): Promise<FrameLocator> {
-  await page.goto(authenticatedUrl, { waitUntil: 'domcontentloaded' });
-  const sidebar = page.getByRole('button', { name: 'Paper Reader', exact: true });
-  const noticeAction = page.getByRole('button', {
-    name: /^(Continue|继续|Configure later|稍后配置|Skip(?: for now)?|跳过|Get started|开始使用|Open app|Got it|知道了)$/i
-  });
-  const closeDialog = page.getByRole('dialog').getByRole('button', { name: /^(Close|关闭)$/i });
-  const pane = page.frameLocator('iframe[title="Paper Reader"]');
-  const deadline = Date.now() + 35_000;
-  let mounted = false;
-  while (Date.now() < deadline) {
-    if (await closeDialog.last().isVisible().catch(() => false)) {
-      await closeDialog.last().click({ timeout: 1500 }).catch(() => undefined);
-      continue;
-    }
-    const action = noticeAction.last();
-    if (await action.isVisible().catch(() => false) && await action.isEnabled().catch(() => false)) {
-      await action.click({ timeout: 1500 }).catch(() => undefined);
-      continue;
-    }
-    if (mounted) {
-      const usable = await pane.getByRole('button', { name: /^(Open library|打开资料库)$/ }).click({ trial: true, timeout: 600 }).then(() => true, () => false);
-      if (usable) return pane;
-    } else if (await sidebar.isVisible().catch(() => false)) {
-      const opened = await sidebar.click({ timeout: 600 }).then(() => true, () => false);
-      if (opened) {
-        await pane.locator('[data-pdf-side="source"], .web-reading-sheet[data-side="source"]').first().waitFor({ timeout: 25_000 });
-        mounted = true;
-        continue;
-      }
-    }
-    await page.waitForTimeout(100);
-  }
-  const labels = await page.getByRole('button').allTextContents();
-  throw new Error('DSH shell onboarding did not reach Paper Reader. Controls: ' + labels.join(' | ').slice(0, 480));
-}
-
-async function openReaderPage(
-  context: BrowserContext,
-  host: HostFixture,
-  query: string,
-  tag: string,
-  scope: ErrorScope,
-  pageErrors: string[],
-  consoleErrors: string[]
-): Promise<Page> {
-  const page = await context.newPage();
-  attachErrorGuards(page, tag, scope, pageErrors, consoleErrors);
-  await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
-  await page.goto(host.origin + appPath + query, { waitUntil: 'domcontentloaded' });
-  await page.locator('#loading').waitFor({ state: 'hidden', timeout: 25_000 });
-  return page;
-}
-
-async function readDownload(download: Download): Promise<{ filename: string; text: string }> {
-  const filename = download.suggestedFilename();
-  const filePath = await download.path();
-  assert.ok(filePath, `Missing download path for ${filename}`);
-  return { filename, text: await readFile(filePath, 'utf8') };
-}
-
-async function makePdf(context: BrowserContext, title: string, paragraphs: string[], twoColumn = false): Promise<Buffer> {
-  const builder = await context.newPage();
-  try {
-    const colCss = twoColumn ? 'section{column-count:2;column-gap:0.35in}' : '';
-    await builder.setContent(
-      `<style>@page{size:letter;margin:0.8in}body{font:13pt Georgia;line-height:1.45}${colCss}</style>` +
-      `<h1>${title}</h1><section>` + paragraphs.map(p => `<p>${p}</p>`).join('') + '</section>'
-    );
-    return Buffer.from(await builder.pdf({ preferCSSPageSize: true }));
-  } finally {
-    await builder.close();
-  }
-}
-
-async function selectFirstPdfRun(page: Page): Promise<void> {
-  const firstRun = page.locator('#original .pdf-native-text [data-block-id]').first();
-  await firstRun.waitFor({ state: 'visible' });
-  const blockId = await firstRun.getAttribute('data-block-id');
-  assert.ok(blockId, 'Expected PDF native text block ID');
-  await page.locator(`#original .pdf-native-text [data-block-id="${blockId}"]`).evaluateAll(elements => {
-    const start = elements[0]?.firstChild;
-    let end = start;
-    for (const node of elements) {
-      if (node.firstChild instanceof Text) end = node.firstChild;
-    }
-    if (!(start instanceof Text) || !(end instanceof Text)) throw new Error('Missing PDF source text runs.');
-    const range = document.createRange();
-    range.setStart(start, 0);
-    range.setEnd(end, end.length);
-    const sel = window.getSelection()!;
-    sel.removeAllRanges();
-    sel.addRange(range);
-    elements[0].dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
-  });
-}
-
-async function saveTargetLanguage(reader: Page | FrameLocator, target: string, options?: { custom?: boolean; zh?: boolean }): Promise<void> {
-  await reader.locator('#more').click();
-  await reader.locator('#menu').getByRole('button', { name: options?.zh ? '连接设置' : 'Connections', exact: true }).click();
-  const dialog = reader.getByRole('dialog');
-  await dialog.waitFor({ state: 'visible' });
-  const select = dialog.getByRole('combobox', { name: options?.zh ? '翻译目标语言' : 'Translation language', exact: true });
-  if (options?.custom) {
-    await select.selectOption('__custom__');
-    const customInput = dialog.getByLabel(options?.zh ? '自定义目标语言' : 'Custom target language', { exact: true });
-    await customInput.waitFor({ state: 'visible' });
-    await customInput.fill(target);
-  } else {
-    await select.selectOption(target);
-  }
-  await dialog.getByRole('button', { name: options?.zh ? '保存连接设置' : 'Save connections', exact: true }).click();
-  await dialog.waitFor({ state: 'hidden' });
-}
-
-function countRows(db: DatabaseSync, sql: string, ...params: (string | number)[]): number {
-  const row = db.prepare(sql).get(...params) as { n: number };
-  return row.n;
-}
-
-function assertZeroSqliteRows(dbPath: string, docId: string): void {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const prefix = docId + '\u001f';
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM entries WHERE docId=?', docId), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM annotations WHERE docId=?', docId), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM chat_exchanges WHERE docId=?', docId), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?', docId, prefix.length, prefix), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?', docId, prefix.length, prefix), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebooks WHERE docId=? OR substr(docId,1,?)=?', docId, prefix.length, prefix), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM book_positions WHERE docId=?', docId), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM pdf_outlines WHERE docId=?', docId), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM article_captures WHERE docId=?', docId), 0);
-    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM citations WHERE identity=?', 'document/' + docId), 0);
-  } finally {
-    db.close();
-  }
-}
-
-function snapshotDocSqliteCounts(dbPath: string, docId: string): { entries: number; annotations: number; chats: number; notebooks: number } {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return {
-      entries: countRows(db, 'SELECT COUNT(*) AS n FROM entries WHERE docId=?', docId),
-      annotations: countRows(db, 'SELECT COUNT(*) AS n FROM annotations WHERE docId=?', docId),
-      chats: countRows(db, 'SELECT COUNT(*) AS n FROM chat_exchanges WHERE docId=?', docId),
-      notebooks: countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=?', docId)
-    };
-  } finally {
-    db.close();
-  }
-}
-
-async function startCompositePublisher(openStaxOrigin: string, articles: Map<string, string>) {
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
-    const html = articles.get(pathname);
-    if (html) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(html);
-      return;
-    }
-    const target = new URL(req.url ?? '/', openStaxOrigin);
-    const proxy = httpRequest(target, { method: req.method, headers: { ...req.headers, host: target.host } }, up => {
-      res.writeHead(up.statusCode ?? 502, up.headers);
-      up.pipe(res);
-    });
-    proxy.on('error', () => { if (!res.headersSent) res.writeHead(502).end(); });
-    req.pipe(proxy);
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const addr = server.address();
-  assert.ok(addr && typeof addr === 'object');
-  return { origin: `http://127.0.0.1:${addr.port}`, close: () => closeServer(server) };
-}
-
-async function startRichZoteroFixture() {
-  const credential = randomUUID();
-  const libraryId = '884442';
-  const richKey = 'RICHZT42';
-  const collectionKey = 'CITECL42';
-  const richItem = {
-    key: richKey,
-    version: 3,
-    links: { alternate: { href: `https://www.zotero.org/groups/${libraryId}/items/${richKey}` } },
-    meta: { creatorSummary: 'Ada Lovelace and Charles Babbage' },
-    data: {
-      itemType: 'journalArticle',
-      title: 'Analytical Engine Memory Tables',
-      date: '2024-05-10',
-      DOI: '10.1000/zotero.2024.42',
-      url: 'https://journal.example.org/analytical-engine',
-      collections: [collectionKey]
-    }
-  };
-  const server = await startJsonFixture((req, url) => {
-    if (req.headers['zotero-api-key'] !== credential || req.headers['zotero-api-version'] !== '3') return { status: 403 };
-    const base = '/groups/' + libraryId;
-    if (url.pathname === base + '/collections') {
-      return { status: 200, headers: { 'Total-Results': '1' }, value: [{ key: collectionKey, data: { name: 'Tier4 Refs', parentCollection: false } }] };
-    }
-    if (url.pathname === base + '/items/top') return { status: 200, value: [richItem] };
-    if (url.pathname === base + '/items/' + richKey) return { status: 200, value: richItem };
-    return { status: 404 };
-  });
-  return { ...server, credential, libraryId, richItem };
-}
-
-interface LlmCall {
-  mode: 'blocks' | 'passage' | 'vision' | 'paper-chat';
-  target: string;
-  hasValidPng: boolean;
-}
-
-async function startVersatileLlmFixture() {
-  const key = randomUUID();
-  const model = 'tier4-llm-fixture';
-  const calls: LlmCall[] = [];
-  let failNextWith502 = 0;
-
-  const prefixByTarget: Record<string, string> = {
-    'Japanese': '日本語訳: ',
-    'French': 'Traduction française : ',
-    'Spanish': 'Traducción al español: ',
-    'Korean': '한국어 번역: ',
-    'Brazilian Portuguese': 'Tradução PT-BR: '
-  };
-
-  const server = createServer(async (req, res) => {
-    if (req.url !== '/v1/chat/completions' || req.method !== 'POST') { res.writeHead(404).end(); return; }
-    if (req.headers.authorization !== 'Bearer ' + key) { res.writeHead(403).end(); return; }
-    const chunks: Buffer[] = [];
-    for await (const c of req) chunks.push(Buffer.from(c));
-    let body: unknown;
-    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
-    if (!isRecord(body) || body.model !== model || !Array.isArray(body.messages)) { res.writeHead(400).end(); return; }
-
-    if (failNextWith502 > 0) {
-      failNextWith502--;
-      res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'Upstream 502 transient error' } }));
-      return;
-    }
-
-    const messages = body.messages.filter(isRecord);
-    const system = String(messages.find(m => m.role === 'system')?.content ?? '');
-    const lastUser = messages.filter(m => m.role === 'user').at(-1)?.content;
-
-    let hasValidPng = false;
-    if (Array.isArray(lastUser)) {
-      const imgPart = lastUser.find(p => isRecord(p) && p.type === 'image_url') as { image_url?: { url?: string } } | undefined;
-      const dataUrl = imgPart?.image_url?.url ?? '';
-      if (dataUrl.startsWith('data:image/png;base64,')) {
-        const bytes = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
-        hasValidPng = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-      }
-    }
-
-    const blockMatch = /Translate each passage in full into ([^.]+)\./.exec(system);
-    if (blockMatch) {
-      const target = blockMatch[1].trim();
-      calls.push({ mode: 'blocks', target, hasValidPng: false });
-      const userStr = typeof lastUser === 'string' ? lastUser : '';
-      const parsed = JSON.parse(userStr) as { blocks: { id: string; text: string }[] };
-      const translations = Object.fromEntries(parsed.blocks.map(block => {
-        if (target === 'Simplified Chinese') return [block.id, '简体中文译文：分页注意力按需映射逻辑块与物理块。'];
-        const prefix = prefixByTarget[target] ?? `[${target}] `;
-        const snippet = block.text.length > 84 ? block.text.slice(0, 68) : block.text;
-        return [block.id, prefix + snippet];
-      }));
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ translations }) } }]
-      }));
-      return;
-    }
-
-    const translateMatch = /Translate into ([^.]+)\./.exec(system);
-    const defaultMatch = /Use ([^.]+) by default/.exec(system);
-    const target = (translateMatch?.[1] ?? defaultMatch?.[1] ?? 'English').trim();
-    const isPaperChat = system.toLowerCase().includes('full paper') || system.toLowerCase().includes('entire paper') || system.toLowerCase().includes('document');
-    calls.push({ mode: hasValidPng ? 'vision' : isPaperChat ? 'paper-chat' : 'passage', target, hasValidPng });
-
-    const content = hasValidPng
-      ? '截图解析：块表将逻辑块映射到物理显存块，避免连续分配碎片。'
-      : isPaperChat
-        ? '全文分析：该方案通过虚拟块表消除键值缓存内部碎片并支持前缀共享。'
-        : `[${target}] Contextual answer for selected passage.`;
-
-    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }]
-    }));
-  });
-
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const addr = server.address();
-  assert.ok(addr && typeof addr === 'object');
-  return {
-    baseUrl: `http://127.0.0.1:${addr.port}/v1`,
-    key,
-    model,
-    calls,
-    setFailNextWith502: (n: number) => { failNextWith502 = n; },
-    close: () => closeServer(server)
-  };
-}
-
-async function inspectClosedShadowCard(page: Page): Promise<{
-  lang: string | null;
-  ariaLabel: string | null;
-  translate: string | null;
-  note: string | null;
-  card: ColorMetrics;
-  heading: ColorMetrics;
-} | null> {
-  const cdp = await page.context().newCDPSession(page);
-  try {
-    const { root } = await cdp.send('DOM.getDocument');
-    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: '[data-dsh-paper-reader]' });
-    if (!nodeId) return null;
-    const { node } = await cdp.send('DOM.describeNode', { nodeId, pierce: true });
-    const shadow = node.shadowRoots?.[0];
-    if (!shadow) return null;
-    const { object } = await cdp.send('DOM.resolveNode', { backendNodeId: shadow.backendNodeId });
-    const { result } = await cdp.send('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      returnByValue: true,
-      arguments: [{ value: CONTRAST_HELPER }],
-      functionDeclaration: function(this: ShadowRoot, helper: string) {
-        const cardEl = this.querySelector<HTMLElement>('.card');
-        const h2El = this.querySelector<HTMLElement>('h2');
-        if (!cardEl || !h2El) return null;
-        const fn = new Function('root', 'cardEl', 'h2El', helper + `
-          function measureInShadow(el) {
-            const style = getComputedStyle(el);
-            const layers = [];
-            for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) {
-              layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
-            }
-            const darkCard = getComputedStyle(cardEl).colorScheme.includes('dark');
-            let acc = darkCard ? [29, 32, 43, 1] : [255, 255, 255, 1];
-            for (let i = layers.length - 1; i >= 0; i--) if (layers[i][3] > 0) acc = composite(layers[i], acc);
-            const fgRaw = parseCssColor(style.color);
-            const fg = fgRaw[3] < 1 ? composite(fgRaw, acc) : fgRaw;
-            const fgLum = relLum(fg), bgLum = relLum(acc);
-            return {
-              fg: style.color,
-              bg: 'rgb(' + Math.round(acc[0]) + ', ' + Math.round(acc[1]) + ', ' + Math.round(acc[2]) + ')',
-              fgLum, bgLum, ratio: contrastRatio(fgLum, bgLum),
-              fontSize: parseFloat(style.fontSize) || 0, colorScheme: style.colorScheme
-            };
-          }
-          return {
-            lang: cardEl.getAttribute('lang'),
-            ariaLabel: cardEl.getAttribute('aria-label'),
-            translate: root.querySelector('[data-do="translate"]')?.textContent ?? null,
-            note: root.querySelector('[data-do="note"]')?.textContent ?? null,
-            card: measureInShadow(cardEl),
-            heading: measureInShadow(h2El)
-          };
-        `) as (root: ShadowRoot, c: HTMLElement, h: HTMLElement) => unknown;
-        return fn(this, cardEl, h2El);
-      }.toString()
-    });
-    return result.value;
-  } finally {
-    await cdp.detach();
-  }
+  assert.equal(res.status(), 200);
+  return ((await res.json()) as { doc: DocumentInfo }).doc;
 }
 
 const T4_07_WEB_URL = 'https://research.google/pubs/t4-07-web2/';
@@ -605,19 +57,31 @@ const T4_07_WEB_HTML = `<!doctype html>
   <p>Multi-document research workflows require strict deletion isolation across notes, marks, chat logs, and vocabulary records.</p>
 </article></body></html>`;
 
+async function deleteDocInLibrary(page: Page, title: string): Promise<void> {
+  await page.locator('#library').click();
+  const dlg = page.getByRole('dialog');
+  await dlg.waitFor({ state: 'visible' });
+  await dlg.getByRole('tab', { name: 'On this device', exact: true }).click();
+  const row = dlg.locator('.library-device-item').filter({ hasText: title });
+  await row.getByRole('button', { name: 'Delete document', exact: true }).click();
+  await row.getByRole('button', { name: 'Confirm delete', exact: true }).click();
+  await dlg.getByText('Document removed from this device.', { exact: true }).waitFor();
+}
+
 const publisherLog = path.join(os.tmpdir(), `paper-reader-tier4-pub-${randomUUID()}.ndjson`);
 await writeFile(publisherLog, '', { flag: 'wx' });
+const cleanups: (() => Promise<void>)[] = [() => rm(publisherLog, { force: true })];
 
 try {
   const openStax = await startPublisherFixture();
-  try {
-    const publisherRouter = await startCompositePublisher(openStax.origin, new Map([['/pubs/t4-07-web2/', T4_07_WEB_HTML]]));
-    try {
-      const zotero = await startRichZoteroFixture();
-      try {
-        const llm = await startVersatileLlmFixture();
-        try {
-          await withHost(async host => {
+  cleanups.push(() => openStax.close());
+  const publisherRouter = await startCompositePublisher(openStax.origin, new Map([['/pubs/t4-07-web2/', T4_07_WEB_HTML]]));
+  cleanups.push(() => publisherRouter.close());
+  const zotero = await startRichZoteroFixture({ collectionName: 'Tier4 Refs' });
+  cleanups.push(() => zotero.close());
+  const llm = await startVersatileLlmFixture('tier4-llm-fixture');
+  cleanups.push(() => llm.close());
+  await withHost(async host => {
             const pageErrors: string[] = [];
             const consoleErrors: string[] = [];
             const dbPath = path.join(host.scratch, 'reader', 'reader.sqlite');
@@ -656,16 +120,7 @@ try {
                   });
                   assert.equal(gatedRpc.status, 503, 'Local OPUS-MT must be gated OFF for Korean when LLM is unconfigured');
 
-                  // 2. Flaky 502 LLM retry -> HTTP 200 Korean succeeds
-                  await iframe.locator('#more').click();
-                  await iframe.locator('#menu').getByRole('button', { name: '连接设置', exact: true }).click();
-                  const connDlg = iframe.getByRole('dialog');
-                  await connDlg.waitFor({ state: 'visible' });
-                  await connDlg.getByLabel('API 接口地址').fill(llm.baseUrl);
-                  await connDlg.getByLabel('模型', { exact: true }).fill(llm.model);
-                  await connDlg.getByLabel('API 密钥', { exact: true }).fill(llm.key);
-                  await connDlg.getByRole('button', { name: '保存连接设置', exact: true }).click();
-                  await connDlg.waitFor({ state: 'hidden' });
+                  await saveTargetLanguage(iframe, 'Korean', { zh: true, baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.key });
                   llm.setFailNextWith502(1);
                   try {
                     scope.allowExpected502 = true;
@@ -681,33 +136,16 @@ try {
                   const koText = (await iframe.locator('#translated .pdf-translated-text[lang="ko"]:visible').allInnerTexts()).join('\n');
                   assert.ok(koText.includes('한국어 번역:'), 'Expected Korean translation after retry: ' + koText);
 
-                  // 3. Clipboard NotAllowedError fallback + blocked notice + .ris download recovery
                   await iframe.locator('#mobileRail').click();
                   await iframe.locator('#refsTab').click();
                   await iframe.locator('.citation-export').waitFor({ state: 'visible' });
-                  await iframe.locator('body').evaluate((_el, code) => { new Function(code)(); }, `
-                    window.__origWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-                    window.__origExecCommand = document.execCommand.bind(document);
-                    window.__fallbackCopied = '';
-                    Object.defineProperty(navigator.clipboard, 'writeText', {
-                      configurable: true,
-                      value: function () { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); }
-                    });
-                    document.execCommand = function (command) {
-                      if (command === 'copy') {
-                        const active = document.activeElement;
-                        window.__fallbackCopied = active && 'value' in active ? String(active.value) : '';
-                        return true;
-                      }
-                      return false;
-                    };
-                  `);
+                  await mockClipboardFallback(iframe);
                   await iframe.getByRole('button', { name: '复制 BibTeX', exact: true }).click();
                   await iframe.locator('.citation-export-status').filter({ hasText: 'BibTeX 已复制到剪贴板。' }).waitFor();
-                  const fallbackBib = await iframe.locator('body').evaluate(() => (window as unknown as { __fallbackCopied: string }).__fallbackCopied);
+                  const fallbackBib = await readClipboardFallback(iframe);
                   assert.ok(fallbackBib.startsWith('@inproceedings{kwon2023efficient,\n'), fallbackBib);
 
-                  await iframe.locator('body').evaluate((_el, code) => { new Function(code)(); }, `document.execCommand = function () { return false; };`);
+                  await failClipboardExecCommand(iframe);
                   await iframe.getByRole('button', { name: '复制 RIS', exact: true }).click();
                   await iframe.locator('.citation-export-status').filter({ hasText: '剪贴板权限受限，请改用下载按钮。' }).waitFor();
                   const [risDl] = await Promise.all([
@@ -718,10 +156,7 @@ try {
                   assert.equal(risFile.filename, 'kwon2023efficient.ris');
                   assert.ok(risFile.text.startsWith('TY  - CONF\n') && risFile.text.trimEnd().endsWith('ER  -'));
 
-                  await iframe.locator('body').evaluate((_el, code) => { new Function(code)(); }, `
-                    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: window.__origWriteText });
-                    document.execCommand = window.__origExecCommand;
-                  `);
+                  await restoreClipboard(iframe);
 
                   // 4. Live parent body[data-ds-dark-theme] toggle with Paper chat & settingsDialog open inside iframe
                   await iframe.locator('.paper-chat-toggle').click();
@@ -769,28 +204,14 @@ try {
                   await resetSettings(ctx.request, host.origin, {
                     baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.key, targetLanguage: 'Simplified Chinese'
                   });
-                  const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', 'T4-01', scope, pageErrors, consoleErrors);
+                  const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', { tag: 'T4-01', scope, pageErrors, consoleErrors });
 
-                  // ? shortcuts modal in dark zh-CN
-                  await page.locator('#paperScroll').focus();
-                  await page.keyboard.press('Shift+?');
-                  await page.locator('#shortcutsDialog').waitFor({ state: 'visible' });
-                  await assertDarkAndContrast(page.locator('#shortcutsDialog h2'), 'T4-01 shortcuts heading', 0.12, 4.5);
-                  await page.keyboard.press('Escape');
-                  await page.locator('#shortcutsDialog').waitFor({ state: 'hidden' });
-
-                  // Import 2-column synthetic arXiv PDF
-                  const arxivPdf = await makePdf(ctx, 'arXiv:2401.12345 Paged KV Cache Scheduling', [
+                  const arxivDoc = await importPdf(ctx, host.origin, 'T4-01-Arxiv-2401.12345.pdf', 'arXiv:2401.12345 Paged KV Cache Scheduling', [
                     'Virtual block tables map logical token sequences onto non-contiguous physical GPU memory blocks without pre-allocating maximum sequence lengths.',
                     'Copy-on-write sharing lets parallel beam-search candidates share common prompt prefixes while isolating divergent generation trajectories cleanly.',
                     'Dynamic memory reclamation returns freed blocks to the global allocator immediately when requests finish, increasing effective batch size substantially.',
                     'Empirical traces across mixed-length workloads demonstrate lower tail latency and near-zero internal fragmentation under sustained serving load.'
                   ], true);
-                  const imp = await ctx.request.post(host.origin + '/api/paper-reader/import-pdf?title=T4-01-Arxiv-2401.12345.pdf', {
-                    headers: { 'content-type': 'application/pdf' }, data: arxivPdf
-                  });
-                  assert.equal(imp.status(), 200);
-                  const { doc: arxivDoc } = await imp.json() as { doc: DocumentInfo };
 
                   await page.goto(host.origin + appPath + `?doc=${encodeURIComponent(arxivDoc.id)}&page=1`, { waitUntil: 'domcontentloaded' });
                   await page.locator('#loading').waitFor({ state: 'hidden' });
@@ -818,12 +239,8 @@ try {
                   const saveFont = await page.locator('#saveState').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
                   assert.ok(saveFont >= 12, `Expected #saveState >= 12px, got ${saveFont}`);
                   await until(async () => {
-                    const sizes = await page.evaluate(() =>
-                      Array.from(document.querySelectorAll<HTMLElement>('#translated .pdf-translated-text'))
-                        .filter(el => !el.hidden && el.offsetWidth > 0 && el.dataset.role === 'paragraph')
-                        .map(el => (parseFloat(getComputedStyle(el).fontSize) || 0) * (el.getBoundingClientRect().width / el.offsetWidth))
-                    );
-                    return sizes.length > 0 && sizes.every(s => s >= 11.5);
+                    const m = await inspectTranslatedBlocks(page);
+                    return m.bodySizes.length > 0 && m.bodySizes.every(b => b.visualFont >= 11.5);
                   }, 'T4-01 1440px bilingual floor >= 11.5px');
                   await page.keyboard.press('-');
                   assert.equal(await page.locator('#zoom').inputValue(), '1');
@@ -869,28 +286,6 @@ try {
                   assert.match(risFile.filename, /^[a-z0-9]+\.ris$/);
                   assert.ok(risFile.text.trimEnd().endsWith('ER  -'));
 
-                  // Save vocab + 生词与历史 ARIA ArrowRight/Home/End
-                  assert.equal((await rpc(ctx.request, host.origin, 'vocab.save', {
-                    docId: arxivDoc.id, title: arxivDoc.title, page: 1, anchor: 'p1', label: '第 1 页',
-                    sourceUrl: page.url(), text: 'reclamation', meaning: '内存回收', context: 'Dynamic memory reclamation'
-                  })).status, 200);
-                  await page.locator('#more').click();
-                  await page.locator('#menu').getByRole('button', { name: '生词与历史', exact: true }).click();
-                  const colDlg = page.locator('#dialog');
-                  await colDlg.waitFor({ state: 'visible' });
-                  const vTab = colDlg.getByRole('tab', { name: '生词', exact: true });
-                  const hTab = colDlg.getByRole('tab', { name: '历史', exact: true });
-                  await vTab.focus();
-                  await page.keyboard.press('ArrowRight');
-                  assert.equal(await hTab.getAttribute('aria-selected'), 'true');
-                  await page.keyboard.press('Home');
-                  assert.equal(await vTab.getAttribute('aria-selected'), 'true');
-                  await page.keyboard.press('End');
-                  assert.equal(await hTab.getAttribute('aria-selected'), 'true');
-                  await page.locator('#closeDialog').click();
-                  await colDlg.waitFor({ state: 'hidden' });
-
-                  // Reload persistence + full zh-CN chrome sweep
                   await page.reload({ waitUntil: 'domcontentloaded' });
                   await page.locator('#loading').waitFor({ state: 'hidden' });
                   assert.equal((await rpc<ReaderState>(ctx.request, host.origin, 'state')).body.settings.targetLanguage, 'Simplified Chinese');
@@ -901,7 +296,7 @@ try {
                   await page.locator('#rail').getByRole('link', { name: '全文问答', exact: true }).waitFor();
                   if (!(await page.locator('.paper-answer').first().isVisible())) await page.locator('.paper-chat-toggle').click();
                   await page.locator('.paper-answer').first().waitFor({ state: 'visible' });
-                  assertNoZhEnglishLeaks(await collectChromeStrings(page), 'T4-01 reloaded zh-CN');
+                  assertNoZhEnglishLeaks(await collectChromeStrings(page, '.citation-export-status'), 'T4-01 reloaded zh-CN', ['tier', 'llm', 'fixture']);
 
                   await rpc(ctx.request, host.origin, 'library.delete', { id: arxivDoc.id });
                   await resetSettings(ctx.request, host.origin);
@@ -928,17 +323,12 @@ try {
                     zoteroLibraryId: zotero.libraryId, zoteroApiKey: zotero.credential
                   });
 
-                  const scholarPdf = await makePdf(ctx, 'Multilingual Scholar Manuscript', [
+                  const scholarDoc = await importPdf(ctx, host.origin, 't4-02-scholar.pdf', 'Multilingual Scholar Manuscript', [
                     'Analytical engine memory tables decouple logical allocation from physical bank placement.',
                     'Portable citations link local reading archives with external Zotero bibliographic records.'
                   ]);
-                  const imp = await ctx.request.post(host.origin + '/api/paper-reader/import-pdf?title=t4-02-scholar.pdf', {
-                    headers: { 'content-type': 'application/pdf' }, data: scholarPdf
-                  });
-                  assert.equal(imp.status(), 200);
-                  const { doc: scholarDoc } = await imp.json() as { doc: DocumentInfo };
 
-                  const page = await openReaderPage(ctx, host, `?doc=${encodeURIComponent(scholarDoc.id)}&page=1`, 'T4-02', scope, pageErrors, consoleErrors);
+                  const page = await openReaderPage(ctx, host, `?doc=${encodeURIComponent(scholarDoc.id)}&page=1`, { tag: 'T4-02', scope, pageErrors, consoleErrors });
                   await page.locator('#parallel').click();
                   await page.getByRole('group', { name: 'French, page 1', exact: true }).waitFor();
                   await page.locator('#translated .pdf-translated-text[lang="fr"]:visible').first().waitFor();
@@ -1016,26 +406,12 @@ try {
                   await resetSettings(ctx.request, host.origin, {
                     baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.key, targetLanguage: 'Simplified Chinese'
                   });
-                  const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', 'T4-04', scope, pageErrors, consoleErrors);
+                  const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', { tag: 'T4-04', scope, pageErrors, consoleErrors });
                   const titleBox = await page.locator('#docTitle').boundingBox();
                   assert.ok(titleBox && titleBox.width >= 64);
                   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
                   await assertDarkAndContrast(page.locator('.topbar #docTitle'), 'T4-04 mobile topbar', 0.08, 4.5);
 
-                  // #more -> 快捷键 & 生词与历史
-                  await page.locator('#more').click();
-                  await page.locator('#menu').getByRole('button', { name: '快捷键', exact: true }).click();
-                  await page.locator('#shortcutsDialog').waitFor({ state: 'visible' });
-                  await page.locator('#closeShortcuts').click();
-                  await page.locator('#shortcutsDialog').waitFor({ state: 'hidden' });
-
-                  await page.locator('#more').click();
-                  await page.locator('#menu').getByRole('button', { name: '生词与历史', exact: true }).click();
-                  await page.locator('#dialog').getByRole('tablist').waitFor();
-                  await page.locator('#closeDialog').click();
-                  await page.locator('#dialog').waitFor({ state: 'hidden' });
-
-                  // Bottom-sheet tabs 目录/笔记/标记/文献
                   await page.locator('#mobileRail').click();
                   await page.locator('#rail').waitFor({ state: 'visible' });
                   assert.deepEqual(await page.locator('#rail .rail-head [role="tab"]').allInnerTexts(), ['目录', '笔记', '标记', '文献']);
@@ -1104,23 +480,13 @@ try {
                   assert.equal(opened.status, 200);
                   const bookId = opened.body.doc.id;
 
-                  const page = await openReaderPage(ctx, host, `?doc=${encodeURIComponent(bookId)}&page=1`, 'T4-05', scope, pageErrors, consoleErrors);
+                  const page = await openReaderPage(ctx, host, `?doc=${encodeURIComponent(bookId)}&page=1`, { tag: 'T4-05', scope, pageErrors, consoleErrors });
                   const sheet = page.locator('.web-reading-sheet[data-side="source"]');
                   await sheet.waitFor({ state: 'visible' });
                   await assertDarkAndContrast(sheet.locator('h1, h2').first(), 'T4-05 OpenStax dark heading', 0.12, 4.5);
                   await assertDarkAndContrast(sheet.locator('p').first(), 'T4-05 OpenStax dark paragraph', 0.12, 4.5);
 
-                  const motion = await page.evaluate(() => {
-                    let has001 = false;
-                    for (const s of Array.from(document.styleSheets)) {
-                      try {
-                        for (const r of Array.from(s.cssRules)) if (r.cssText.includes('0.01ms')) has001 = true;
-                      } catch { /* ignore */ }
-                    }
-                    return { has001, scrollBehavior: getComputedStyle(document.getElementById('paperScroll')!).scrollBehavior };
-                  });
-                  assert.equal(motion.has001, false);
-                  assert.equal(motion.scrollBehavior, 'auto');
+                  assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('paperScroll')!).scrollBehavior), 'auto');
 
                   await page.locator('#parallel').click();
                   await page.locator('#translate').click();
@@ -1153,15 +519,7 @@ try {
                   await trans.getByText('Traducción al español:').first().waitFor();
                   assert.equal(llm.calls.length, callsAfterSec1, 'ArrowLeft back to section 1 must hit Spanish cache with 0 extra LLM calls');
 
-                  // Delete active OpenStax book via Library UI and verify complete purge (including book_positions & book-sections/)
-                  await page.locator('#library').click();
-                  const dlg = page.getByRole('dialog');
-                  await dlg.waitFor({ state: 'visible' });
-                  await dlg.getByRole('tab', { name: 'On this device', exact: true }).click();
-                  const row = dlg.locator('.library-device-item').filter({ hasText: opened.body.doc.title });
-                  await row.getByRole('button', { name: 'Delete document', exact: true }).click();
-                  await row.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-                  await dlg.getByText('Document removed from this device.', { exact: true }).waitFor();
+                  await deleteDocInLibrary(page, opened.body.doc.title);
                   await page.waitForURL(u => u.searchParams.get('doc') === 'pagedattention');
                   await page.locator('#loading').waitFor({ state: 'hidden' });
 
@@ -1189,20 +547,15 @@ try {
                   await resetSettings(ctx.request, host.origin, {
                     baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.key, targetLanguage: 'Simplified Chinese'
                   });
-                  const pdf1Bytes = await makePdf(ctx, 'Synthesis Target PDF One', [
+                  const pdf1 = await importPdf(ctx, host.origin, 't4-07-pdf1.pdf', 'Synthesis Target PDF One', [
                     'Selective deletion must remove only target document rows while keeping sibling records intact.'
                   ]);
-                  const imp1 = await ctx.request.post(host.origin + '/api/paper-reader/import-pdf?title=t4-07-pdf1.pdf', {
-                    headers: { 'content-type': 'application/pdf' }, data: pdf1Bytes
-                  });
-                  assert.equal(imp1.status(), 200);
-                  const { doc: pdf1 } = await imp1.json() as { doc: DocumentInfo };
 
                   const web2Res = await rpc<{ doc: DocumentInfo }>(ctx.request, host.origin, 'web.open', { url: T4_07_WEB_URL });
                   assert.equal(web2Res.status, 200);
                   const web2 = web2Res.body.doc;
 
-                  const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', 'T4-07', scope, pageErrors, consoleErrors);
+                  const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', { tag: 'T4-07', scope, pageErrors, consoleErrors });
 
                   // Populate Marks, Notes, Vocab, Paper chat, and localStorage across ALL 3 docs
                   const docs = [
@@ -1283,15 +636,7 @@ try {
                   const web2Ris = await readDownload(web2RisDl);
                   assert.ok(web2Ris.text.includes('AU  - Patel, Priya\n') && web2Ris.text.includes('DO  - 10.1000/prs.2025.19\n'));
 
-                  // Delete PDF #1 via Library UI
-                  await page.locator('#library').click();
-                  const libDlg = page.getByRole('dialog');
-                  await libDlg.waitFor({ state: 'visible' });
-                  await libDlg.getByRole('tab', { name: 'On this device', exact: true }).click();
-                  const row1 = libDlg.locator('.library-device-item').filter({ hasText: pdf1.title });
-                  await row1.getByRole('button', { name: 'Delete document', exact: true }).click();
-                  await row1.getByRole('button', { name: 'Confirm delete', exact: true }).click();
-                  await libDlg.getByText('Document removed from this device.', { exact: true }).waitFor();
+                  await deleteDocInLibrary(page, pdf1.title);
                   await page.locator('#closeDialog').click();
 
                   // Verify 100% purge for PDF #1 and 100% retention for pagedattention + Web #2
@@ -1376,12 +721,18 @@ try {
                 await articlePage.goto(extUrl, { waitUntil: 'domcontentloaded' });
 
                 const popup = await openToolbar(articlePage, extId);
-                const popupInfo = await popup.evaluate((helper: string) => {
-                  const fn = new Function(helper + `return { lang: document.documentElement.lang, body: measureElement(document.body) };`) as () => { lang: string; body: ColorMetrics };
-                  return fn();
-                }, CONTRAST_HELPER) as { lang: string; body: ColorMetrics };
-                assert.equal(popupInfo.lang, 'zh-CN');
-                assert.ok(popupInfo.body.bgLum <= 0.08);
+                const rawPopup = await popup.evaluate(() => {
+                  const layers: string[] = [];
+                  for (let cur: Element | null = document.body; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
+                  const style = getComputedStyle(document.body);
+                  const darkRoot = document.documentElement.dataset.theme === 'dark' || getComputedStyle(document.documentElement).colorScheme.includes('dark');
+                  return {
+                    lang: document.documentElement.lang,
+                    body: { fg: style.color, layers, darkRoot, fontSize: parseFloat(style.fontSize) || 0, colorScheme: style.colorScheme }
+                  };
+                }, null) as { lang: string; body: RawElementSample };
+                assert.equal(rawPopup.lang, 'zh-CN');
+                assert.ok(computeElementMetrics(rawPopup.body).bgLum <= 0.08);
                 await popup.click('summary');
                 await popup.evaluate(origin => {
                   document.querySelector<HTMLInputElement>('#origin')!.value = origin;
@@ -1394,11 +745,12 @@ try {
 
                 await articlePage.locator('#term').dblclick();
                 await until(async () => Boolean(await cardElement(articlePage, '.card')), 'T4-03 shadow card did not open');
-                const cardInfo = await inspectClosedShadowCard(articlePage);
-                assert.ok(cardInfo && cardInfo.lang === 'zh-CN' && cardInfo.card.colorScheme === 'dark');
-                assert.ok(cardInfo.card.bgLum <= 0.08 && cardInfo.heading.ratio >= 4.5);
-                assert.equal(cardInfo.translate, '翻译');
-                assert.equal(cardInfo.note, '记入笔记');
+                const cardMetrics = await inspectShadowCardMetrics(articlePage, '.card');
+                const headingMetrics = await inspectShadowCardMetrics(articlePage, 'h2');
+                assert.ok(cardMetrics && cardMetrics.lang === 'zh-CN' && cardMetrics.colorScheme === 'dark');
+                assert.ok(cardMetrics.bgLum <= 0.08 && headingMetrics && headingMetrics.ratio >= 4.5);
+                assert.equal(cardMetrics.translate, '翻译');
+                assert.equal(cardMetrics.note, '记入笔记');
 
                 const [readerTab] = await Promise.all([
                   extCtx.waitForEvent('page'),
@@ -1483,24 +835,12 @@ try {
             assert.deepEqual(pageErrors, [], 'Unexpected pageerror events:\n' + pageErrors.join('\n'));
             assert.deepEqual(consoleErrors, [], 'Unexpected console.error events:\n' + consoleErrors.join('\n'));
             console.log('PASS Tier 4 (T4-01..T4-07): All 7 real-world researcher journeys passed.');
-          }, {
-            NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + zoteroPreload, '--import=' + publisherPreload].filter(Boolean).join(' '),
-            READER_TEST_ZOTERO_ORIGIN: zotero.origin,
-            PAPER_READER_E2E_PUBLISHER_FIXTURE: publisherRouter.origin,
-            PAPER_READER_E2E_PUBLISHER_LOG: publisherLog
-          });
-        } finally {
-          await llm.close();
-        }
-      } finally {
-        await zotero.close();
-      }
-    } finally {
-      await publisherRouter.close();
-    }
-  } finally {
-    await openStax.close();
-  }
+  }, {
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + zoteroPreload, '--import=' + publisherPreload].filter(Boolean).join(' '),
+    READER_TEST_ZOTERO_ORIGIN: zotero.origin,
+    PAPER_READER_E2E_PUBLISHER_FIXTURE: publisherRouter.origin,
+    PAPER_READER_E2E_PUBLISHER_LOG: publisherLog
+  });
 } finally {
-  await rm(publisherLog, { force: true });
+  for (const close of cleanups.reverse()) await close();
 }

@@ -17,7 +17,7 @@ function webLink(url: string, name: string): HTMLAnchorElement {
   return link;
 }
 
-export function clearDocumentStorage(docId: string): void {
+function clearDocumentStorage(docId: string): void {
   const exactLocal = [
     'reader.page.' + docId,
     'reader.tab.' + docId,

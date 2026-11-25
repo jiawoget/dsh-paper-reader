@@ -9,7 +9,7 @@ import { el, icon, readerLabel as t } from './ui.js';
 type Point = { x: number; y: number };
 
 /** Each pane keeps ownership of its text nodes and of the passage order used when capturing selections. */
-export interface AnnotationPane {
+interface AnnotationPane {
   host: HTMLElement;
   side: ReadingSide;
   ranges(id: string, quote: string, offset?: number): Range[];

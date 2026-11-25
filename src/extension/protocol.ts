@@ -1,7 +1,7 @@
 import type { Operations } from '../shared/types.js';
 
 const allowedHosts = new Set(['127.0.0.1', 'localhost', '[::1]']);
-export const defaultOrigin = 'http://127.0.0.1:29812';
+const defaultOrigin = 'http://127.0.0.1:29812';
 
 export function extChinese(): boolean {
   return typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '');

@@ -109,7 +109,7 @@ function entryFor(kind: EntryKind, input: Input, prior?: Entry, allowEmpty = fal
 }
 
 interface ZoteroSource { link: string; original: string }
-export interface NotebookInput { settings: PrivateSettings; entries: Entries; filename: string | undefined; zotero?: ZoteroSource }
+interface NotebookInput { settings: PrivateSettings; entries: Entries; filename: string | undefined; zotero?: ZoteroSource }
 export interface NotebookChapter {
   id: string;
   title: string;
@@ -118,7 +118,7 @@ export interface NotebookChapter {
   sections: ReadonlyMap<number, { title: string; url: string }>;
 }
 export interface StoredNotebook { docId: string; chapter?: NotebookChapter; title: string; sourceUrl: string; markdown: string }
-export interface VaultBinding { filename: string; baseline: string }
+interface VaultBinding { filename: string; baseline: string }
 
 // Document IDs cannot contain control characters. Existing single-document keys stay valid.
 export const notebookKey = (docId: string, chapter?: NotebookChapter) => chapter ? docId + '\u001f' + chapter.id : docId;

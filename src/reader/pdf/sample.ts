@@ -5,7 +5,7 @@ import { box, type Box, type PassageRole } from './model.js';
 export const sampleDigest = '55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e';
 export const sampleWindow = box(38, 53, 536, 688);
 
-export interface AnnotatedArea {
+interface AnnotatedArea {
   id: string;
   label: string;
   labelZh: string;

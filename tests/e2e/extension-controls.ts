@@ -4,7 +4,7 @@ import type { Page } from 'playwright-core';
 
 // Inspect the protected selection card through DevTools. All user actions below
 // are ordinary mouse or keyboard input; page scripts cannot enter its shadow root.
-export async function cardElement(page: Page, selector: string): Promise<{ text: string; x: number; y: number } | null> {
+export async function inCardShadow<T>(page: Page, functionDeclaration: string, args: unknown[] = []): Promise<T | null> {
   const cdp = await page.context().newCDPSession(page);
   try {
     const { root } = await cdp.send('DOM.getDocument');
@@ -15,17 +15,27 @@ export async function cardElement(page: Page, selector: string): Promise<{ text:
     if (!shadow) return null;
     const { object } = await cdp.send('DOM.resolveNode', { backendNodeId: shadow.backendNodeId });
     const { result } = await cdp.send('Runtime.callFunctionOn', {
-      objectId: object.objectId, returnByValue: true, arguments: [{ value: selector }],
-      functionDeclaration: function(this: ShadowRoot, query: string) {
-        const element = this.querySelector<HTMLElement>(query);
-        if (!element) return null;
-        const box = element.getBoundingClientRect();
-        return { text: element instanceof HTMLTextAreaElement ? element.value : element.innerText,
-          x: box.left + box.width / 2, y: box.top + box.height / 2 };
-      }.toString()
+      objectId: object.objectId,
+      returnByValue: true,
+      arguments: args.map(value => ({ value })),
+      functionDeclaration
     });
-    return result.value;
-  } finally { await cdp.detach(); }
+    return result.value as T | null;
+  } finally {
+    await cdp.detach();
+  }
+}
+
+export async function cardElement(page: Page, selector: string): Promise<{ text: string; x: number; y: number } | null> {
+  return inCardShadow(page, function(this: ShadowRoot, query: string) {
+    const element = this.querySelector<HTMLElement>(query);
+    if (!element) return null;
+    const box = element.getBoundingClientRect();
+    return {
+      text: element instanceof HTMLTextAreaElement ? element.value : element.innerText,
+      x: box.left + box.width / 2, y: box.top + box.height / 2
+    };
+  }.toString(), [selector]);
 }
 
 export async function clickCard(page: Page, selector: string): Promise<void> {

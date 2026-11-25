@@ -5,158 +5,21 @@ import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium, type FrameLocator, type Locator, type Page } from 'playwright-core';
-import type { Operations } from '../../src/shared/types.js';
+import { chromium, type FrameLocator, type Page } from 'playwright-core';
 import { cardElement, clickCard, openToolbar, until } from './extension-controls.js';
+import {
+  assertBorderContrast, assertBorderContrastBothThemes, assertContrast, assertDarkSurface,
+  composite, computeBorderMetrics, computeElementMetrics, contrastRatio,
+  inspectShadowCardMetrics, measureLocator, parseCssColor, relLum,
+  type RawBorderSample, type RawElementSample
+} from './helpers/contrast.js';
+import { inspectTranslatedBlocks } from './helpers/dom-probes.js';
+import { closeServer } from './helpers/fixtures.js';
+import { action, attachErrorGuards, openReaderPage, type ErrorScope } from './helpers/reader.js';
 import { openReader, withHost, type HostFixture } from './host.js';
 
 const project = fileURLToPath(new URL('../../', import.meta.url));
 const evidence = process.argv.includes('--evidence');
-
-interface ColorMetrics {
-  fg: string;
-  bg: string;
-  fgLum: number;
-  bgLum: number;
-  ratio: number;
-  fontSize: number;
-  colorScheme: string;
-}
-
-const CONTRAST_HELPER_SOURCE = `
-function parseCssColor(raw) {
-  if (!raw || raw === 'transparent') return [0, 0, 0, 0];
-  const srgb = /color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+))?\\)/.exec(raw);
-  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] !== undefined ? Number(srgb[4]) : 1];
-  const rgba = /rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:[,/\\s]+([\\d.]+%?))?\\s*\\)/.exec(raw);
-  if (!rgba) return [0, 0, 0, 1];
-  let a = 1;
-  if (rgba[4] !== undefined) a = rgba[4].endsWith('%') ? parseFloat(rgba[4]) / 100 : Number(rgba[4]);
-  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), a];
-}
-function composite(top, bottom) {
-  const a = top[3], outA = a + bottom[3] * (1 - a);
-  if (outA <= 0) return [0, 0, 0, 0];
-  return [
-    (top[0] * a + bottom[0] * bottom[3] * (1 - a)) / outA,
-    (top[1] * a + bottom[1] * bottom[3] * (1 - a)) / outA,
-    (top[2] * a + bottom[2] * bottom[3] * (1 - a)) / outA,
-    outA
-  ];
-}
-function relLum(rgb) {
-  const chan = c => {
-    const s = c / 255;
-    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * chan(rgb[0]) + 0.7152 * chan(rgb[1]) + 0.0722 * chan(rgb[2]);
-}
-function contrastRatio(a, b) {
-  const l1 = Math.max(a, b), l2 = Math.min(a, b);
-  return (l1 + 0.05) / (l2 + 0.05);
-}
-function effectiveBg(el) {
-  const layers = [];
-  let cur = el;
-  while (cur && cur.nodeType === 1) {
-    layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
-    cur = cur.parentElement;
-  }
-  const darkRoot = document.documentElement.dataset.theme === 'dark' ||
-    getComputedStyle(document.documentElement).colorScheme.includes('dark');
-  let acc = darkRoot ? [19, 22, 31, 1] : [255, 255, 255, 1];
-  for (let i = layers.length - 1; i >= 0; i--) {
-    if (layers[i][3] > 0) acc = composite(layers[i], acc);
-  }
-  return acc;
-}
-function measureElement(el, fgProp, pseudo) {
-  const style = getComputedStyle(el, pseudo || null);
-  const bg = effectiveBg(el);
-  const fgRaw = parseCssColor(style[fgProp || 'color']);
-  const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
-  const fgLum = relLum(fg), bgLum = relLum(bg);
-  return {
-    fg: style[fgProp || 'color'],
-    bg: 'rgb(' + Math.round(bg[0]) + ', ' + Math.round(bg[1]) + ', ' + Math.round(bg[2]) + ')',
-    fgLum,
-    bgLum,
-    ratio: contrastRatio(fgLum, bgLum),
-    fontSize: parseFloat(style.fontSize) || 0,
-    colorScheme: style.colorScheme
-  };
-}
-function measureBorder(el) {
-  const style = getComputedStyle(el);
-  const bg = effectiveBg(el);
-  const parentBg = el.parentElement ? effectiveBg(el.parentElement) : bg;
-  const borderRaw = parseCssColor(style.borderTopColor);
-  const borderOnBg = borderRaw[3] < 1 ? composite(borderRaw, bg) : borderRaw;
-  const borderOnParent = borderRaw[3] < 1 ? composite(borderRaw, parentBg) : borderRaw;
-  const ratioBg = contrastRatio(relLum(borderOnBg), relLum(bg));
-  const ratioParent = contrastRatio(relLum(borderOnParent), relLum(parentBg));
-  return {
-    fg: style.borderTopColor,
-    bg: 'rgb(' + Math.round(bg[0]) + ', ' + Math.round(bg[1]) + ', ' + Math.round(bg[2]) + ')',
-    fgLum: relLum(borderOnBg),
-    bgLum: relLum(bg),
-    ratio: Math.min(ratioBg, ratioParent),
-    borderWidth: parseFloat(style.borderTopWidth) || 0,
-    fontSize: parseFloat(style.fontSize) || 0,
-    colorScheme: style.colorScheme
-  };
-}
-`;
-
-async function measureLocator(locator: Locator, fgProp = 'color', pseudo?: string): Promise<ColorMetrics> {
-  return locator.evaluate((el, arg) => {
-    const fn = new Function('el', 'fgProp', 'pseudo', arg.helper + '\nreturn measureElement(el, fgProp, pseudo);') as
-      (node: Element, prop: string, ps?: string) => ColorMetrics;
-    return fn(el, arg.fgProp, arg.pseudo);
-  }, { helper: CONTRAST_HELPER_SOURCE, fgProp, pseudo });
-}
-
-async function assertContrast(locator: Locator, name: string, minRatio = 4.5, fgProp = 'color', pseudo?: string): Promise<ColorMetrics> {
-  const m = await measureLocator(locator, fgProp, pseudo);
-  assert.ok(m.ratio >= minRatio,
-    `${name}: expected contrast >= ${minRatio}:1, got ${m.ratio.toFixed(2)}:1 (fg=${m.fg} lum=${m.fgLum.toFixed(3)}, bg=${m.bg} lum=${m.bgLum.toFixed(3)})`);
-  return m;
-}
-
-async function assertBorderContrast(locator: Locator, name: string, minRatio = 3.0): Promise<ColorMetrics & { borderWidth: number }> {
-  const m = await locator.evaluate((el, helper) => {
-    const fn = new Function('el', helper + '\nreturn measureBorder(el);') as
-      (node: Element) => ColorMetrics & { borderWidth: number };
-    return fn(el);
-  }, CONTRAST_HELPER_SOURCE);
-  assert.ok(m.borderWidth >= 1, `${name}: expected visible >= 1px border, got ${m.borderWidth}px`);
-  assert.ok(m.ratio >= minRatio,
-    `${name}: expected border contrast >= ${minRatio}:1 (WCAG SC 1.4.11), got ${m.ratio.toFixed(2)}:1 (border=${m.fg}, bg=${m.bg})`);
-  return m;
-}
-
-async function assertBorderContrastBothThemes(page: Page, locator: Locator, name: string, minRatio = 3.0): Promise<void> {
-  await assertBorderContrast(locator, `${name} (dark)`, minRatio);
-  await page.emulateMedia({ colorScheme: 'light' });
-  try {
-    await assertBorderContrast(locator, `${name} (light)`, minRatio);
-  } finally {
-    await page.emulateMedia({ colorScheme: 'dark' });
-  }
-}
-
-async function assertDarkSurface(locator: Locator, name: string, maxBgLum = 0.08): Promise<ColorMetrics> {
-  const m = await measureLocator(locator);
-  assert.ok(m.bgLum <= maxBgLum,
-    `${name}: expected dark surface lum <= ${maxBgLum}, got ${m.bgLum.toFixed(4)} (${m.bg})`);
-  return m;
-}
-
-async function action<K extends keyof Operations>(page: Page, origin: string, op: K, payload: Operations[K][0]): Promise<Operations[K][1]> {
-  const res = await page.request.post(origin + '/api/paper-reader/action', { data: { op, payload } });
-  assert.ok(res.ok(), op + ' returned HTTP ' + res.status());
-  return res.json();
-}
 
 async function startRichWebFixture() {
   const html = `<!doctype html>
@@ -200,7 +63,7 @@ async function startRichWebFixture() {
   return {
     origin: `http://127.0.0.1:${addr.port}`,
     articleUrl: 'https://research.google/dark-theme-article',
-    close: () => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); })
+    close: () => closeServer(server)
   };
 }
 
@@ -231,76 +94,8 @@ async function startExtensionPagesFixture() {
   return {
     whiteUrl: `http://contrast-host.test:${addr.port}/white`,
     darkUrl: `http://contrast-host.test:${addr.port}/dark`,
-    close: () => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); })
+    close: () => closeServer(server)
   };
-}
-
-async function cardStyleMetrics(page: Page, selector: string): Promise<(ColorMetrics & { borderTopWidth: number; borderColor: string; borderRatio: number; boxShadow: string }) | null> {
-  const cdp = await page.context().newCDPSession(page);
-  try {
-    const { root } = await cdp.send('DOM.getDocument');
-    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: '[data-dsh-paper-reader]' });
-    if (!nodeId) return null;
-    const { node } = await cdp.send('DOM.describeNode', { nodeId, pierce: true });
-    const shadow = node.shadowRoots?.[0];
-    if (!shadow) return null;
-    const { object } = await cdp.send('DOM.resolveNode', { backendNodeId: shadow.backendNodeId });
-    const { result } = await cdp.send('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      returnByValue: true,
-      arguments: [{ value: selector }, { value: CONTRAST_HELPER_SOURCE }],
-      functionDeclaration: function(this: ShadowRoot, query: string, helper: string) {
-        const el = this.querySelector<HTMLElement>(query);
-        if (!el) return null;
-        const fn = new Function('root', 'el', helper + `
-          const style = getComputedStyle(el);
-          const cardEl = root.querySelector('.card');
-          const darkCard = cardEl ? getComputedStyle(cardEl).colorScheme.includes('dark') : false;
-          const resolveShadowBg = node => {
-            const layers = [];
-            let cur = node;
-            while (cur && cur.nodeType === 1) {
-              layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
-              cur = cur.parentElement;
-            }
-            let acc = darkCard ? [29, 32, 43, 1] : [255, 255, 255, 1];
-            for (let i = layers.length - 1; i >= 0; i--) {
-              if (layers[i][3] > 0) acc = composite(layers[i], acc);
-            }
-            return acc;
-          };
-          const acc = resolveShadowBg(el);
-          const parentAcc = el.parentElement ? resolveShadowBg(el.parentElement) : acc;
-          const fgRaw = parseCssColor(style.color);
-          const fg = fgRaw[3] < 1 ? composite(fgRaw, acc) : fgRaw;
-          const fgLum = relLum(fg), bgLum = relLum(acc);
-          const borderRaw = parseCssColor(style.borderTopColor);
-          const borderOnBg = borderRaw[3] < 1 ? composite(borderRaw, acc) : borderRaw;
-          const borderOnParent = borderRaw[3] < 1 ? composite(borderRaw, parentAcc) : borderRaw;
-          const borderRatio = Math.min(
-            contrastRatio(relLum(borderOnBg), bgLum),
-            contrastRatio(relLum(borderOnParent), relLum(parentAcc))
-          );
-          return {
-            fg: style.color,
-            bg: 'rgb(' + Math.round(acc[0]) + ', ' + Math.round(acc[1]) + ', ' + Math.round(acc[2]) + ')',
-            fgLum, bgLum,
-            ratio: contrastRatio(fgLum, bgLum),
-            fontSize: parseFloat(style.fontSize) || 0,
-            colorScheme: style.colorScheme,
-            borderTopWidth: parseFloat(style.borderTopWidth) || 0,
-            borderColor: style.borderTopColor,
-            borderRatio,
-            boxShadow: style.boxShadow
-          };
-        `) as (root: ShadowRoot, node: HTMLElement) => (ColorMetrics & { borderTopWidth: number; borderColor: string; borderRatio: number; boxShadow: string });
-        return fn(this, el);
-      }.toString()
-    });
-    return result.value;
-  } finally {
-    await cdp.detach();
-  }
 }
 
 async function runStaticCssAudit(): Promise<void> {
@@ -341,19 +136,8 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
   });
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
-  const attachErrorListeners = (tag: string, page: Page) => {
-    page.on('pageerror', error => pageErrors.push(`${tag}: ${error.message}`));
-    page.on('console', msg => {
-      if (msg.type() !== 'error') return;
-      const loc = msg.location().url;
-      if (loc.endsWith('/favicon.ico')) return;
-      // Opening Reference tab when Zotero is unconfigured performs one expected 503 desktop probe.
-      if (msg.text().includes('503 (Service Unavailable)') && loc.endsWith('/api/paper-reader/action')) return;
-      // Intentional invalid-URL and stale-revision conflict tests produce expected 400/409 responses.
-      if ((msg.text().includes('400 (Bad Request)') || msg.text().includes('409 (Conflict)')) && loc.endsWith('/api/paper-reader/action')) return;
-      consoleErrors.push(`${tag}: ${msg.text()} (${loc})`);
-    });
-  };
+  const darkScope: ErrorScope = { allowZotero503: true, allowExpected400: true, allowExpected409: true };
+  const attachErrorListeners = (tag: string, page: Page) => attachErrorGuards(page, tag, darkScope, pageErrors, consoleErrors);
   const snap = async (page: Page, name: string) => {
     if (!evidence) return;
     await mkdir(host.artifacts, { recursive: true });
@@ -458,13 +242,8 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
         colorScheme: 'dark',
         reducedMotion: 'reduce'
       });
-      const page = await ctx.newPage();
-      page.setDefaultTimeout(12_000);
-      attachErrorListeners('phase3-dark', page);
+      const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', { tag: 'phase3-dark', scope: darkScope, pageErrors, consoleErrors });
       const appUrl = host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6';
-      await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
-      await page.goto(appUrl);
-      await page.locator('#loading').waitFor({ state: 'hidden' });
 
       // Standalone prefers-color-scheme: dark & reduced motion checks.
       const rootMeta = await page.evaluate(() => {
@@ -497,15 +276,10 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
 
       // Focus ring contrast (>= 3.0:1) in dark mode with reducedMotion: reduce (T1-F5-04, T2-F5-03).
       await page.keyboard.press('Tab');
-      const focusedOutline = await page.evaluate(helper => {
-        const el = document.activeElement as HTMLElement | null;
-        if (!el) return null;
-        const fn = new Function('el', helper + '\nreturn { tag: el.id || el.tagName, outlineWidth: parseFloat(getComputedStyle(el).outlineWidth) || 0, metrics: measureElement(el, "outlineColor") };') as
-          (node: Element) => { tag: string; outlineWidth: number; metrics: ColorMetrics };
-        return fn(el);
-      }, CONTRAST_HELPER_SOURCE);
-      assert.ok(focusedOutline && focusedOutline.outlineWidth >= 2, 'Keyboard focus must display >= 2px outline under reduced motion');
-      assert.ok(focusedOutline.metrics.ratio >= 3.0, `Focus ring contrast must be >= 3.0:1, got ${focusedOutline.metrics.ratio.toFixed(2)}:1`);
+      const focused = page.locator(':focus');
+      const outlineWidth = await focused.evaluate(el => parseFloat(getComputedStyle(el).outlineWidth) || 0);
+      assert.ok(outlineWidth >= 2, 'Keyboard focus must display >= 2px outline under reduced motion');
+      await assertContrast(focused, 'focus ring', 3.0, 'outlineColor');
 
       // Read text mode (.pdf-reading-text) must render dark with >= 4.5:1 contrast (fixes .lane > div #fff bug!).
       await page.locator('#readText').click();
@@ -564,25 +338,31 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const cmSel = rail.locator('.notebook-writing-area .cm-selectionBackground').first();
       await cmSel.waitFor({ state: 'visible' });
       const checkCmSelection = async (scheme: 'dark' | 'light', focused: boolean) => {
-        const res = await rail.locator('.notebook-writing-area').evaluate((root, arg) => {
+        const raw = await rail.locator('.notebook-writing-area').evaluate(root => {
           const sel = root.querySelector<HTMLElement>('.cm-selectionBackground')!;
           const line = root.querySelector<HTMLElement>('.cm-line')!;
-          const fn = new Function('sel', 'line', arg.helper + `
-            const bgRaw = parseCssColor(getComputedStyle(sel).backgroundColor);
-            const base = effectiveBg(sel.parentElement);
-            const bg = bgRaw[3] < 1 ? composite(bgRaw, base) : bgRaw;
-            const fgRaw = parseCssColor(getComputedStyle(line).color);
-            const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
-            const fgLum = relLum(fg), bgLum = relLum(bg);
-            return { raw: getComputedStyle(sel).backgroundColor, bgLum, ratio: contrastRatio(fgLum, bgLum) };
-          `) as (s: HTMLElement, l: HTMLElement) => { raw: string; bgLum: number; ratio: number };
-          return fn(sel, line);
-        }, { helper: CONTRAST_HELPER_SOURCE });
-        assert.notEqual(res.raw, 'rgb(215, 212, 240)', `CM6 default selection leaked in ${scheme} (${focused ? 'focused' : 'blurred'})`);
-        if (scheme === 'dark') {
-          assert.ok(res.bgLum < 0.10, `Dark CM6 ${focused ? 'focused' : 'blurred'} selection must stay dark, got bgLum=${res.bgLum.toFixed(4)} (${res.raw})`);
+          const layers: string[] = [];
+          for (let cur = sel.parentElement; cur && cur.nodeType === 1; cur = cur.parentElement) {
+            layers.push(getComputedStyle(cur).backgroundColor);
+          }
+          const darkRoot = document.documentElement.dataset.theme === 'dark' || getComputedStyle(document.documentElement).colorScheme.includes('dark');
+          return { selBg: getComputedStyle(sel).backgroundColor, lineFg: getComputedStyle(line).color, layers, darkRoot };
+        });
+        let base: [number, number, number, number] = raw.darkRoot ? [19, 22, 31, 1] : [255, 255, 255, 1];
+        for (let i = raw.layers.length - 1; i >= 0; i--) {
+          const layer = parseCssColor(raw.layers[i]);
+          if (layer[3] > 0) base = composite(layer, base);
         }
-        assert.ok(res.ratio >= 4.5, `CM6 ${scheme} ${focused ? 'focused' : 'blurred'} selection contrast must be >= 4.5:1, got ${res.ratio.toFixed(2)}:1 (${res.raw})`);
+        const bgRaw = parseCssColor(raw.selBg);
+        const bg = bgRaw[3] < 1 ? composite(bgRaw, base) : bgRaw;
+        const fgRaw = parseCssColor(raw.lineFg);
+        const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
+        const bgLum = relLum(bg), ratio = contrastRatio(relLum(fg), bgLum);
+        assert.notEqual(raw.selBg, 'rgb(215, 212, 240)', `CM6 default selection leaked in ${scheme} (${focused ? 'focused' : 'blurred'})`);
+        if (scheme === 'dark') {
+          assert.ok(bgLum < 0.10, `Dark CM6 ${focused ? 'focused' : 'blurred'} selection must stay dark, got bgLum=${bgLum.toFixed(4)} (${raw.selBg})`);
+        }
+        assert.ok(ratio >= 4.5, `CM6 ${scheme} ${focused ? 'focused' : 'blurred'} selection contrast must be >= 4.5:1, got ${ratio.toFixed(2)}:1 (${raw.selBg})`);
       };
       await checkCmSelection('dark', true);
       await page.locator('#saveState').click();
@@ -828,12 +608,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
     // -------------------------------------------------------------------------
     {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US', colorScheme: 'dark' });
-      const page = await ctx.newPage();
-      page.setDefaultTimeout(12_000);
-      attachErrorListeners('phase4-web-sheet', page);
-      await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
-      await page.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
-      await page.locator('#loading').waitFor({ state: 'hidden' });
+      const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', { tag: 'phase4-web-sheet', scope: darkScope, pageErrors, consoleErrors });
 
       await page.locator('#library').click();
       const dialog = page.getByRole('dialog');
@@ -879,12 +654,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
     // -------------------------------------------------------------------------
     {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US', colorScheme: 'dark' });
-      const page = await ctx.newPage();
-      page.setDefaultTimeout(12_000);
-      attachErrorListeners('phase5-layout', page);
-      await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
-      await page.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
-      await page.locator('#loading').waitFor({ state: 'hidden' });
+      const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=6', { tag: 'phase5-layout', scope: darkScope, pageErrors, consoleErrors });
 
       // Enable bilingual mode and verify bilingual #card (.selection-excerpt, .selection-counterpart, .chat-starter).
       await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
@@ -960,38 +730,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       // 1440x900 bilingual + open sidebar + page scope (T1-F5-03).
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.getByLabel('Translation scope').selectOption('page');
-      const inspectTranslated = () => page.evaluate(() => {
-        const blocks = Array.from(document.querySelectorAll<HTMLElement>('#translated .pdf-translated-text')).filter(el => !el.hidden && el.offsetWidth > 0);
-        const bodySizes = blocks.filter(el => el.dataset.role === 'paragraph').map(el => {
-          const rect = el.getBoundingClientRect();
-          const cssFont = parseFloat(getComputedStyle(el).fontSize) || 0;
-          const visualFont = cssFont * (rect.width / el.offsetWidth);
-          return {
-            id: el.dataset.blockId,
-            cssFont,
-            visualFont,
-            needsScroll: el.classList.contains('needs-scroll'),
-            overflowY: getComputedStyle(el).overflowY,
-            scrollOverflows: el.scrollHeight > el.clientHeight + 2
-          };
-        });
-        const rects = blocks.map(el => ({ id: el.dataset.blockId, r: el.getBoundingClientRect() }));
-        let overlaps = 0;
-        for (let i = 0; i < rects.length; i++) {
-          for (let j = i + 1; j < rects.length; j++) {
-            const a = rects[i].r, b = rects[j].r;
-            const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-            const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-            if (ox > 2 && oy > 2) overlaps++;
-          }
-        }
-        return {
-          bodySizes,
-          overlaps,
-          pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
-          railWidth: document.getElementById('rail')!.getBoundingClientRect().width
-        };
-      });
+      const inspectTranslated = () => inspectTranslatedBlocks(page);
 
       await until(async () => {
         const m = await inspectTranslated();
@@ -1137,44 +876,46 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
     // Inspect extension popup in dark mode (T1-F4-06).
     const menu = await openToolbar(page, id);
     await menu.click('summary');
-    const popupMetrics = await menu.evaluate((helper: string) => {
-      const fn = new Function(helper + `
-        const pick = sel => measureElement(document.querySelector(sel));
-        return {
-          scheme: getComputedStyle(document.documentElement).colorScheme,
-          body: pick('body'),
-          h1: pick('h1'),
-          message: pick('#message'),
-          primary: pick('.primary'),
-          secondary: pick('.secondary'),
-          summary: pick('summary'),
-          origin: pick('#origin'),
-          originBorder: measureBorder(document.querySelector('.address input')),
-          plain: pick('.plain')
-        };
-      `) as () => Record<string, unknown>;
-      return fn();
-    }, CONTRAST_HELPER_SOURCE) as {
-      scheme: string;
-      body: ColorMetrics;
-      h1: ColorMetrics;
-      message: ColorMetrics;
-      primary: ColorMetrics;
-      secondary: ColorMetrics;
-      summary: ColorMetrics;
-      origin: ColorMetrics;
-      originBorder: ColorMetrics & { borderWidth: number };
-      plain: ColorMetrics;
-    };
-    assert.equal(popupMetrics.scheme, 'dark', 'Extension popup must declare dark color-scheme');
-    assert.ok(popupMetrics.body.bgLum <= 0.08, `Extension popup body must be dark, got lum ${popupMetrics.body.bgLum}`);
-    assert.ok(popupMetrics.plain.fontSize >= 12, `Extension popup .plain must be >= 12px, got ${popupMetrics.plain.fontSize}`);
+    const rawPopup = await menu.evaluate(() => {
+      const darkRoot = document.documentElement.dataset.theme === 'dark' || getComputedStyle(document.documentElement).colorScheme.includes('dark');
+      const selectors = [
+        ['body', 'body'], ['h1', 'h1'], ['message', '#message'], ['primary', '.primary'],
+        ['secondary', '.secondary'], ['summary', 'summary'], ['origin', '#origin'], ['plain', '.plain']
+      ] as const;
+      const items: Record<string, RawElementSample> = {};
+      for (const [k, sel] of selectors) {
+        const el = document.querySelector<HTMLElement>(sel)!;
+        const layers: string[] = [];
+        for (let cur: Element | null = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
+        const s = getComputedStyle(el);
+        items[k] = { fg: s.color, layers, darkRoot, fontSize: parseFloat(s.fontSize) || 0, colorScheme: s.colorScheme };
+      }
+      const inp = document.querySelector<HTMLElement>('.address input')!;
+      const inpLayers: string[] = [];
+      for (let cur: Element | null = inp; cur && cur.nodeType === 1; cur = cur.parentElement) inpLayers.push(getComputedStyle(cur).backgroundColor);
+      const inpStyle = getComputedStyle(inp);
+      return {
+        scheme: getComputedStyle(document.documentElement).colorScheme,
+        items,
+        originBorder: {
+          fg: inpStyle.color, layers: inpLayers, parentLayers: inp.parentElement ? inpLayers.slice(1) : inpLayers, darkRoot,
+          borderTopColor: inpStyle.borderTopColor, borderTopWidth: parseFloat(inpStyle.borderTopWidth) || 0,
+          fontSize: parseFloat(inpStyle.fontSize) || 0, colorScheme: inpStyle.colorScheme
+        }
+      };
+    }, null) as { scheme: string; items: Record<'body' | 'h1' | 'message' | 'primary' | 'secondary' | 'summary' | 'origin' | 'plain', RawElementSample>; originBorder: RawBorderSample };
+    const popupBody = computeElementMetrics(rawPopup.items.body);
+    const popupPlain = computeElementMetrics(rawPopup.items.plain);
+    const originBorder = computeBorderMetrics(rawPopup.originBorder);
+    assert.equal(rawPopup.scheme, 'dark', 'Extension popup must declare dark color-scheme');
+    assert.ok(popupBody.bgLum <= 0.08, `Extension popup body must be dark, got lum ${popupBody.bgLum}`);
+    assert.ok(popupPlain.fontSize >= 12, `Extension popup .plain must be >= 12px, got ${popupPlain.fontSize}`);
     for (const key of ['h1', 'message', 'primary', 'secondary', 'summary', 'origin', 'plain'] as const) {
-      assert.ok(popupMetrics[key].ratio >= 4.5,
-        `Extension popup ${key} contrast must be >= 4.5:1, got ${popupMetrics[key].ratio.toFixed(2)}:1`);
+      const m = computeElementMetrics(rawPopup.items[key]);
+      assert.ok(m.ratio >= 4.5, `Extension popup ${key} contrast must be >= 4.5:1, got ${m.ratio.toFixed(2)}:1`);
     }
-    assert.ok(popupMetrics.originBorder.borderWidth >= 1 && popupMetrics.originBorder.ratio >= 3.0,
-      `Extension popup .address input dark border contrast must be >= 3.0:1, got ${popupMetrics.originBorder.ratio.toFixed(2)}:1`);
+    assert.ok(originBorder.borderWidth >= 1 && originBorder.ratio >= 3.0,
+      `Extension popup .address input dark border contrast must be >= 3.0:1, got ${originBorder.ratio.toFixed(2)}:1`);
     await menu.click('#toggle');
     await menu.detach();
 
@@ -1203,7 +944,7 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
       await page.locator('#term').dblclick();
       await until(async () => (await cardElement(page, 'h2'))?.text === 'luminance', `Card did not open on ${label}`);
 
-      const cardBox = await cardStyleMetrics(page, '.card');
+      const cardBox = await inspectShadowCardMetrics(page, '.card');
       assert.ok(cardBox, `Missing .card metrics on ${label}`);
       assert.equal(cardBox.colorScheme, 'dark', `.card on ${label} must resolve dark color-scheme`);
       assert.ok(cardBox.bgLum <= 0.08, `.card on ${label} must be dark, got lum ${cardBox.bgLum}`);
@@ -1211,7 +952,7 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
       assert.notEqual(cardBox.boxShadow, 'none', `.card on ${label} must keep elevation shadow`);
 
       for (const sel of ['h2', '.hint', '.modes button', '.foot .primary', '.foot [data-do="open"]']) {
-        const m = await cardStyleMetrics(page, sel);
+        const m = await inspectShadowCardMetrics(page, sel);
         assert.ok(m, `Missing ${sel} on ${label}`);
         assert.ok(m.ratio >= 4.5, `Dark card ${sel} on ${label}: expected >= 4.5:1, got ${m.ratio.toFixed(2)}:1`);
         if (sel === '.foot [data-do="open"]') {
@@ -1219,21 +960,19 @@ async function runExtensionPhase(host: HostFixture): Promise<void> {
         }
       }
 
-      // Open inline note editor to verify dark & light textarea text + border contrast.
       await clickCard(page, '[data-do="note"]');
       await until(async () => Boolean(await cardElement(page, '.editor textarea')), `Note textarea did not open on ${label}`);
-      const ta = await cardStyleMetrics(page, '.editor textarea');
+      const ta = await inspectShadowCardMetrics(page, '.editor textarea');
       assert.ok(ta && ta.bgLum <= 0.08 && ta.ratio >= 4.5,
         `Dark card textarea on ${label} must be dark with >= 4.5:1 contrast`);
       assert.ok(ta.borderTopWidth >= 1 && ta.borderRatio >= 3.0,
         `Dark card textarea border on ${label} must have >= 3.0:1 contrast (SC 1.4.11), got ${ta.borderRatio.toFixed(2)}:1 (${ta.borderColor})`);
 
-      // Switch to light media and verify crisp light card + textarea border contrast on both host pages too.
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
-      const lightCard = await cardStyleMetrics(page, '.card');
-      const lightHeading = await cardStyleMetrics(page, 'h2');
-      const lightTa = await cardStyleMetrics(page, '.editor textarea');
+      const lightCard = await inspectShadowCardMetrics(page, '.card');
+      const lightHeading = await inspectShadowCardMetrics(page, 'h2');
+      const lightTa = await inspectShadowCardMetrics(page, '.editor textarea');
       assert.ok(lightCard && lightCard.bgLum > 0.9, `Light card on ${label} must render crisp white surface`);
       assert.ok(lightHeading && lightHeading.ratio >= 4.5, `Light card h2 on ${label} must have >= 4.5:1 contrast`);
       assert.ok(lightTa && lightTa.borderTopWidth >= 1 && lightTa.borderRatio >= 3.0,

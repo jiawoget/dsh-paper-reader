@@ -1,4 +1,4 @@
-export interface PassageDefinition { id: string; url: URL; from: number; to: number }
+interface PassageDefinition { id: string; url: URL; from: number; to: number }
 export interface PassageLink { label: string; url: URL; from: number; to: number; replyId?: string }
 
 export function passageLabel(location: number | string, selection: string): string {

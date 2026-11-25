@@ -13,7 +13,7 @@ export interface ServiceOptions { root: string; ctx?: unknown; fetchImpl?: typeo
 type Operation = keyof ServiceResults;
 type Result = ServiceResults[Operation];
 type Handlers = { [K in Operation]: (input: Input, options?: StreamOptions) => ServiceResults[K] | Promise<ServiceResults[K]> };
-export interface ServiceAction {
+interface ServiceAction {
   <K extends Operation>(operation: K, payload?: unknown, options?: StreamOptions): Promise<ServiceResults[K]>;
   (operation: string, payload?: unknown, options?: StreamOptions): Promise<Result>;
 }

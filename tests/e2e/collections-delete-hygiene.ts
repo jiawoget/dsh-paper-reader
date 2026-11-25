@@ -5,31 +5,14 @@ import { rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { chromium, type BrowserContext, type Page, type Response, type Route } from 'playwright-core';
+import { chromium, type Page, type Response, type Route } from 'playwright-core';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
-import { withHost, type HostFixture } from './host.js';
+import { assertZeroSqliteRows, countRows } from './helpers/fixtures.js';
+import { attachErrorGuards, makePdf, rpc, type ErrorScope } from './helpers/reader.js';
+import { withHost } from './host.js';
 
 const appPath = '/api/paper-reader/app/index.html';
 const preload = new URL('./book-reading-preload.ts', import.meta.url).href;
-
-async function rpc(context: BrowserContext, host: HostFixture, op: string, payload: Record<string, unknown> = {}) {
-  return context.request.post(host.origin + '/api/paper-reader/action', {
-    data: { op, payload }
-  });
-}
-
-async function makePdf(context: BrowserContext, heading: string, body: string): Promise<Buffer> {
-  const page = await context.newPage();
-  try {
-    await page.setContent(`<!doctype html><html><body style="font:16px serif;padding:36px"><h1>${heading}</h1><p>${body}</p></body></html>`);
-    return Buffer.from(await page.pdf({ format: 'Letter' }));
-  } finally { await page.close(); }
-}
-
-function countRows(db: DatabaseSync, sql: string, ...params: (string | number)[]): number {
-  const row = db.prepare(sql).get(...params) as { n: number };
-  return Number(row.n);
-}
 
 const logFile = path.join(os.tmpdir(), 'paper-reader-collections-hygiene-' + randomUUID() + '.ndjson');
 await writeFile(logFile, '', { flag: 'wx' });
@@ -41,36 +24,27 @@ try {
   try {
     const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
     const page: Page = await context.newPage();
-    page.setDefaultTimeout(12_000);
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
-    let expectSimulatedDelete500 = false;
-    page.on('pageerror', err => pageErrors.push(err.message));
-    page.on('console', msg => {
-      if (msg.type() !== 'error') return;
-      const text = msg.text();
-      // Isolated E2E host has no live Zotero desktop daemon, so ignore expected 404/503 resource logs.
-      if (/Failed to load resource: the server responded with a status of (?:404|503)\b/.test(text)) return;
-      if (expectSimulatedDelete500 && /Failed to load resource: the server responded with a status of 500\b/.test(text)) return;
-      consoleErrors.push(text);
-    });
+    const errorScope: ErrorScope = { allowZotero503: true, allowExpected404: true, allowExpected500: false };
+    attachErrorGuards(page, 'F9', errorScope, pageErrors, consoleErrors);
 
     await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
 
     // --- Block 1: F9 Collections WAI-ARIA Tablist (T1-F9-01, T1-F9-02, T2-F9-01, T2-F9-02) ---
     const sourceUrl = host.origin + appPath + '?doc=pagedattention&page=6&anchor=block-tables';
     for (const word of ['alpha-term', 'beta-term']) {
-      const r = await rpc(context, host, 'vocab.save', {
+      const r = await rpc(context.request, host.origin, 'vocab.save', {
         docId: 'pagedattention', title: 'PagedAttention.pdf', page: 6, anchor: 'block-tables',
         label: 'Left column', sourceUrl, text: word, meaning: 'Meaning for ' + word, context: 'Context'
       });
-      assert.equal(r.status(), 200);
+      assert.equal(r.status, 200);
     }
-    const histRes = await rpc(context, host, 'history.add', {
+    const histRes = await rpc(context.request, host.origin, 'history.add', {
       docId: 'pagedattention', title: 'PagedAttention.pdf', page: 6, anchor: 'block-tables',
       label: 'Left column', sourceUrl, text: 'alpha-term', meaning: 'History meaning', context: 'Context'
     });
-    assert.equal(histRes.status(), 200);
+    assert.equal(histRes.status, 200);
 
     await page.goto(host.origin + appPath + '?doc=pagedattention&page=6', { waitUntil: 'domcontentloaded' });
     await page.locator('#loading').waitFor({ state: 'hidden' });
@@ -161,8 +135,8 @@ try {
     console.log('PASS F9 (Collections ARIA): role=tablist/tab/tabpanel, Arrow/Home/End wrap-around, search isolation & focus restoration.');
 
     // --- Block 2: F9 library.delete SQLite + localStorage Cascade & Active-Doc Fallback (T1-F9-03..05, T2-F9-03..06) ---
-    const pdfA = await makePdf(context, 'Delete Target Paper A', 'Unique content for document alpha deletion test.');
-    const pdfB = await makePdf(context, 'Control Paper B', 'Unique content for document beta control test.');
+    const pdfA = await makePdf(context, 'Delete Target Paper A', ['Unique content for document alpha deletion test.']);
+    const pdfB = await makePdf(context, 'Control Paper B', ['Unique content for document beta control test.']);
     const importA = await context.request.post(host.origin + '/api/paper-reader/import-pdf?title=Alpha-Delete.pdf', {
       headers: { 'Content-Type': 'application/pdf' }, data: pdfA
     });
@@ -174,26 +148,25 @@ try {
     const docA = ((await importA.json()) as { doc: { id: string } }).doc;
     const docB = ((await importB.json()) as { doc: { id: string } }).doc;
 
-    // Populate SQLite rows across tables for BOTH Doc A and Doc B
     for (const doc of [docA, docB]) {
       const url = host.origin + appPath + '?doc=' + doc.id + '&page=1';
-      assert.equal((await rpc(context, host, 'vocab.save', {
+      assert.equal((await rpc(context.request, host.origin, 'vocab.save', {
         docId: doc.id, title: doc.id, page: 1, anchor: 'p1', label: 'Page 1', sourceUrl: url,
         text: 'term-' + doc.id.slice(0, 8), meaning: 'def', context: 'ctx'
-      })).status(), 200);
-      assert.equal((await rpc(context, host, 'history.add', {
+      })).status, 200);
+      assert.equal((await rpc(context.request, host.origin, 'history.add', {
         docId: doc.id, title: doc.id, page: 1, anchor: 'p1', label: 'Page 1', sourceUrl: url,
         text: 'lookup-' + doc.id.slice(0, 8), meaning: 'def', context: 'ctx'
-      })).status(), 200);
-      assert.equal((await rpc(context, host, 'annotation.save', {
+      })).status, 200);
+      assert.equal((await rpc(context.request, host.origin, 'annotation.save', {
         id: randomUUID(), docId: doc.id, title: doc.id, page: 1, anchor: 'point-500000-500000', label: 'Page note',
         sourceUrl: url, kind: 'pin', color: 'purple', quote: '', text: 'pin-' + doc.id.slice(0, 8),
         point: { x: 0.5, y: 0.5 }
-      })).status(), 200);
-      const nb = await (await rpc(context, host, 'notebook.get', { docId: doc.id, title: doc.id, page: 1, sourceUrl: url })).json() as { revision: string };
-      assert.equal((await rpc(context, host, 'notebook.write', {
+      })).status, 200);
+      const nb = (await rpc<{ revision: string }>(context.request, host.origin, 'notebook.get', { docId: doc.id, title: doc.id, page: 1, sourceUrl: url })).body;
+      assert.equal((await rpc(context.request, host.origin, 'notebook.write', {
         docId: doc.id, title: doc.id, page: 1, sourceUrl: url, expectedRevision: nb.revision, markdown: '# Notes for ' + doc.id
-      })).status(), 200);
+      })).status, 200);
     }
 
     // Open Doc A (active!) and populate localStorage keys for both Doc A & Doc B
@@ -232,30 +205,17 @@ try {
     await page.locator('#loading').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#docTitle').innerText(), 'PagedAttention.pdf');
 
-    // Verify library.list omits Doc A, library.get returns 404, disk files removed
-    const listAfter = await (await rpc(context, host, 'library.list')).json() as { docs: { id: string }[] };
+    const listAfter = (await rpc<{ docs: { id: string }[] }>(context.request, host.origin, 'library.list')).body;
     assert.equal(listAfter.docs.some(d => d.id === docA.id), false);
     assert.equal(listAfter.docs.some(d => d.id === docB.id), true);
-    assert.equal((await rpc(context, host, 'library.get', { id: docA.id })).status(), 404);
+    assert.equal((await rpc(context.request, host.origin, 'library.get', { id: docA.id })).status, 404);
     assert.equal(existsSync(path.join(host.scratch, 'reader', 'documents', docA.id + '.pdf')), false);
     assert.equal(existsSync(path.join(host.scratch, 'reader', 'documents', docB.id + '.pdf')), true);
 
-    // Direct node:sqlite inspection on isolated PAPER_READER_HOME/reader.sqlite (T1-F9-04 & T2-F9-06)
-    const db = new DatabaseSync(path.join(host.scratch, 'reader', 'reader.sqlite'), { readOnly: true });
+    const dbPath = path.join(host.scratch, 'reader', 'reader.sqlite');
+    assertZeroSqliteRows(dbPath, docA.id);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
-      const prefixA = docA.id + '\u001f';
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM entries WHERE docId=?', docA.id), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM annotations WHERE docId=?', docA.id), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM chat_exchanges WHERE docId=?', docA.id), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?', docA.id, prefixA.length, prefixA), 0, 'Active-doc delete must NOT resurrect notebook_documents!');
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?', docA.id, prefixA.length, prefixA), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebooks WHERE docId=? OR substr(docId,1,?)=?', docA.id, prefixA.length, prefixA), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM book_positions WHERE docId=?', docA.id), 0, 'Active-doc delete must NOT resurrect book_positions!');
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM pdf_outlines WHERE docId=?', docA.id), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM article_captures WHERE docId=?', docA.id), 0);
-      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM citations WHERE identity=?', 'document/' + docA.id), 0);
-
-      // Doc B retains 100% of its rows
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM entries WHERE docId=?', docB.id), 2);
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM annotations WHERE docId=?', docB.id), 1);
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=?', docB.id), 1);
@@ -290,9 +250,9 @@ try {
 
     // --- Block 3: Active OpenStax book delete regression (prevents book_positions SQLite resurrection) ---
     for (const suppressScrollend of [false, true]) {
-      const openBookRes = await rpc(context, host, 'web.open', { url: bookRoot + sections.start.slug });
-      assert.equal(openBookRes.status(), 200);
-      const { doc: bookDoc } = await openBookRes.json() as { doc: { id: string; title: string } };
+      const openBookRes = await rpc<{ doc: { id: string; title: string } }>(context.request, host.origin, 'web.open', { url: bookRoot + sections.start.slug });
+      assert.equal(openBookRes.status, 200);
+      const { doc: bookDoc } = openBookRes.body;
       await page.goto(host.origin + appPath + '?doc=' + bookDoc.id + '&page=2', { waitUntil: 'domcontentloaded' });
       await page.locator('#loading').waitFor({ state: 'hidden' });
 
@@ -350,9 +310,9 @@ try {
     // --- Block 4: Active-doc HTTP 500 library.delete rollback regressions (zero editor/draft/scroll loss) ---
     // 4A: Active OpenStax book HTTP 500 rollback
     {
-      const openBookRes = await rpc(context, host, 'web.open', { url: bookRoot + sections.start.slug });
-      assert.equal(openBookRes.status(), 200);
-      const { doc: bookDoc } = await openBookRes.json() as { doc: { id: string; title: string } };
+      const openBookRes = await rpc<{ doc: { id: string; title: string } }>(context.request, host.origin, 'web.open', { url: bookRoot + sections.start.slug });
+      assert.equal(openBookRes.status, 200);
+      const { doc: bookDoc } = openBookRes.body;
       await page.goto(host.origin + appPath + '?doc=' + bookDoc.id + '&page=2', { waitUntil: 'domcontentloaded' });
       await page.locator('#loading').waitFor({ state: 'hidden' });
 
@@ -378,7 +338,7 @@ try {
         await route.continue();
       };
       await page.route('**/api/paper-reader/action', route500);
-      expectSimulatedDelete500 = true;
+      errorScope.allowExpected500 = true;
       try {
         await page.locator('#library').click();
         await dialog.waitFor({ state: 'visible' });
@@ -388,7 +348,7 @@ try {
         await bookRow.getByRole('button', { name: 'Confirm delete', exact: true }).click();
         await page.locator('#toast').filter({ hasText: 'Simulated delete failure 500' }).waitFor({ state: 'visible' });
       } finally {
-        expectSimulatedDelete500 = false;
+        errorScope.allowExpected500 = false;
         await page.unroute('**/api/paper-reader/action', route500);
       }
       await page.locator('#closeDialog').click();
@@ -418,7 +378,7 @@ try {
 
     // 4B: Active PDF with dirty Notes HTTP 500 rollback
     {
-      const pdfRollback = await makePdf(context, 'Rollback Paper 500', 'Unique text for HTTP 500 active PDF delete rollback test.');
+      const pdfRollback = await makePdf(context, 'Rollback Paper 500', ['Unique text for HTTP 500 active PDF delete rollback test.']);
       const importRollback = await context.request.post(host.origin + '/api/paper-reader/import-pdf?title=Rollback-500.pdf', {
         headers: { 'Content-Type': 'application/pdf' }, data: pdfRollback
       });
@@ -447,7 +407,7 @@ try {
       };
       await page.route('**/api/paper-reader/action', routePdf500);
       const draftMarker = 'Unsaved rollback draft marker';
-      expectSimulatedDelete500 = true;
+      errorScope.allowExpected500 = true;
       try {
         const notesEditor = page.getByRole('textbox', { name: 'Notes Markdown' });
         await notesEditor.click();
@@ -470,7 +430,7 @@ try {
         const draftAfter = await page.evaluate(id => sessionStorage.getItem('reader.markdown-draft.' + id), pdfDoc.id);
         assert.ok(draftAfter?.includes(draftMarker), 'Unsaved reader.markdown-draft.<id> must remain intact in sessionStorage after HTTP 500 delete.');
       } finally {
-        expectSimulatedDelete500 = false;
+        errorScope.allowExpected500 = false;
         releaseWrite();
         await page.unroute('**/api/paper-reader/action', routePdf500);
       }
@@ -489,13 +449,13 @@ try {
     console.log('PASS F9 (active-doc HTTP 500 delete rollback): OpenStax scroll tracking & dirty PDF Notes editor/draft remain 100% intact.');
 
     // T2-F9-05: RPC boundary responses (400 sample, 404 traversal/malformed, 200 { deleted: false } nonexistent)
-    assert.equal((await rpc(context, host, 'library.delete', { id: 'pagedattention' })).status(), 400);
-    assert.equal((await rpc(context, host, 'library.delete', { id: '../escape' })).status(), 404);
-    assert.equal((await rpc(context, host, 'library.delete', { id: 'pdf-bad' })).status(), 404);
+    assert.equal((await rpc(context.request, host.origin, 'library.delete', { id: 'pagedattention' })).status, 400);
+    assert.equal((await rpc(context.request, host.origin, 'library.delete', { id: '../escape' })).status, 404);
+    assert.equal((await rpc(context.request, host.origin, 'library.delete', { id: 'pdf-bad' })).status, 404);
     const missingId = 'pdf-' + 'f'.repeat(64);
-    const missingRes = await rpc(context, host, 'library.delete', { id: missingId });
-    assert.equal(missingRes.status(), 200);
-    assert.deepEqual(await missingRes.json(), { id: missingId, deleted: false });
+    const missingRes = await rpc(context.request, host.origin, 'library.delete', { id: missingId });
+    assert.equal(missingRes.status, 200);
+    assert.deepEqual(missingRes.body, { id: missingId, deleted: false });
 
     assert.deepEqual(pageErrors, [], 'F9 pageerrors: ' + pageErrors.join('; '));
     assert.deepEqual(consoleErrors, [], 'F9 console errors: ' + consoleErrors.join('; '));
