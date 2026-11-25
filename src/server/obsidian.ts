@@ -6,7 +6,7 @@ import {
 import path from 'node:path';
 import type { PaperAnnotation } from '../shared/annotations.js';
 import { chapterPassageLabel, escapedComments, markdownHeading as heading } from '../shared/notebook-structure.js';
-import { formatHighlightsSection, formatYamlFrontmatter } from '../shared/reading-pack.js';
+import { formatHighlightsSection, formatYamlFrontmatter, isLiveAnnotation } from '../shared/reading-pack.js';
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator } from '../shared/source-link.js';
 import type { DocumentInfo, SourceRecord } from '../shared/types.js';
 import { ReaderStore, type NotebookChapter } from './reader-store.js';
@@ -109,12 +109,15 @@ export function exportChapterVocabulary(previous: string, key: string, base: str
   if (!words.length && !previous.includes('<!-- Paper Reader ' + hash(id).slice(0, 20))) return previous;
   return mergeMarkdown(previous, vocabulary(base, words, chapter).join('\n'), id);
 }
+const markLink = (ann: PaperAnnotation, base: string, section?: string) => sourceText(
+  ann.kind === 'pin' && (ann.label.trim() === 'Page note' || ann.label.trim() === '页边笔记') ? { ...ann, label: '' } : ann, base, ann.quote, section
+);
 export function exportChapterMarks(previous: string, key: string, base: string, annotations: PaperAnnotation[], chapter?: NotebookChapter): string {
-  const id = key + '/annotations';
-  if (!annotations.length && !previous.includes('<!-- Paper Reader ' + hash(id).slice(0, 20))) return previous;
-  const content = formatHighlightsSection(annotations, {
+  const id = key + '/annotations', live = annotations.filter(isLiveAnnotation);
+  if (!live.length && !previous.includes('<!-- Paper Reader ' + hash(id).slice(0, 20))) return previous;
+  const content = formatHighlightsSection(live, {
     sectionTitle: page => chapter?.sections.get(page)?.title,
-    formatLink: ann => sourceText(ann, base, ann.quote, chapter?.sections.get(ann.page)?.title)
+    formatLink: ann => markLink(ann, base, chapter?.sections.get(ann.page)?.title)
   });
   return mergeMarkdown(previous, content, id);
 }
@@ -166,18 +169,20 @@ export function exportNotebook(store: ReaderStore, input: Input, sources: VaultS
       const file = path.join(folder, name);
       const observed = fileContent(file);
       const doc: DocumentInfo = sources.doc ?? { id: docId, kind: 'pdf', title, ...(supplied ? { url: supplied } : {}) };
-      const highlights = formatHighlightsSection(annotations, {
-        formatLink: ann => sourceText(ann, base, ann.quote),
+      const liveMarks = annotations.filter(isLiveAnnotation);
+      const highlights = formatHighlightsSection(liveMarks, {
+        formatLink: ann => markLink(ann, base),
         isWeb: doc.kind === 'web' && !doc.book
       });
       const content = notebook === undefined ? markdown(title, docId, base, entries, highlights) :
-        [notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, '').trimEnd(),
+        [notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, '')
+          .replace(/<!--(\s*Paper Reader\b[^\n]*?)-->/gi, '&lt;!--$1--&gt;').replace(/<!--(?=\s*Paper Reader\b)/gi, '&lt;!--').trimEnd(),
           highlights, entries.vocabulary.length ? vocabulary(base, entries.vocabulary).join('\n') : ''].filter(Boolean).join('\n\n');
       const render = (label: string, url: URL) => portableCitation(label, sources.targets(url, settings.vaultPath, folder, zotero?.link));
       const generated = vaultMarkdown(content, docId, render, false);
       const seed = observed?.trim() ? observed : formatYamlFrontmatter(doc, zotero);
       writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(seed, generated, docId), docId, render, false));
-      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length, annotations: annotations.length };
+      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length, annotations: liveMarks.length };
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(503, 'Cannot write to the configured Obsidian vault. Check its path and write permissions.');

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
+import { isLiveAnnotation } from '../shared/reading-pack.js';
 import type { DocumentInfo, NotebookSnapshot } from '../shared/types.js';
 import type { Library } from './library.js';
 import type { ObsidianLauncher } from './obsidian-desktop.js';
@@ -230,7 +231,7 @@ export class PaperNotebooks {
       if (!book.file) throw new ServiceError(503, 'Set your Obsidian vault directory in Settings.');
       const { chapter, docId, sourceUrl } = book.local;
       const words = records.entries('word', docId, chapter);
-      const marks = records.annotations(docId, chapter);
+      const marks = records.annotations(docId, chapter).filter(isLiveAnnotation);
       book.markdown = exportChapterMarks(exportChapterVocabulary(book.markdown, notebookKey(docId, chapter), sourceUrl, words, chapter), notebookKey(docId, chapter), sourceUrl, marks, chapter);
       persist(records, book);
       return { path: book.file, notes: records.entries('note', docId, chapter).length, words: words.length, annotations: marks.length };

@@ -585,8 +585,10 @@ export function refreshNotebookHighlights(app: ReaderPort): void {
   if (editor?.belongsTo(app.doc.id, currentChapter(app))) editor.setHighlights(app.notebookHighlights());
 }
 export function currentNotebookMarkdown(app: ReaderPort): string | undefined {
-  const chapterId = currentChapter(app), editor = editors.get(app);
-  if (editor?.belongsTo(app.doc.id, chapterId)) return editor.currentMarkdown();
-  return remembered(chapterId ? app.doc.id + '/' + encodeURIComponent(chapterId) : app.doc.id)?.text ?? (app.notebook?.docId === app.doc.id && app.notebook.chapterId === chapterId ? app.notebook.markdown : undefined);
+  const chapterId = currentChapter(app), editor = editors.get(app), id = chapterId ? app.doc.id + '/' + encodeURIComponent(chapterId) : app.doc.id;
+  return editor?.belongsTo(app.doc.id, chapterId) ? editor.currentMarkdown() : remembered(id)?.text ?? (app.notebook?.docId === app.doc.id && app.notebook.chapterId === chapterId ? app.notebook.markdown : undefined); }
+export async function flushNotebook(app: ReaderPort, saveDraft: (draft: { revision: string; original: string; text: string }, chapterId?: string) => Promise<void>): Promise<void> {
+  const chapterId = currentChapter(app), editor = editors.get(app), id = chapterId ? app.doc.id + '/' + encodeURIComponent(chapterId) : app.doc.id, draft = remembered(id);
+  if (editor?.belongsTo(app.doc.id, chapterId)) await editor.flush();
+  else if (draft && draft.text !== draft.original) { await saveDraft(draft, chapterId); pendingDrafts.delete(id); try { sessionStorage.removeItem(draftKey(id)); } catch {} }
 }
-export async function flushNotebook(app: ReaderPort): Promise<void> { const editor = editors.get(app); if (editor?.belongsTo(app.doc.id, currentChapter(app))) await editor.flush(); }

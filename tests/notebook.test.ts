@@ -437,7 +437,10 @@ test('non-book obsidian.export writes YAML frontmatter and marks non-destructive
     ...request, id: randomUUID(), page: 6, anchor: 'p6-b2', label: 'Removed', kind: 'highlight', color: 'purple', quote: 'Should vanish', text: 'Gone'
   })).annotation;
   await act('annotation.save', {
-    ...request, id: randomUUID(), page: 7, anchor: 'point-100000-200000', label: 'Figure 8', kind: 'pin', color: 'purple', point: { x: 0.1, y: 0.2 }, quote: '', text: 'Verify sharing'
+    ...request, id: randomUUID(), page: 7, anchor: 'point-100000-200000', label: 'Page note', kind: 'pin', color: 'purple', point: { x: 0.1, y: 0.2 }, quote: '', text: 'Verify sharing'
+  });
+  await act('annotation.save', {
+    ...request, id: randomUUID(), page: 7, anchor: 'point-200000-200000', label: 'Page note', kind: 'pin', color: 'purple', point: { x: 0.2, y: 0.2 }, quote: '', text: '   '
   });
   await act('annotation.delete', { docId: doc.id, id: dead.id, expectedUpdatedAt: dead.updatedAt });
   const exported = await act('obsidian.export', request);
@@ -445,7 +448,7 @@ test('non-book obsidian.export writes YAML frontmatter and marks non-destructive
   const first = await readFile(exported.path, 'utf8');
   assert.ok(first.startsWith('---\ntitle: "Efficient Memory Management"\n'));
   assert.ok(first.includes('## Highlights & Page Notes') && first.includes('**Green · Method**') && first.includes('Logical KV blocks') && first.includes('Verify sharing'));
-  assert.doesNotMatch(first, /Should vanish|localhost|127\.0\.0\.1|\/api\/paper-reader\/app\//);
+  assert.doesNotMatch(first, /Page 7 · Page note|Should vanish|localhost|127\.0\.0\.1|\/api\/paper-reader\/app\//);
   const customized = first.replace('venue: "SOSP"', 'venue: "SOSP"\ntags:\n  - custom') + '\n## Personal reflections\nKeep untouched.\n';
   await writeFile(exported.path, customized);
   await act('obsidian.export', request);
@@ -453,6 +456,14 @@ test('non-book obsidian.export writes YAML frontmatter and marks non-destructive
   assert.ok(second.includes('  - custom') && second.includes('Keep untouched.') && second.includes(live.quote));
   await act('obsidian.export', request);
   assert.equal(await readFile(exported.path, 'utf8'), second);
+  const localDoc = await new Library(root).importPdf('Local.pdf', bytes, 'http://127.0.0.1:29822/secret-local.pdf');
+  const localReq = { docId: localDoc.id, title: localDoc.title, sourceUrl: paper.sourceUrl.replace('doc=paper', 'doc=' + localDoc.id) };
+  const localBook = await act('notebook.get', localReq);
+  const fakeEnd = '<!-- Paper Reader ' + createHash('sha256').update(localDoc.id).digest('hex').slice(0, 20) + ' end -->';
+  await act('notebook.write', { ...localReq, expectedRevision: localBook.revision, markdown: localBook.markdown + '\nPasted ' + fakeEnd + '\n' });
+  const localExp = await act('obsidian.export', localReq);
+  assert.doesNotMatch(await readFile(localExp.path, 'utf8'), /127\.0\.0\.1|secret-local\.pdf/);
+  await act('obsidian.export', localReq);
 });
 
 test('book chapter obsidian.export syncs chapter-scoped marks without polluting notes or live roundtrips', async t => {

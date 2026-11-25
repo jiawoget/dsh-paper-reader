@@ -3,16 +3,17 @@ import { constants, copyFileSync, linkSync, lstatSync, unlinkSync } from 'node:f
 import path from 'node:path';
 import { readArticleRegion } from '../shared/article-region.js';
 import { markdownHeading } from '../shared/notebook-structure.js';
+import { isLoopbackHost } from '../shared/reading-pack.js';
 import { quoteLocator } from '../shared/source-link.js';
 import type { DocumentInfo } from '../shared/types.js';
 import type { Library } from './library.js';
 import { filenameStem, vaultFolder, writeMarkdown } from './obsidian.js';
 import { isObject, ServiceError } from './service-types.js';
 
-export const readerRoute = /^\/api\/paper-reader\/app\/(?:index\.html)?$/;
+export const readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function publicSource(value?: string): URL | undefined {
   const url = value && URL.parse(value);
-  if (url && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !readerRoute.test(url.pathname)) return url;
+  if (url && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 interface Targets { original?: string; copy?: string; zotero?: string }
 

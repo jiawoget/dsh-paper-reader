@@ -1119,18 +1119,18 @@ var Library = class {
     const digest = hash(bytes);
     if (digest === sampleDigest) return sample;
     const id = "pdf-" + digest;
-    const safeUrl = articleUrl(url)?.href;
+    const safeUrl2 = articleUrl(url)?.href;
     const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
     await mkdir(this.directory, { recursive: true });
     await writeOnce(path2.join(this.directory, id + ".pdf"), bytes);
-    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl ? { url: safeUrl } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
+    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl2 ? { url: safeUrl2 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
     const missing = missingDocMeta({ ...doc }, cleanMeta);
-    const needUrl = !doc.url && Boolean(safeUrl);
+    const needUrl = !doc.url && Boolean(safeUrl2);
     if (needUrl || Object.keys(missing).length) {
       return this.mutateMeta(id, (saved) => {
         let changed = false;
-        if (!saved.url && safeUrl) {
-          saved.url = safeUrl;
+        if (!saved.url && safeUrl2) {
+          saved.url = safeUrl2;
           changed = true;
         }
         for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
@@ -1246,62 +1246,6 @@ var Library = class {
 import { createHash as createHash6 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
 import path6 from "node:path";
-
-// src/shared/notebook-structure.ts
-function chapterPassageLabel(section, label) {
-  if (!label || label === section) return section;
-  return label.startsWith(section + " \xB7 ") ? label : section + " \xB7 " + label;
-}
-function escapedComments(text2) {
-  return text2.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;");
-}
-function markdownHeading(text2) {
-  return escapedComments(text2.replace(/\s+/g, " ")).replace(/([\\#*_\[\]<>])/g, "\\$1");
-}
-var marker = /^<!-- paper-reader:(note|source|end) ([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}) -->\r?$/gm;
-var markerError = () => new Error("A note marker is incomplete or repeated. Restore its matching note, source and end comments in the Markdown file.");
-function notebookBlocks(markdown2) {
-  const matches = [...markdown2.matchAll(marker)];
-  const seen = /* @__PURE__ */ new Set();
-  const result = [];
-  for (let i = 0; i < matches.length; i += 3) {
-    const [open2, source2, end] = matches.slice(i, i + 3);
-    if (!end || open2[1] !== "note" || source2[1] !== "source" || end[1] !== "end" || open2[2] !== source2[2] || open2[2] !== end[2] || seen.has(open2[2])) throw markerError();
-    seen.add(open2[2]);
-    const afterOpen = open2.index + open2[0].length;
-    const bodyStart = afterOpen + (markdown2.slice(afterOpen, source2.index).match(/^\n(?:\r?\n)?/)?.[0].length ?? 0);
-    const bodyEnd = source2.index - (markdown2.slice(bodyStart, source2.index).match(/(?:\r?\n){1,2}$/)?.[0].length ?? 0);
-    result.push({
-      id: open2[2],
-      start: open2.index,
-      end: end.index + end[0].length,
-      bodyStart,
-      bodyEnd,
-      reference: markdown2.slice(source2.index + source2[0].length, end.index).trim()
-    });
-  }
-  return result;
-}
-
-// src/server/obsidian.ts
-import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
-import {
-  closeSync as closeSync2,
-  constants as constants2,
-  copyFileSync as copyFileSync2,
-  fsyncSync,
-  lstatSync as lstatSync3,
-  linkSync as linkSync2,
-  mkdirSync as mkdirSync2,
-  openSync as openSync2,
-  readFileSync as readFileSync2,
-  realpathSync,
-  renameSync,
-  statSync,
-  unlinkSync as unlinkSync2,
-  writeFileSync
-} from "node:fs";
-import path5 from "node:path";
 
 // src/shared/annotations.ts
 var ANNOTATION_COLOR_META = {
@@ -1522,27 +1466,58 @@ function buildCiteKey(meta) {
   return `ref${yearPart}${fnv1aHex(seed)}`;
 }
 
+// src/shared/notebook-structure.ts
+function chapterPassageLabel(section, label) {
+  if (!label || label === section) return section;
+  return label.startsWith(section + " \xB7 ") ? label : section + " \xB7 " + label;
+}
+function escapedComments(text2) {
+  return text2.replaceAll("<!--", "&lt;!--").replaceAll("-->", "--&gt;");
+}
+function markdownHeading(text2) {
+  return escapedComments(text2.replace(/\s+/g, " ")).replace(/([\\#*_\[\]<>])/g, "\\$1");
+}
+var marker = /^<!-- paper-reader:(note|source|end) ([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}) -->\r?$/gm;
+var markerError = () => new Error("A note marker is incomplete or repeated. Restore its matching note, source and end comments in the Markdown file.");
+function notebookBlocks(markdown2) {
+  const matches = [...markdown2.matchAll(marker)];
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (let i = 0; i < matches.length; i += 3) {
+    const [open2, source2, end] = matches.slice(i, i + 3);
+    if (!end || open2[1] !== "note" || source2[1] !== "source" || end[1] !== "end" || open2[2] !== source2[2] || open2[2] !== end[2] || seen.has(open2[2])) throw markerError();
+    seen.add(open2[2]);
+    const afterOpen = open2.index + open2[0].length;
+    const bodyStart = afterOpen + (markdown2.slice(afterOpen, source2.index).match(/^\n(?:\r?\n)?/)?.[0].length ?? 0);
+    const bodyEnd = source2.index - (markdown2.slice(bodyStart, source2.index).match(/(?:\r?\n){1,2}$/)?.[0].length ?? 0);
+    result.push({
+      id: open2[2],
+      start: open2.index,
+      end: end.index + end[0].length,
+      bodyStart,
+      bodyEnd,
+      reference: markdown2.slice(source2.index + source2[0].length, end.index).trim()
+    });
+  }
+  return result;
+}
+
 // src/shared/reading-pack.ts
-var READER_ROUTE = /^\/api\/paper-reader\/app\/(?:index\.html)?$/;
+var READER_ROUTE = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function isLoopbackHost(host) {
-  const lower = host.toLowerCase();
-  return lower === "localhost" || lower.endsWith(".localhost") || lower === "[::1]" || lower === "::1" || lower === "0.0.0.0" || lower === "[::]" || /^127(?:\.\d{1,3}){3}$/.test(lower);
+  const lower = host.toLowerCase().replace(/\.+$/, "");
+  return lower === "localhost" || lower.endsWith(".localhost") || lower === "[::1]" || lower === "::1" || lower === "0.0.0.0" || lower === "[::]" || lower === "::" || /^127(?:\.\d{1,3}){3}$/.test(lower) || /^\[?::ffff:(?:7f[\da-f]{2}:[\da-f]{1,4}|0:0|127(?:\.\d{1,3}){3}|0\.0\.0\.0)\]?$/.test(lower);
 }
-function safePublicUrl(raw) {
+function safeUrl(raw, allowZotero = false) {
   const url = raw?.trim() ? URL.parse(raw.trim()) : null;
-  if (!url || url.protocol !== "http:" && url.protocol !== "https:") return void 0;
-  if (url.username || url.password || isLoopbackHost(url.hostname) || READER_ROUTE.test(url.pathname)) return void 0;
-  return url.href;
-}
-function safeZoteroUrl(raw) {
-  const url = raw?.trim() ? URL.parse(raw.trim()) : null;
-  if (!url || !["http:", "https:", "zotero:"].includes(url.protocol) || url.username || url.password) return void 0;
-  if (url.protocol !== "zotero:" && (isLoopbackHost(url.hostname) || READER_ROUTE.test(url.pathname))) return void 0;
+  if (!url || url.username || url.password) return void 0;
+  if (allowZotero && url.protocol === "zotero:") return url.href;
+  if (url.protocol !== "http:" && url.protocol !== "https:" || isLoopbackHost(url.hostname) || READER_ROUTE.test(url.pathname)) return void 0;
   return url.href;
 }
 function toZoteroItem(zotero) {
   if (!zotero) return null;
-  const url = safePublicUrl(zotero.url) ?? safePublicUrl(zotero.original);
+  const url = safeUrl(zotero.url) ?? safeUrl(zotero.original);
   return {
     key: zotero.key ?? "",
     title: zotero.title ?? "",
@@ -1555,36 +1530,32 @@ function toZoteroItem(zotero) {
     ...zotero.webUrl ? { webUrl: zotero.webUrl } : {}
   };
 }
-var yamlInline = (text2) => text2.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").trim();
+var yamlInline = (text2) => text2.replace(/[\r\n\u0000-\u001f\u007f-\u009f\u2028\u2029\ufffe\uffff]+/g, " ").trim();
 var yamlQuoted = (text2) => '"' + yamlInline(text2).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 var blockquote = (text2) => escapedComments(text2.replace(/\r\n?/g, "\n").trim()).split("\n").map((line) => line ? "> " + line : ">").join("\n");
 function isLiveAnnotation(item) {
   if (!item || typeof item !== "object") return false;
   if ("content" in item && item.content === null) return false;
   if (item.kind !== "highlight" && item.kind !== "pin") return false;
-  if (typeof item.page !== "number" || !Number.isFinite(item.page) || item.page < 1) return false;
+  if (typeof item.page !== "number" || !Number.isSafeInteger(item.page) || item.page < 1) return false;
   if (typeof item.id !== "string" || typeof item.quote !== "string" || typeof item.text !== "string") return false;
   return !(item.kind === "pin" && !item.text.trim() && !item.quote.trim());
 }
 function formatYamlFrontmatter(doc, zotero) {
   const meta = buildCitationMetadata(doc, toZoteroItem(zotero));
   const lines = ["---", "title: " + yamlQuoted(meta.title)];
+  const push = (key2, value) => {
+    const text2 = value ? yamlInline(value) : "";
+    if (text2) lines.push(key2 + ": " + yamlQuoted(text2));
+  };
   const authors = (meta.authors ?? []).map(yamlInline).filter(Boolean);
-  if (authors.length) {
-    lines.push("authors:");
-    for (const author of authors) lines.push("  - " + yamlQuoted(author));
-  }
+  if (authors.length) lines.push("authors:", ...authors.map((author) => "  - " + yamlQuoted(author)));
   if (meta.year && /^\d{4}$/.test(meta.year)) lines.push("year: " + meta.year);
-  const venue = yamlInline(meta.venue ?? meta.publisher ?? "");
-  if (venue) lines.push("venue: " + yamlQuoted(venue));
-  const doi = yamlInline(meta.doi ?? "");
-  if (doi) lines.push("doi: " + yamlQuoted(doi));
-  const citekey = yamlInline(buildCiteKey(meta));
-  if (citekey) lines.push("citekey: " + (/^[a-z0-9_-]+$/i.test(citekey) ? citekey : yamlQuoted(citekey)));
-  const publicUrl = safePublicUrl(meta.url) ?? safePublicUrl(doc.url) ?? safePublicUrl(zotero?.original);
-  if (publicUrl) lines.push("url: " + yamlQuoted(publicUrl));
-  const zoteroUrl = safeZoteroUrl(zotero?.link) ?? safeZoteroUrl(zotero?.webUrl);
-  if (zoteroUrl) lines.push("zotero: " + yamlQuoted(zoteroUrl));
+  push("venue", meta.venue ?? meta.publisher);
+  push("doi", meta.doi);
+  push("citekey", buildCiteKey(meta));
+  push("url", safeUrl(meta.url) ?? safeUrl(doc.url) ?? safeUrl(zotero?.original));
+  push("zotero", safeUrl(zotero?.link, true) ?? safeUrl(zotero?.webUrl, true));
   lines.push("---");
   return lines.join("\n");
 }
@@ -1609,6 +1580,26 @@ function formatHighlightsSection(annotations, options) {
   }
   return blocks3.join("\n\n");
 }
+
+// src/server/obsidian.ts
+import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
+import {
+  closeSync as closeSync2,
+  constants as constants2,
+  copyFileSync as copyFileSync2,
+  fsyncSync,
+  lstatSync as lstatSync3,
+  linkSync as linkSync2,
+  mkdirSync as mkdirSync2,
+  openSync as openSync2,
+  readFileSync as readFileSync2,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync as unlinkSync2,
+  writeFileSync
+} from "node:fs";
+import path5 from "node:path";
 
 // src/shared/source-link.ts
 function quoteLocator(text2) {
@@ -2405,10 +2396,10 @@ import { createHash as createHash4 } from "node:crypto";
 import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
 import path4 from "node:path";
-var readerRoute = /^\/api\/paper-reader\/app\/(?:index\.html)?$/;
+var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function publicSource(value) {
   const url = value && URL.parse(value);
-  if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !readerRoute.test(url.pathname)) return url;
+  if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
   const temp = path4.join(path4.dirname(file), ".source-" + randomUUID3() + ".tmp");
@@ -2665,12 +2656,18 @@ function exportChapterVocabulary(previous, key2, base, words, chapter) {
   if (!words.length && !previous.includes("<!-- Paper Reader " + hash2(id).slice(0, 20))) return previous;
   return mergeMarkdown(previous, vocabulary(base, words, chapter).join("\n"), id);
 }
+var markLink = (ann, base, section) => sourceText(
+  ann.kind === "pin" && (ann.label.trim() === "Page note" || ann.label.trim() === "\u9875\u8FB9\u7B14\u8BB0") ? { ...ann, label: "" } : ann,
+  base,
+  ann.quote,
+  section
+);
 function exportChapterMarks(previous, key2, base, annotations, chapter) {
-  const id = key2 + "/annotations";
-  if (!annotations.length && !previous.includes("<!-- Paper Reader " + hash2(id).slice(0, 20))) return previous;
-  const content = formatHighlightsSection(annotations, {
+  const id = key2 + "/annotations", live = annotations.filter(isLiveAnnotation);
+  if (!live.length && !previous.includes("<!-- Paper Reader " + hash2(id).slice(0, 20))) return previous;
+  const content = formatHighlightsSection(live, {
     sectionTitle: (page) => chapter?.sections.get(page)?.title,
-    formatLink: (ann) => sourceText(ann, base, ann.quote, chapter?.sections.get(ann.page)?.title)
+    formatLink: (ann) => markLink(ann, base, chapter?.sections.get(ann.page)?.title)
   });
   return mergeMarkdown(previous, content, id);
 }
@@ -2728,12 +2725,13 @@ function exportNotebook(store, input, sources, notebook) {
       const file = path5.join(folder, name2);
       const observed = fileContent(file);
       const doc = sources.doc ?? { id: docId, kind: "pdf", title, ...supplied ? { url: supplied } : {} };
-      const highlights = formatHighlightsSection(annotations, {
-        formatLink: (ann) => sourceText(ann, base, ann.quote),
+      const liveMarks = annotations.filter(isLiveAnnotation);
+      const highlights = formatHighlightsSection(liveMarks, {
+        formatLink: (ann) => markLink(ann, base),
         isWeb: doc.kind === "web" && !doc.book
       });
       const content = notebook === void 0 ? markdown(title, docId, base, entries, highlights) : [
-        notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, "").trimEnd(),
+        notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, "").replace(/<!--(\s*Paper Reader\b[^\n]*?)-->/gi, "&lt;!--$1--&gt;").replace(/<!--(?=\s*Paper Reader\b)/gi, "&lt;!--").trimEnd(),
         highlights,
         entries.vocabulary.length ? vocabulary(base, entries.vocabulary).join("\n") : ""
       ].filter(Boolean).join("\n\n");
@@ -2741,7 +2739,7 @@ function exportNotebook(store, input, sources, notebook) {
       const generated = vaultMarkdown(content, docId, render, false);
       const seed = observed?.trim() ? observed : formatYamlFrontmatter(doc, zotero);
       writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(seed, generated, docId), docId, render, false));
-      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length, annotations: annotations.length };
+      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length, annotations: liveMarks.length };
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(503, "Cannot write to the configured Obsidian vault. Check its path and write permissions.");
@@ -3079,7 +3077,7 @@ var PaperNotebooks = class {
       if (!book.file) throw new ServiceError(503, "Set your Obsidian vault directory in Settings.");
       const { chapter, docId, sourceUrl: sourceUrl2 } = book.local;
       const words = records.entries("word", docId, chapter);
-      const marks = records.annotations(docId, chapter);
+      const marks = records.annotations(docId, chapter).filter(isLiveAnnotation);
       book.markdown = exportChapterMarks(exportChapterVocabulary(book.markdown, notebookKey(docId, chapter), sourceUrl2, words, chapter), notebookKey(docId, chapter), sourceUrl2, marks, chapter);
       persist(records, book);
       return { path: book.file, notes: records.entries("note", docId, chapter).length, words: words.length, annotations: marks.length };

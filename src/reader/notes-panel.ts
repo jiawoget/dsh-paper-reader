@@ -95,7 +95,11 @@ export function readingPackBar(app: ReaderPort, slot: 'notes' | 'marks'): HTMLEl
       toast(label(`Downloaded ${pack.filename}.`, `已下载 ${pack.filename}。`));
     }, 'btn reading-pack-btn');
     const obsidian = button(label('Export to Obsidian', '导出到 Obsidian'), async () => {
-      await flushNotebook(app);
+      await flushNotebook(app, async (draft, chapterId) => {
+        if (app.notebookError) throw Error(app.notebookError);
+        const current = app.notebook?.docId === app.doc.id && app.notebook.chapterId === chapterId ? app.notebook : undefined;
+        if (current?.markdown !== draft.text) app.notebook = await api('notebook.write', { docId: app.doc.id, title: app.doc.title, page: app.page, sourceUrl: sourceUrl(app.doc.id, app.page), markdown: draft.text, expectedRevision: current?.markdown === draft.original ? current.revision : draft.revision });
+      });
       await api('obsidian.export', { docId: app.doc.id, title: app.doc.title, page: app.page, sourceUrl: sourceUrl(app.doc.id, app.page) });
       await app.refresh();
       toast(label('Exported to Obsidian.', '已导出到 Obsidian。'));
