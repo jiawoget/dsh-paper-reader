@@ -7,8 +7,6 @@
 #card .saved-note-heading,
 #card .selection-note-footer,
 #card .chat-heading,
-#card .quote-heading,
-#card .answer-actions,
 #card .chat-starters,
 #card .chat-input-row {
   display: flex;
@@ -75,7 +73,8 @@
 #card .chat-heading .icon-btn { color: var(--muted); }
 #card .chat-starters { flex-wrap: wrap; flex: none; }
 #card .chat-starter {
-  padding: 3px 8px;
+  min-height: 28px;
+  padding: 4px 9px;
   color: var(--purple);
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -83,6 +82,9 @@
   font-size: 12px;
 }
 #card .chat-starter:hover { background: var(--lavender); }
+@media (pointer: coarse), (max-width: 700px) {
+  #card .chat-starter { min-height: 44px; padding: 8px 12px; }
+}
 #card .selection-chat-log {
   min-height: min(88px, 13dvh);
   max-height: min(39dvh, 370px);
@@ -157,7 +159,7 @@
 }
 #card .chat-input-row { align-items: flex-end; }
 #card .chat-input-row textarea { flex: 1; max-height: 23vh; }
-#card .chat-input-row .btn, #card .answer-actions .btn { font-size: 12px; padding: 5px 8px; }
+#card .chat-input-row .btn { font-size: 12px; padding: 5px 8px; }
 #card .chat-drafts {
   max-width: 100%;
   min-width: 0;
@@ -234,8 +236,6 @@
   color: var(--muted);
   font-size: 12px;
 }
-#card .answer-actions { flex-wrap: wrap; }
-#card .answer-actions .btn { min-height: 25px; padding-block: 2px; }
 @media (max-width: 680px) {
   #card .selection-chat { border-left: 0; border-top: 1px solid var(--line); padding: 10px 12px; gap: 6px; }
   #card .selection-chat-log { max-height: min(27dvh, 240px); }

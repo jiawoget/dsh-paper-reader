@@ -7,7 +7,7 @@ import type { DiscussionRef } from './discussion-drafts.js';
 import { discussionId } from './passage-links.js';
 import { correspondingText, pairSelection } from './pdf/alignment.js';
 import { selectionRange } from './saved-selection.js';
-import { SelectionWorkspace } from './selection-workspace.js';
+import { buildCardActions, excerpt, passagePreview, SelectionWorkspace } from './selection-workspace.js';
 import { chatSource, conversationThread, materialKey, type SelectionContext } from './selection-context.js';
 import { api, button, byId, el, icon, message, readerLabel, sourceUrl, toast, type ReaderPort } from './ui.js';
 
@@ -17,38 +17,6 @@ function isTerm(text: string): boolean {
   return (ideographs?.length ?? 0) <= 8 && text.trim().split(/\s+/u).length <= 4;
 }
 
-function excerpt(text: string, limit: number): string {
-  const normalized = text.replace(/\s+/gu, ' ').trim();
-  const characters = Array.from(normalized);
-  if (characters.length <= limit) return normalized;
-  const prefix = characters.slice(0, limit).join('');
-  const wordEnd = prefix.lastIndexOf(' ');
-  return (wordEnd > limit * 0.7 ? prefix.slice(0, wordEnd) : prefix).trimEnd() + '…';
-}
-
-function passagePreview(selection: string): HTMLElement {
-  const section = el('div', 'selection-excerpt');
-  const short = excerpt(selection, 100);
-  const quotation = el('blockquote', '', short);
-  quotation.id = 'selection-passage';
-  quotation.dir = 'auto';
-  section.append(quotation);
-  if (short === selection) return section;
-  const more = el('button', 'selection-disclosure');
-  more.type = 'button';
-  more.setAttribute('aria-controls', quotation.id);
-  more.append(icon('next', 14));
-  const expand = (open: boolean) => {
-    quotation.textContent = open ? selection : short;
-    more.setAttribute('aria-expanded', String(open));
-    more.ariaLabel = more.title = open ? readerLabel('Show less', '收起') : readerLabel('Show full passage', '展开全文');
-  };
-  expand(false);
-  more.onclick = () => expand(more.getAttribute('aria-expanded') !== 'true');
-  section.append(more);
-  return section;
-}
-
 type PassageTool = 'note' | 'chat';
 
 export class SelectionCard {
@@ -56,6 +24,7 @@ export class SelectionCard {
   private readonly workspace: SelectionWorkspace;
   private updatePreview?: () => void;
   private fit?: () => void;
+  private closeMoreMenu?: (restoreFocus?: boolean) => boolean;
   private activeHit?: SelectionHit;
   private opener?: HTMLButtonElement;
   private readonly back = byId<HTMLButtonElement>('returnDiscussion');
@@ -146,6 +115,7 @@ export class SelectionCard {
   }
 
   dismiss(restoreFocus = false): void {
+    if (this.closeMoreMenu?.(restoreFocus)) return;
     const card = byId('card');
     if (restoreFocus && card.dataset.workspace) {
       if (card.dataset.workspace === 'chat') card.querySelector<HTMLButtonElement>('.chat-heading .chat-close')?.click();
@@ -159,6 +129,8 @@ export class SelectionCard {
     this.generation++;
     this.returnAcrossPages = undefined;
     this.back.hidden = true;
+    this.closeMoreMenu?.(false);
+    this.closeMoreMenu = undefined;
     if (!this.events) { this.activeHit = undefined; return; }
     this.events.abort();
     this.events = undefined;
@@ -295,12 +267,7 @@ export class SelectionCard {
     app.paperSelection?.(chatSource(item));
     const workspace = this.workspace.open(item, thread, () => this.leaveTool(), previous);
     const ongoing = this.currentQuestion;
-    if (!saved && ongoing && ongoing.thread !== thread && materialKey(ongoing.source) !== materialKey(chatSource(item))) {
-      const follow = button(readerLabel('Ask in this discussion', '接着问'),
-        () => this.open(hit, { source: chatSource(item), thread: ongoing.thread }, undefined, ongoing), 'btn primary');
-      workspace.chat.explain.replaceWith(follow);
-      workspace.chat.action.textContent = readerLabel('Ask separately', '单独提问');
-    }
+    const canContinue = !saved && ongoing && ongoing.thread !== thread && materialKey(ongoing.source) !== materialKey(chatSource(item));
 
     const card = byId('card');
     card.dataset.selection = term ? 'term' : 'passage';
@@ -405,37 +372,38 @@ export class SelectionCard {
       }
       if (restoreFocus) title.focus({ preventScroll: true });
     };
-    if (term) workspace.actions.prepend(button(readerLabel('Save word','收藏词语'), async () => {
-      await api('vocab.save', { ...source, text: selection, meaning: workspace.meaning() ?? (contextual() ? '' : counterpartText() ?? ''), context: item.context });
-      await app.refresh();
-      toast(readerLabel('Saved to vocabulary.', '已添加到生词本。'));
-    }, 'btn', 'star'));
-    if(app.saveHighlight && !hit.image) {
-      const highlight = button(readerLabel('Highlight', '高亮'), async () => {
-        await app.saveHighlight!(source, original);
+    const controls = buildCardActions({
+      chat: workspace.chat,
+      notesAction: workspace.notesAction,
+      includeNotes: item.hit.regionText === undefined,
+      onHighlight: app.saveHighlight && !hit.image ? async color => {
+        await app.saveHighlight!(source, original, color);
         if (this.activeHit === hit) this.close(true, true);
-      }, 'btn selection-highlight', 'edit');
-      workspace.actions.prepend(highlight);
-    }
-    workspace.actions.append(button(readerLabel('Locate','定位选段'), () => app.navigate(source.docId, source.page, hit.id, original, target, range), 'text-btn selection-locate'));
-    body.append(workspace.actions);
-    const language = button('', () => {
-      const side = byId('reader').dataset.compactLanguage === 'translation' ? 'source' : 'translation';
-      app.showReadingSide?.(side);
-    }, 'text-btn selection-language', 'arrow');
-    const languageCaption = el('span');
-    language.append(languageCaption);
-    body.append(language);
+      } : undefined,
+      onSaveWord: term ? async () => {
+        await api('vocab.save', { ...source, text: selection, meaning: workspace.meaning() ?? (contextual() ? '' : counterpartText() ?? ''), context: item.context });
+        await app.refresh();
+        toast(readerLabel('Saved to vocabulary.', '已添加到生词本。'));
+      } : undefined,
+      onInsertLink: () => workspace.insertLink(),
+      onLocate: () => app.navigate(source.docId, source.page, hit.id, original, target, range),
+      onToggleLanguage: () => {
+        const side = byId('reader').dataset.compactLanguage === 'translation' ? 'source' : 'translation';
+        app.showReadingSide?.(side);
+      },
+      onContinueDiscussion: canContinue ? () => this.open(hit, { source: chatSource(item), thread: ongoing.thread }, undefined, ongoing) : undefined
+    });
+    this.closeMoreMenu = controls.closeMenu;
+    body.append(controls.actions);
     main.append(body);
 
     const chat = workspace.chat.root;
-    const notesAction = workspace.actions.querySelector<HTMLButtonElement>('.selection-note-action')!;
+    const notesAction = workspace.notesAction;
     const chatAction = workspace.chat.action;
     workspace.notes.id = 'passage-notes';
     notesAction.setAttribute('aria-controls', workspace.notes.id);
     chatAction.setAttribute('aria-controls', chat.id);
-    workspace.chat.explain.setAttribute('aria-controls', chat.id);
-    card.replaceChildren(main, workspace.notes, chat);
+    card.replaceChildren(main, workspace.notes, chat, controls.menu);
     card.hidden = false;
     this.events = new AbortController();
     const signal = this.events.signal;
@@ -443,7 +411,7 @@ export class SelectionCard {
     card.addEventListener('click', event => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      const tool = target.closest('.selection-note-action') ? 'note' : target.closest('.selection-chat-action, .selection-explain-action') ? 'chat' : undefined;
+      const tool = target.closest('.selection-note-action') ? 'note' : target.closest('.selection-chat-action') ? 'chat' : undefined;
       if (tool) {
         if (tool === 'chat') this.opener = target.closest('button') ?? undefined;
         card.dataset.workspace = tool;
@@ -477,13 +445,10 @@ export class SelectionCard {
       this.place(docked);
       notesAction.setAttribute('aria-expanded', String(card.dataset.workspace === 'note'));
       chatAction.setAttribute('aria-expanded', String(card.dataset.workspace === 'chat'));
-      const narrow = reader.dataset.notebookPose === 'sheet';
-      language.hidden = (!narrow && comparing) || !!card.dataset.workspace;
-      const destination = narrow ? (comparing ? readerLabel('Show original','查看原文') : readerLabel('Show translation','查看译文')) :
-        readerLabel('Open bilingual view','打开双语对照');
-      if (languageCaption.textContent !== destination) languageCaption.textContent = destination;
+      controls.syncLanguage(reader.dataset.notebookPose === 'sheet', comparing, Boolean(card.dataset.workspace));
       dismiss.ariaLabel = dismiss.title = card.dataset.workspace ? readerLabel('Close passage workspace','收起选段工具') : readerLabel('Close selection','关闭选区');
       if (!docked) positionPassageCard(card, anchor());
+      controls.reposition();
     };
     this.fit();
     if (hit.trigger) title.focus({ preventScroll: true });

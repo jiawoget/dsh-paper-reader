@@ -1,3 +1,4 @@
+import type { AnnotationColor } from '../shared/annotations.js';
 import type { DocumentInfo, NotebookSnapshot, OpenDocument, PageView, ReaderState, RegionIntent, SelectionHit, SourceRecord } from '../shared/types.js';
 import { DEFAULT_TARGET_LANGUAGE, targetLanguageLabel, targetsSimplifiedChinese } from '../shared/languages.js';
 import { readArticleRegion } from '../shared/article-region.js';
@@ -287,7 +288,7 @@ class Reader implements ReaderPort {
       this.notebookError = undefined;
     }
   }
-  saveHighlight(source:SourceRecord,quote:string):Promise<void>{return this.marks.highlight(source,quote);}
+  saveHighlight(source:SourceRecord,quote:string,color?:AnnotationColor):Promise<void>{return this.marks.highlight(source,quote,color);}
   private paintMarks():void {this.markLayer.render(this.marks.onPage(this.page),this.view);}
   private locateAnchor(view:PageView,anchor:string,quote:string,target?:TranslatedLocator,range?:SavedSelectionRange):void{
     const destination=outlineLocation(anchor);

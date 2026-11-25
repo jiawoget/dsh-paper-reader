@@ -66,7 +66,8 @@ await withHost(async host => {
       }
       await selectText(run, mobile ? 'Block table translation' : undefined);
       const before = model.completed();
-      await page.getByRole('button', { name: '解释', exact: true }).click();
+      await page.locator('#card').getByRole('button', { name: '提问', exact: true }).click();
+      await page.locator('#card .selection-chat').getByRole('button', { name: '解释', exact: true }).click();
       const chat = page.locator('.selection-chat:visible');
       const reply = chat.locator('.selection-answer').last();
       await reply.getByText(answer, { exact: true }).waitFor();

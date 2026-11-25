@@ -4,6 +4,7 @@ import path from 'node:path';
 import { chromium, type Locator, type Page } from 'playwright-core';
 import type { Operations } from '../../src/shared/types.js';
 import { openReader, withHost, type HostFixture } from './host.js';
+import { cardMoreAction, openCardMore } from './helpers/reader.js';
 import { modelFixture } from './integration-fixtures.js';
 
 const pdfId = 'pagedattention';
@@ -161,7 +162,6 @@ await withHost(async host => {
       const card = page.locator('#card');
       const original = page.getByRole('button', { name: 'Original', exact: true });
       const bilingual = page.getByRole('button', { name: 'Bilingual', exact: true });
-      const openComparison = card.getByRole('button', { name: 'Open bilingual view', exact: true });
       const scope = page.getByRole('combobox', { name: 'Translation scope', exact: true });
       await sourceRun(page).waitFor();
       assert.equal(await original.getAttribute('aria-pressed'), 'true');
@@ -170,8 +170,10 @@ await withHost(async host => {
       await scope.selectOption('passage');
       await original.click();
       await selectPhrase(page, sourceRun(page), sourceQuote);
+      const more = await openCardMore(card, { key: 'Enter' });
+      const openComparison = more.getByRole('button', { name: 'Open bilingual view', exact: true });
       await openComparison.waitFor();
-      assert.equal(await card.getByRole('button', { name: 'See full translation', exact: true }).count(), 0);
+      assert.equal(await more.getByRole('button', { name: 'See full translation', exact: true }).count(), 0);
       await capture(page, '01-pdf-original-selection');
       await openComparison.press('Enter');
       assert.equal(await bilingual.getAttribute('aria-pressed'), 'true');
@@ -195,7 +197,7 @@ await withHost(async host => {
       const rail = page.locator('#rail');
       assert.equal(await rail.isVisible(), false, 'The passage link should be inserted with the notebook initially closed.');
       await selectPhrase(page, figureCaption(page), figureQuote);
-      await card.getByRole('button', { name: 'Insert passage link', exact: true }).press('Enter');
+      await cardMoreAction(card, 'Insert passage link', { key: 'Enter' });
       await rail.getByRole('tab', { name: 'Notes', exact: true, selected: true }).waitFor();
       const link = rail.getByRole('link').filter({ hasText: figureQuote });
       const citation = await box(link), writingArea = await box(rail.locator('.cm-scroller'));
@@ -253,7 +255,8 @@ await withHost(async host => {
       await page.reload();
       await page.locator('#loading').waitFor({ state: 'hidden' });
       await selectPhrase(page, sourceRun(page), sourceQuote);
-      await page.locator('#card').getByRole('button', { name: 'Explain', exact: true }).press('Enter');
+      await page.locator('#card').getByRole('button', { name: 'Ask AI', exact: true }).press('Enter');
+      await page.locator('#card .selection-chat').getByRole('button', { name: 'Explain', exact: true }).press('Enter');
       const chat = page.locator('#card .selection-chat');
       await chat.locator('.selection-answer').getByText(model.answer, { exact: true }).waitFor();
       assert.equal(model.completed(), 1, 'Explain should submit exactly one question.');
@@ -474,10 +477,12 @@ await withHost(async host => {
 
       await page.locator('#closeRail').click();
       await selectPhrase(page, sourceRun(page), sourceQuote);
-      await card.getByRole('button', { name: '打开双语对照', exact: true }).waitFor();
+      await (await openCardMore(card)).getByRole('button', { name: '打开双语对照', exact: true }).waitFor();
+      await page.keyboard.press('Escape');
       await page.setViewportSize(phone);
-      await card.getByRole('button', { name: '查看译文', exact: true }).click();
-      await card.getByRole('button', { name: '查看原文', exact: true }).waitFor();
+      await cardMoreAction(card, '查看译文');
+      await (await openCardMore(card)).getByRole('button', { name: '查看原文', exact: true }).waitFor();
+      await page.keyboard.press('Escape');
       await capture(page, '14-chinese-reading-controls');
     }, false, 'zh-CN');
 
@@ -487,16 +492,17 @@ await withHost(async host => {
       const original = page.getByRole('button', { name: 'Original', exact: true });
       const translation = page.getByRole('button', { name: 'Translation', exact: true });
       await selectPhrase(page, sourceRun(page), sourceQuote, true);
-      await card.getByRole('button', { name: 'Show translation', exact: true }).tap();
+      await cardMoreAction(card, 'Show translation', { mobile: true });
       assert.equal(await translation.getAttribute('aria-pressed'), 'true');
       assert.equal(await page.locator('#original').isVisible(), false);
       await hasVisibleSourceMark(page, 'translated');
-      assert.equal(await card.getByRole('button', { name: 'Show translation', exact: true }).count(), 0);
+      assert.equal(await (await openCardMore(card, { mobile: true })).getByRole('button', { name: 'Show translation', exact: true }).count(), 0);
+      await page.keyboard.press('Escape');
       await card.getByRole('button', { name: 'Close selection', exact: true }).tap();
 
       await selectPhrase(page, translatedRun(page), translatedQuote, true);
       await capture(page, '07-phone-translation-selection');
-      await card.getByRole('button', { name: 'Show original', exact: true }).tap();
+      await cardMoreAction(card, 'Show original', { mobile: true });
       assert.equal(await original.getAttribute('aria-pressed'), 'true');
       assert.equal(await page.locator('#translated').isVisible(), false);
       await hasVisibleSourceMark(page);
@@ -593,7 +599,7 @@ await withHost(async host => {
         await source.waitFor();
         assert.equal(await page.locator('#readText').isVisible(), false);
         await selectPhrase(page, source, text);
-        await card.getByRole('button', { name: 'Open bilingual view', exact: true }).click();
+        await cardMoreAction(card, 'Open bilingual view');
         await page.getByRole('button', { name: 'Translate article', exact: true }).click();
         await target.filter({ hasText: zh }).waitFor();
         assert.equal(await page.locator('#translationMode').isVisible(), false);

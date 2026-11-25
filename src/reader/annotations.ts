@@ -1,14 +1,11 @@
 import type { AnnotationColor, PaperAnnotation } from '../shared/annotations.js';
 import type { BookInfo, SourceRecord } from '../shared/types.js';
 import { readTranslatedLocator } from '../shared/source-link.js';
+import { ANNOTATION_COLORS, buildColorPalette, buildEmptyMarksNotice, buildMarksFilters, colorMeaning, filterAnnotations, highlightName, type AnnotationFilter, type MarksFilterControls } from './annotation-colors.js';
 import { api, button, byId, el, icon, message, readerLabel as label, sourceUrl, toast } from './ui.js';
 
 type Point = NonNullable<PaperAnnotation['point']>;
-type Kind = PaperAnnotation['kind'];
-const colors: AnnotationColor[] = ['yellow', 'green', 'purple'];
 const storageKey = (docId: string) => 'reader.annotation-drafts.' + docId;
-const colorName = (color: AnnotationColor) => label(color[0].toUpperCase() + color.slice(1), {yellow:'黄色', green:'绿色', purple:'紫色'}[color]);
-export const highlightName = (color: AnnotationColor) => colorName(color) + label(' highlight', '高亮');
 export function readPagePoint(anchor: string): Point | undefined {
   const match = /^point-(\d{1,7})-(\d{1,7})$/u.exec(anchor);
   if (match && +match[1] <= 1e6 && +match[2] <= 1e6) return { x: +match[1] / 1e6, y: +match[2] / 1e6 };
@@ -38,7 +35,6 @@ interface Editor {
   text: HTMLTextAreaElement;
   problem: HTMLElement;
   save: HTMLButtonElement;
-  colorButtons: HTMLButtonElement[];
   saving: boolean;
 }
 
@@ -46,13 +42,16 @@ export class AnnotationWorkspace {
   readonly root = el('section', 'annotation-workspace');
   readonly popover = el('section', 'annotation-popover');
   private readonly index = el('div', 'annotation-index');
+  private readonly filters: MarksFilterControls;
+  private readonly indexProblem = el('p', 'annotation-error');
+  private readonly list = el('div', 'annotation-groups');
   private docId = '';
   private book?: BookInfo;
   private records = new Map<string, PaperAnnotation>();
   private drafts = new Map<string, PaperAnnotation>();
   private editor?: Editor;
   private inRail = false;
-  private filter: Kind | 'all' = 'all';
+  private filterState: AnnotationFilter = { kind: 'all', color: 'all', query: '' };
   private problem = '';
   private lastTrigger?: HTMLElement;
   private returnFromInline?: () => void;
@@ -60,6 +59,13 @@ export class AnnotationWorkspace {
 
   constructor(private readonly controls: Controls) {
     this.root.ariaLabel = label('Marks for this paper', '本篇标记');
+    this.filters = buildMarksFilters(
+      kind => { this.filterState.kind = kind; this.renderIndex(); },
+      color => { this.filterState.color = color; this.renderIndex(); },
+      query => { this.filterState.query = query; this.renderIndex(); }
+    );
+    this.indexProblem.hidden = true;
+    this.index.replaceChildren(...this.filters.nodes, this.indexProblem, this.list);
     this.root.append(this.index);
     this.popover.hidden = true;
     this.popover.ariaLabel = label('Page note', '页边笔记');
@@ -83,12 +89,12 @@ export class AnnotationWorkspace {
     this.book=book;
     if (this.docId === id) return;
     this.closeEditor(false); this.docId = id; this.records.clear(); this.drafts.clear();
-    this.problem = ''; this.filter = 'all'; this.revision++;
+    this.problem = ''; this.filterState = { kind: 'all', color: 'all', query: '' }; this.filters.reset(); this.revision++;
     try {
       const data: unknown = JSON.parse(sessionStorage.getItem(storageKey(id)) || '[]');
       if (Array.isArray(data)) for (const item of data) {
         if (item && item.docId === id && typeof item.id === 'string' && typeof item.text === 'string' &&
-          typeof item.sourceUrl === 'string' && colors.includes(item.color) &&
+          typeof item.sourceUrl === 'string' && ANNOTATION_COLORS.includes(item.color) &&
           (item.kind === 'highlight' || item.kind === 'pin' && readPagePoint(item.anchor))) this.drafts.set(item.id, item);
       }
     } catch { /* Keep the notebook available if browser storage has been cleared. */ }
@@ -119,56 +125,55 @@ export class AnnotationWorkspace {
   attach(parent: HTMLElement): void { if (this.root.parentElement !== parent) parent.replaceChildren(this.root); }
   showList(): void { this.closeEditor(false); this.controls.showIndex(); }
   private renderIndex(): void {
-    const focused = this.index.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset : undefined;
-    const categories = el('div', 'annotation-filters'); categories.ariaLabel = label('Filter marks','筛选标记');
-    for (const [value, caption] of [['all',label('All','全部')],['highlight',label('Highlights','高亮')],['pin',label('Page notes','页边笔记')]] as const) {
-      const choice = button(caption, () => {this.filter = value; this.renderIndex();}, 'annotation-filter');
-      choice.dataset.filter = value;
-      choice.setAttribute('aria-pressed', String(this.filter === value)); categories.append(choice);
-    }
-    const list = el('div','annotation-groups');
-    const items = this.all().filter(n => this.filter === 'all' || n.kind === this.filter)
-      .sort((a,b) => a.page-b.page || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const focusedId = this.list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.id : undefined;
+    this.filters.sync(this.filterState);
+    this.indexProblem.hidden = !this.problem;
+    if (this.problem) this.indexProblem.replaceChildren(this.problem + ' ', button(label('Retry', '重试'), () => this.controls.refresh(), 'text-btn'));
+    const all = this.all();
+    const items = filterAnnotations(all, this.filterState, visibleQuote);
+    const nodes: HTMLElement[] = [];
     let page = 0;
     for (const note of items) {
       if (page !== note.page && !note.docId.startsWith('web-')) {
         page = note.page;
-        list.append(el('h3','annotation-page-title',this.book?.sections[page-1]?.title || label('Page ' + page,'第 ' + page + ' 页')));
+        nodes.push(el('h3', 'annotation-page-title', this.book?.sections[page - 1]?.title || label('Page ' + page, '第 ' + page + ' 页')));
       }
       const row = button('', () => this.open(note.id, row, true), 'annotation-entry');
       row.dataset.id = note.id;
       const type = el('span', 'annotation-meta');
-      type.append(icon(note.kind === 'pin' ? 'pin' : 'edit', 14), note.kind === 'pin' ? label('Page note','页边笔记') : highlightName(note.color));
-      if(note.kind==='pin' && note.label!=='Page note' && note.label!=='页边笔记')type.append(' · '+note.label);
-      if (this.drafts.has(note.id)) type.append(label(' · Draft',' · 草稿'));
+      type.append(icon(note.kind === 'pin' ? 'pin' : 'edit', 14), note.kind === 'pin' ? label('Page note', '页边笔记') : highlightName(note.color) + ' · ' + colorMeaning(note.color));
+      if (note.kind === 'pin' && note.label !== 'Page note' && note.label !== '页边笔记') type.append(' · ' + note.label);
+      if (this.drafts.has(note.id)) type.append(label(' · Draft', ' · 草稿'));
       if (note.kind === 'highlight') type.dataset.color = note.color;
       const fallbackLabel = note.label === 'Page note' ? label('Page note', '页边笔记') : note.label;
-      const excerpt = el('strong','', note.text.trim() || visibleQuote(note) || fallbackLabel);
+      const excerpt = el('strong', '', note.text.trim() || visibleQuote(note) || fallbackLabel);
       excerpt.dir = 'auto'; row.append(type, excerpt);
-      if (note.text && note.quote) {const quote = el('span','annotation-excerpt',visibleQuote(note)); quote.dir='auto'; row.append(quote);}
-      list.append(row);
+      if (note.text && note.quote) { const quote = el('span', 'annotation-excerpt', visibleQuote(note)); quote.dir = 'auto'; row.append(quote); }
+      nodes.push(row);
     }
-    if (!items.length) list.append(el('p','hint',this.filter === 'all' ? label('Your highlights and page notes appear here.','这里会显示高亮和页边笔记。') :
-      this.filter === 'pin' ? label('No page notes for this paper.','本篇暂无页边笔记。') : label('No highlights for this paper.','本篇暂无高亮。')));
-    this.index.replaceChildren(el('h2','',label('Marks','标记')), categories);
-    if (this.problem) {
-      const failure = el('p','annotation-error',this.problem + ' ');
-      failure.append(button(label('Retry','重试'), () => this.controls.refresh(), 'text-btn')); this.index.append(failure);
+    if (!items.length) {
+      nodes.push(buildEmptyMarksNotice(all.length > 0, this.filterState, () => {
+        this.filterState = { kind: 'all', color: 'all', query: '' };
+        this.filters.reset();
+        this.renderIndex();
+      }));
     }
-    this.index.append(list);
-    if (focused?.id) this.index.querySelector<HTMLElement>('[data-id="'+CSS.escape(focused.id)+'"]')?.focus({preventScroll:true});
-    else if (focused?.filter) this.index.querySelector<HTMLElement>('[data-filter="'+CSS.escape(focused.filter)+'"]')?.focus({preventScroll:true});
+    this.list.replaceChildren(...nodes);
+    if (focusedId) this.list.querySelector<HTMLElement>('[data-id="' + CSS.escape(focusedId) + '"]')?.focus({ preventScroll: true });
   }
-  async highlight(source: SourceRecord, quote: string): Promise<void> {
+  async highlight(source: SourceRecord, quote: string, color: AnnotationColor = 'yellow'): Promise<void> {
     const existing = this.all().find(n => n.kind === 'highlight' && n.sourceUrl === source.sourceUrl && n.quote === quote);
-    if (existing) { this.open(existing.id, undefined, true); return; }
-    const note: PaperAnnotation = {...source, id:crypto.randomUUID(),kind:'highlight',color:'yellow',quote,text:'',createdAt:'',updatedAt:''};
-    this.drafts.set(note.id,note); this.remember(); this.revision++;
+    if (existing && existing.color === color) { this.open(existing.id, undefined, true); return; }
+    const note: PaperAnnotation = existing ? { ...existing, color }
+      : { ...source, id: crypto.randomUUID(), kind: 'highlight', color, quote, text: '', createdAt: '', updatedAt: '' };
+    this.drafts.set(note.id, note); this.remember(); this.revision++;
     try {
       const saved = await this.write(note);
-      if (this.docId === saved.docId) toast(label('Highlight saved.', '已保存高亮。'), {label:label('Undo','撤销'),run:()=>this.remove(saved,false)});
+      if (this.docId !== saved.docId) return;
+      if (existing) toast(label('Highlight color updated.', '已更新高亮颜色。'));
+      else toast(label('Highlight saved.', '已保存高亮。'), { label: label('Undo', '撤销'), run: () => this.remove(saved, false) });
     } catch (error) {
-      if (this.docId === note.docId) { this.renderIndex(); this.controls.repaintPage(); this.open(note.id,undefined,true); this.showProblem(message(error)); }
+      if (this.docId === note.docId) { this.renderIndex(); this.controls.repaintPage(); this.open(note.id, undefined, true); this.showProblem(message(error)); }
       throw error;
     }
   }
@@ -201,6 +206,7 @@ export class AnnotationWorkspace {
     const e = this.editor; if (!e) return;
     const start = e.text.selectionStart, end = e.text.selectionEnd;
     this.inRail = true; this.controls.showIndex(); this.popover.hidden = true;
+    e.root.querySelector('.annotation-extras')?.remove();
     this.root.replaceChildren(e.root); e.text.focus({preventScroll:true}); e.text.setSelectionRange(start,end);
   }
   private position(): void {
@@ -257,19 +263,11 @@ export class AnnotationWorkspace {
     text.value=note.text;field.append(el('span','',label('Comment','备注')),text);root.append(field);
     const problem=el('div','annotation-error');problem.setAttribute('role','alert');
     const save=button(label('Save','保存'),()=>this.saveEditor(editor),'btn primary','check');
-    const editor:Editor={note,root,text,problem,save,colorButtons:[],saving:false};
+    const editor:Editor={note,root,text,problem,save,saving:false};
     const remember=()=>{ this.drafts.set(note.id,{...note});this.remember(); };
     text.oninput=()=>{note.text=text.value;remember();};
     text.onkeydown=event=>{if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();save.click();}};
-    if(note.kind==='highlight') {
-      const palette=el('fieldset','annotation-palette');palette.append(el('legend','',label('Highlight color','高亮颜色')));
-      for(const color of colors) {
-        const choice=button(colorName(color),()=>{note.color=color;remember();this.controls.repaintPage();
-          for(const b of editor.colorButtons)b.setAttribute('aria-pressed',String(b.dataset.color===color));},'annotation-swatch');
-        choice.dataset.color=color;choice.setAttribute('aria-pressed',String(note.color===color));editor.colorButtons.push(choice);palette.append(choice);
-      }
-      root.append(palette);
-    }
+    if(note.kind==='highlight') root.append(buildColorPalette(note.color, color => { note.color = color; remember(); this.controls.repaintPage(); }));
     const end=el('div','annotation-editor-actions');
     const cite=button(label('Cite in Notes','引用到笔记'),async()=>{
       const saved=await this.saveEditor(editor,false);
@@ -277,14 +275,18 @@ export class AnnotationWorkspace {
       this.closeEditor(false);
       await this.controls.cite(saved,visibleQuote(saved)||saved.text||label('Page note','页边笔记'));
     },'btn','arrow');
-    end.append(save,cite);
-    const extras=el('div','annotation-extras');
-    if(!this.inRail) extras.append(button(label('Open in Marks','在标记中打开'),()=>this.dockEditor(),'text-btn','book'));
-    extras.append(button(label('Remove','移除'),()=>{
+    const remove=button(label('Remove','移除'),()=>{
       problem.replaceChildren(el('p','',label('Remove this mark? Citations in your notes will still open its source.','移除此标记？笔记中的引用仍可回到出处。')),
         button(label('Remove mark','移除标记'),()=>this.remove(note,true),'btn'),button(label('Keep mark','保留标记'),()=>problem.replaceChildren(),'text-btn'));
-    },'text-btn'));
-    root.append(problem,end,extras);return editor;
+    },'text-btn annotation-remove');
+    end.append(save,cite,remove);
+    root.append(problem,end);
+    if(!this.inRail){
+      const extras=el('div','annotation-extras');
+      extras.append(button(label('Open in Marks','在标记中打开'),()=>this.dockEditor(),'text-btn','book'));
+      root.append(extras);
+    }
+    return editor;
   }
   private showProblem(reason:string):void {if(this.editor)this.editor.problem.textContent=reason;}
   private async write(note:PaperAnnotation):Promise<PaperAnnotation> {

@@ -170,7 +170,6 @@ svg { flex-shrink: 0; }
 .tag { display: inline-block; background: var(--lavender); color: var(--purple); font-size: 12px; border-radius: 4px; padding: 2px 5px; margin: 8px 0 4px; }
 .meaning { font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
 .card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
-.card-actions .btn { font-size: 12px; padding: 5px 7px; }
 .doc-row { width: 100%; display: flex; align-items: center; gap: 9px; text-align: left; padding: 8px; border-radius: 5px; font-size: 13px; }
 .doc-row:hover { background: var(--lavender); }
 .doc-row small { margin-left: auto; color: var(--muted); }

@@ -3,7 +3,7 @@ import { readSelectionRange, readTranslatedLocator, type SavedSelectionRange } f
 import type { PageView, ReaderBlock, ReadingSide } from '../shared/types.js';
 import { pairSelection } from './pdf/alignment.js';
 import { restoreSelection } from './saved-selection.js';
-import { highlightName } from './annotations.js';
+import { ANNOTATION_COLORS, highlightName } from './annotation-colors.js';
 import { el, icon, readerLabel as t } from './ui.js';
 
 type Point = { x: number; y: number };
@@ -60,7 +60,6 @@ interface MarkTarget {
   records: PaperAnnotation[];
   ranges: Range[];
 }
-const colors = ['yellow', 'green', 'purple'] as const;
 const visible = (node: HTMLElement) => node.isConnected && node.getBoundingClientRect().width > 0;
 const fraction = (value: number) => Math.max(0, Math.min(1, value));
 const label = (a: PaperAnnotation) => (a.text.trim() || a.quote || a.label).replace(/\s+/gu, ' ').slice(0, 100);
@@ -135,7 +134,7 @@ export class AnnotationLayer {
     if (!surface) return;
     this.targets = [];
     const live = new Set<HTMLButtonElement>();
-    const ink = new Map(colors.map(color => [color, new Highlight()]));
+    const ink = new Map(ANNOTATION_COLORS.map(color => [color, new Highlight()]));
     const marks = this.records.filter(a => a.kind === 'highlight').map(mark => ({ mark, ...passages(mark, surface) }));
     for (const mounted of this.panes) {
       const { pane, overlay, buttons } = mounted;
@@ -371,7 +370,7 @@ export class AnnotationLayer {
     this.closeChooser(); this.place(false);
     this.locator?.remove(); this.locator = undefined;
     for (const { overlay } of this.panes) overlay.remove();
-    for (const color of colors) CSS.highlights.delete('paper-annotation-' + color);
+    for (const color of ANNOTATION_COLORS) CSS.highlights.delete('paper-annotation-' + color);
     this.panes = []; this.targets = []; this.records = []; this.surface = undefined;
   }
 }

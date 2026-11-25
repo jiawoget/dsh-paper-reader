@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import sharp from 'sharp';
+import { cardMoreAction } from './helpers/reader.js';
 import { withHost } from './host.js';
 
 const twin = 'Edition.pdf';
@@ -207,7 +208,7 @@ async function vocabulary(page: Page) {
   console.log('PASS J13 - the local library distinguishes editions by page count before opening either file.');
   await page.locator('#dialog .doc-row').filter({hasText:'PagedAttention.pdf'}).click(); await loaded(page);
   await page.locator('#original .pdf-native-text [data-block-id]').filter({hasText:/^block tables$/i}).first().click();
-  await page.locator('#card').getByRole('button',{name:'Save word',exact:true}).click();
+  await cardMoreAction(page.locator('#card'), 'Save word');
   await page.getByText('Saved to vocabulary.',{exact:true}).waitFor();
   await page.locator('#more').click(); await page.getByRole('button',{name:'Vocabulary and history',exact:true}).click();
   const modal=page.locator('#dialog'), query=modal.getByRole('searchbox');

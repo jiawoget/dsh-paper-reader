@@ -6,6 +6,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
 import { createServices } from '../src/server/services.js';
+import type { PaperAnnotation } from '../src/shared/annotations.js';
+import { ANNOTATION_COLORS, colorMeaning, filterAnnotations, highlightColorLabel, highlightDotAriaLabel, highlightName } from '../src/reader/annotation-colors.js';
 
 const paper = { docId: 'pagedattention', title: 'PagedAttention', sourceUrl:
   'http://localhost:29812/api/paper-reader/app/index.html?doc=pagedattention&page=6&anchor=fig6&rangeStart=4&rangeEnd=10&endAnchor=fig6&rangeTail=blocks' };
@@ -92,4 +94,43 @@ test('invalid pin positions, kinds, colors and creation IDs cannot enter the ann
     { page: 0 }, { sourceUrl: 'javascript:void(0)' }
   ]) await assert.rejects(act('annotation.save', { ...mark, ...changes }), { status: 400 });
   assert.deepEqual(await act('annotation.list', paper), { annotations: [] });
+});
+
+test('multi-color highlights persist and annotation-colors filters and formats EN/ZH metadata', async t => {
+  const { act } = await setup(t);
+  const saved: PaperAnnotation[] = [];
+  for (const [index, color] of ANNOTATION_COLORS.entries()) {
+    const { annotation } = await act('annotation.save', {
+      ...highlight, id: randomUUID(), color, quote: 'quote-' + color, text: 'note-' + index, label: 'Block ' + index
+    });
+    saved.push(annotation);
+  }
+  const pin = (await act('annotation.save', {
+    ...highlight, id: randomUUID(), kind: 'pin', color: 'purple', point: { x: 0.2, y: 0.3 }, quote: '', text: 'Margin question', label: 'Figure 6'
+  })).annotation;
+  const listed = (await act('annotation.list', paper)).annotations;
+  assert.deepEqual(new Set(listed.filter(a => a.kind === 'highlight').map(a => a.color)), new Set(ANNOTATION_COLORS));
+  const translatedOf = (n: PaperAnnotation) => n.color === 'green' ? '逻辑块方法' : n.quote;
+  assert.equal(filterAnnotations(listed, { kind: 'all', color: 'all', query: '' }, translatedOf).length, 4);
+  assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'purple', query: '' }, translatedOf).map(a => a.id), [saved[2].id]);
+  assert.deepEqual(filterAnnotations(listed, { kind: 'pin', color: 'green', query: '' }, translatedOf).map(a => a.id), [pin.id]);
+  assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'all', query: '  逻辑块方法 ' }, translatedOf).map(a => a.id), [saved[1].id]);
+  assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'all', query: 'figure 6' }, translatedOf).map(a => a.id), [pin.id]);
+  assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'all', query: 'unmatched' }, translatedOf), []);
+
+  const prevNav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  try {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { language: 'en-US' } });
+    assert.equal(colorMeaning('yellow'), 'Key point');
+    assert.equal(highlightName('green'), 'Green highlight');
+    assert.equal(highlightColorLabel('purple'), 'Purple · Question');
+    assert.equal(highlightDotAriaLabel('green'), 'Green highlight · Method');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { language: 'zh-CN' } });
+    assert.equal(colorMeaning('yellow'), '要点');
+    assert.equal(highlightName('green'), '绿色高亮');
+    assert.equal(highlightColorLabel('purple'), '紫色 · 疑问');
+    assert.equal(highlightDotAriaLabel('green'), '绿色高亮 · 方法');
+  } finally {
+    if (prevNav) Object.defineProperty(globalThis, 'navigator', prevNav);
+  }
 });

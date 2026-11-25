@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import type { APIRequestContext, BrowserContext, Download, FrameLocator, Page } from 'playwright-core';
+import type { APIRequestContext, BrowserContext, Download, FrameLocator, Locator, Page } from 'playwright-core';
 import type { Operations } from '../../../src/shared/types.js';
 import type { HostFixture } from '../host.js';
 
@@ -178,4 +178,26 @@ export async function saveTargetLanguage(
   }
   await dialog.getByRole('button', { name: options?.zh ? '保存连接设置' : 'Save connections', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
+}
+
+export async function openCardMore(card: Locator, opts?: { mobile?: boolean; key?: string }): Promise<Locator> {
+  const trigger = card.locator('.selection-more');
+  await trigger.waitFor({ state: 'visible' });
+  if (opts?.key) await trigger.press(opts.key);
+  else if (opts?.mobile) await trigger.tap();
+  else await trigger.click();
+  const menu = card.locator('#selectionMoreMenu');
+  await menu.waitFor({ state: 'visible' });
+  return menu;
+}
+
+export async function cardMoreAction(
+  card: Locator, name: string | RegExp, opts?: { mobile?: boolean; key?: string }
+): Promise<void> {
+  const menu = await openCardMore(card, opts);
+  const btn = menu.getByRole('button', { name, exact: typeof name === 'string' });
+  await btn.waitFor({ state: 'visible' });
+  if (opts?.key) await btn.press(opts.key);
+  else if (opts?.mobile) await btn.tap();
+  else await btn.click();
 }

@@ -416,9 +416,9 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       const directMeaning = card.locator('.passage-counterpart .meaning');
       await directMeaning.waitFor({ state: 'visible' });
       await assertContrast(directMeaning, '#card .passage-counterpart .meaning', 4.5);
-      const explainBtn = card.locator('.selection-explain-action');
-      await explainBtn.waitFor({ state: 'visible' });
-      await assertContrast(explainBtn, '#card .selection-explain-action', 4.5);
+      const chatBtn = card.locator('.selection-chat-action');
+      await chatBtn.waitFor({ state: 'visible' });
+      await assertContrast(chatBtn, '#card .selection-chat-action', 4.5);
       await page.getByRole('button', { name: 'Highlight', exact: true }).click();
       await page.locator('#annotationsTab').click();
       const annWorkspace = rail.locator('.annotation-workspace');
