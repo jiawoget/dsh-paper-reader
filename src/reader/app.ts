@@ -100,7 +100,7 @@ class Reader implements ReaderPort {
   private readonly jumpHistory=new JumpHistory(()=>this.jumpControls?.sync()); private jumpControls?: ReturnType<typeof bindJumpHistoryControls>;
   private readonly search=new DocSearch({
     doc:()=>this.doc, page:()=>this.page, targetLanguage:()=>this.targetLanguage, view:()=>this.view,
-    isBilingual:()=>this.parallel, showTranslation:()=>this.setReadingMode('bilingual'),
+    isBilingual:()=>this.parallel, showSource:()=>this.setReadingMode('source'), showTranslation:()=>this.setReadingMode('bilingual'),
     navigateToPage:page=>this.navigate(this.doc.id,page), pushHistory:()=>this.jumpHistory.push(this.readingPosition(false)),
     focusBlock:id=>this.pdfView?.focusBlock?.(id)
   });
@@ -426,7 +426,6 @@ class Reader implements ReaderPort {
     const targetLanguage=this.targetLanguage;
     const translations=pdf ? {} : (await api('translation.get',{docId:doc.id,page,targetLanguage})).translations;
     if(version!==this.epoch)return;
-    if(!pdf)this.search.recordTranslations(doc.id,page,translations);
     document.title=doc.title+' · Paper Reader';byId('docTitle').textContent=doc.title;
     const section=doc.book?.sections[page-1];
     byId('docMeta').textContent=section ? section.title : doc.authors ? [doc.authors,doc.venue].filter(Boolean).join(' · ') : doc.kind==='web' && doc.url ? new URL(doc.url).hostname : '';
@@ -830,6 +829,7 @@ class Reader implements ReaderPort {
         document.querySelector<HTMLElement>('.pages')!.style.width=value*100+'%';
         for(const sheet of document.querySelectorAll<HTMLElement>('.web-reading-sheet'))sheet.style.setProperty('--article-zoom',String(value));
       }
+      this.search.paintPage();
     };
     byId<HTMLSelectElement>('zoom').onchange=event=>{resizePages(Number((event.currentTarget as HTMLSelectElement).value));if(byId('menu').contains(byId('zoom')))this.closeMenu(true);};
     byId<HTMLSelectElement>('translationMode').onchange=event=>{

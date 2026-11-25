@@ -7,7 +7,7 @@ import { byId, el, icon, readerLabel as label, type Glyph } from './ui.js';
 
 interface DocSearchHost {
   doc: () => DocumentInfo; page: () => number; targetLanguage: () => string; view: () => PageView | undefined;
-  isBilingual: () => boolean; showTranslation: () => void; navigateToPage: (page: number) => Promise<void>;
+  isBilingual: () => boolean; showSource: () => void; showTranslation: () => void; navigateToPage: (page: number) => Promise<void>;
   pushHistory: () => void; focusBlock: (id: string) => void;
 }
 const EMPTY: SearchResult = { query: '', matches: [], groups: [] };
@@ -43,7 +43,7 @@ export class DocSearch {
   private readonly listBtn: HTMLButtonElement; private readonly prevBtn: HTMLButtonElement; private readonly nextBtn: HTMLButtonElement;
   private readonly translations = new Map<string, Map<number, SearchBlock[]>>();
   private doc: DocumentInfo; private pdf?: PdfDocument; private result: SearchResult = EMPTY;
-  private active = -1; private searching = false; private listOpen = false; private autoExpanded = false; private userToggledList = false;
+  private active = -1; private searching = false; private listOpen = false; private autoExpanded = false; private userToggledList = false; private pendingReveal = false;
   private searchEpoch = 0; private jumpEpoch = 0; private debounceTimer?: number; private returnFocus?: HTMLElement; private fallbackLayer?: HTMLElement;
 
   constructor(private readonly host: DocSearchHost) {
@@ -93,7 +93,7 @@ export class DocSearch {
   close(restore = true): void {
     if (this.root.hidden) return;
     clearTimeout(this.debounceTimer); this.debounceTimer = undefined;
-    this.searchEpoch++; this.jumpEpoch++; this.root.hidden = true; this.clearHighlights();
+    this.searchEpoch++; this.jumpEpoch++; this.pendingReveal = false; this.root.hidden = true; this.clearHighlights();
     const target = this.returnFocus; this.returnFocus = undefined;
     if (restore) (target?.isConnected && !target.closest('[hidden]') ? target : byId('paperScroll')).focus({ preventScroll: true });
   }
@@ -111,8 +111,12 @@ export class DocSearch {
     if (!this.root.hidden && this.input.value.trim() && docId === this.doc.id) void this.runSearch(false, true);
   }
   syncPage(): void {
-    const translated = this.host.view()?.blocks ? extractTranslatedBlocks(this.host.view()!.blocks) : [];
-    if (translated.length) this.cacheFor(this.doc.id).set(this.host.page(), translated);
+    const view = this.host.view();
+    if (view?.blocks.length) {
+      const translated = extractTranslatedBlocks(view.blocks), cache = this.cacheFor(this.doc.id);
+      if (translated.length) cache.set(this.host.page(), translated);
+      else if (!this.pdf) cache.delete(this.host.page());
+    }
     if (!this.root.hidden && this.input.value.trim()) this.paintPage();
   }
   paintPage(): Range | undefined {
@@ -143,7 +147,7 @@ export class DocSearch {
 
   private clearState(): void {
     this.searchEpoch++; this.result = EMPTY; this.active = -1;
-    this.searching = this.autoExpanded = false; this.clearHighlights(); this.renderState();
+    this.searching = this.autoExpanded = this.pendingReveal = false; this.clearHighlights(); this.renderState();
   }
   private cacheFor(docId: string): Map<number, SearchBlock[]> {
     const key = docId + ':' + this.host.targetLanguage();
@@ -154,6 +158,7 @@ export class DocSearch {
     if (!query) return;
     if (this.debounceTimer || this.result.query !== query || this.searching) {
       clearTimeout(this.debounceTimer); this.debounceTimer = undefined; await this.runSearch(false);
+      if (this.root.hidden || this.result.query !== query) return;
     }
     const total = this.result.matches.length;
     if (!total) return;
@@ -175,25 +180,36 @@ export class DocSearch {
       this.searching = false;
     }
     this.result = searchDocument(buildSearchSources(this.doc, pdfPages, this.cacheFor(this.doc.id)), query);
+    if (!preserveActive) this.pendingReveal = false;
     if (!this.result.matches.length) { this.active = -1; this.autoExpanded = false; }
     else if (prev) this.active = this.result.matches.findIndex(m => m.page === prev.page && m.side === prev.side && m.blockId === prev.blockId && m.occurrence === prev.occurrence);
-    else if (autoSelect) { const onPage = this.result.matches.findIndex(m => m.page === this.host.page()); this.active = onPage; this.autoExpanded = onPage < 0; }
+    else if (autoSelect) {
+      const onPage = this.result.matches.findIndex(m => m.page === this.host.page());
+      const hit = onPage >= 0 ? this.result.matches[onPage] : undefined;
+      const hiddenSide = hit ? (hit.side === 'translation' ? !this.host.isBilingual() : byId('original').offsetWidth === 0) : false;
+      this.active = onPage; this.autoExpanded = onPage < 0 || hiddenSide;
+    }
     else this.active = -1;
     this.renderState();
+    const active = this.pendingReveal && this.active >= 0 ? this.result.matches[this.active] : undefined;
+    if (active?.side === 'translation' && active.blockId) this.host.focusBlock(active.blockId);
     const current = this.paintPage();
-    if (autoSelect && current) this.revealRange(current);
+    if ((autoSelect || this.pendingReveal) && current) { this.pendingReveal = false; this.revealRange(current); }
   }
   private async jumpTo(index: number): Promise<void> {
     const match = this.result.matches[index];
     if (!match) return;
-    const epoch = ++this.jumpEpoch; this.active = index;
+    const epoch = ++this.jumpEpoch; this.active = index; this.pendingReveal = false;
     if (this.autoExpanded && !this.userToggledList) this.autoExpanded = false;
     this.renderState();
     if (match.side === 'translation' && !this.host.isBilingual()) this.host.showTranslation();
+    else if (match.side === 'source' && byId('original').offsetWidth === 0) this.host.showSource();
     if (match.page !== this.host.page()) { await this.host.navigateToPage(match.page); if (epoch !== this.jumpEpoch || this.root.hidden) return; }
     else this.host.pushHistory();
     if (match.side === 'translation' && match.blockId) this.host.focusBlock(match.blockId);
-    const current = this.paintPage(); if (current) this.revealRange(current);
+    const current = this.paintPage();
+    if (current) this.revealRange(current);
+    else if (match.side === 'translation') this.pendingReveal = true;
   }
   private applyHighlights(allRanges: Range[], currentRanges: Range[]): void {
     this.fallbackLayer?.remove(); this.fallbackLayer = undefined;
@@ -219,7 +235,7 @@ export class DocSearch {
   }
   private clearHighlights(): void {
     this.fallbackLayer?.remove(); this.fallbackLayer = undefined;
-    if ('highlights' in CSS) { CSS.highlights.delete('paper-find-matches'); CSS.highlights.delete('paper-find-current'); }
+    if ('highlights' in CSS) { CSS.highlights?.delete('paper-find-matches'); CSS.highlights?.delete('paper-find-current'); }
   }
   private revealRange(range: Range): void {
     const anchor = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
@@ -258,6 +274,7 @@ export class DocSearch {
         hit.append(snippet); hit.addEventListener('click', () => { void this.jumpTo(index); }); this.resultsEl.append(hit);
       }
     }
+    this.resultsEl.querySelector<HTMLElement>('.doc-search-hit[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
   }
   private syncGeometry(): void {
     if (this.root.hidden) return;
@@ -265,5 +282,6 @@ export class DocSearch {
     this.root.style.setProperty('--search-top', Math.max(8, Math.round(paper.top - ws.top + 8)) + 'px');
     this.root.style.setProperty('--search-end', Math.max(8, Math.round(ws.right - paper.right + 16)) + 'px');
     this.root.style.setProperty('--search-max-h', Math.max(120, Math.round(paper.height - 24)) + 'px');
+    if (this.fallbackLayer) this.paintPage();
   }
 }

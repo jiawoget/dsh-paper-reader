@@ -73,4 +73,6 @@ test('findTextMatches enforces whitespace boundaries and clips multi-span hits p
   assert.equal(splitHits.length, 1); assert.equal(splitHits[0].length, 2);
   assert.equal(spans[0].data.slice(splitHits[0][0].start, splitHits[0][0].end), 'in');
   assert.equal(spans[1].data.slice(splitHits[0][1].start, splitHits[0][1].end), 'a');
+  const ligature = [{ data: 'ﬀ' }], ligHits = findTextMatches(ligature, 'f');
+  assert.equal(ligHits.length, 1); assert.deepEqual(ligHits[0], [{ node: ligature[0], start: 0, end: 1 }]);
 });

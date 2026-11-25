@@ -1,5 +1,6 @@
 ::highlight(paper-find-matches) { background-color: var(--find-match, rgb(246 196 42 / 38%)); }
 ::highlight(paper-find-current) { background-color: var(--find-current, rgb(245 148 34 / 62%)); }
+.pages:has(> .doc-search-fallback) { position: relative; }
 .doc-search-fallback { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
 .doc-search-fallback-mark { position: absolute; border-radius: 2px; background: var(--find-match, rgb(246 196 42 / 38%)); }
 .doc-search-fallback-mark.is-current { background: var(--find-current, rgb(245 148 34 / 62%)); }
@@ -14,6 +15,7 @@
   flex: 1 1 0; min-width: 0; min-height: 30px; padding: 4px 8px; font-size: 13px;
   background: var(--paper); color: var(--desk-ink); border: 1px solid var(--border-strong); border-radius: 6px;
 }
+.doc-search-input::-webkit-search-cancel-button { display: none; }
 .doc-search-count { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; padding-inline: 4px; }
 .doc-search-bar .icon-btn { min-width: 28px; min-height: 28px; height: 28px; flex-shrink: 0; }
 .doc-search-bar .icon-btn[aria-expanded="true"] { background: var(--lavender); color: var(--purple); }

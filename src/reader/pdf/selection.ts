@@ -12,21 +12,14 @@ function searchable(character: string): string {
 
 /** The layout supplies spaces between positioned runs that the DOM text nodes can omit. */
 function sourceSlice(paragraph: string, prefix: string, selected: string): { text: string; offset?: number } {
-  const offsets: number[] = [];
-  let corpus = '', index = 0;
-  for (const character of paragraph) {
-    const key = searchable(character);
-    for (let i = 0; i < key.length; i++) offsets.push(index);
-    corpus += key;
-    index += character.length;
-  }
   const needle = searchable(selected);
+  if (!needle) return { text: selected };
+  const { corpus, offsets } = indexNodes([{ data: paragraph }]);
   const hint = searchable(prefix).length;
   const at = corpus.startsWith(needle, hint) ? hint : corpus.indexOf(needle);
-  if (!needle || at < 0) return { text: selected };
-  const offset = offsets[at], last = offsets[at + needle.length - 1];
-  const length = String.fromCodePoint(paragraph.codePointAt(last)!).length;
-  return { text: paragraph.slice(offset, last + length), offset };
+  if (at < 0) return { text: selected };
+  const offset = offsets[at].offset, end = offsets[at + needle.length - 1].end;
+  return { text: paragraph.slice(offset, end), offset };
 }
 
 /** Native PDF runs can split any word across fonts, lines or hyphenation marks. */
@@ -82,6 +75,7 @@ export function findTextMatches<T extends { readonly data: string }>(nodes: Iter
     }
     parts.push({ node: start.node, start: start.offset, end: end.end });
     matches.push(parts); pos += needle.length;
+    while (pos < offsets.length && offsets[pos].node === end.node && offsets[pos].offset === end.offset && offsets[pos].end === end.end) pos++;
   }
   return matches;
 }
