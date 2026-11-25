@@ -287,6 +287,26 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
       pending.resolve();
     }
     await card.getByText(translation, { exact: true }).waitFor();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
+    await page.locator('#original .pdf-sheet').waitFor();
+    await page.locator('#pdfThemeBtn').click();
+    await page.locator('#pdfThemeMenu [data-theme-option="sepia"]').click();
+    assert.equal(await reader.getAttribute('data-pdf-theme'), 'sepia');
+    await page.reload();
+    await page.locator('#original .pdf-sheet').waitFor();
+    assert.equal(await reader.getAttribute('data-pdf-theme'), 'sepia');
+    await page.locator('#pdfThemeBtn').click();
+    await page.locator('#pdfThemeMenu [data-theme-option="paper"]').click();
+    const widthAt100 = (await page.locator('#original .pdf-sheet').boundingBox())!.width;
+    await page.locator('#zoom').selectOption('0.75');
+    assert.ok((await page.locator('#original .pdf-sheet').boundingBox())!.width < widthAt100 - 40);
+    await page.locator('#zoom').selectOption('fit-page');
+    await page.waitForTimeout(100);
+    const fitBox = (await page.locator('#original .pdf-stage').boundingBox())!;
+    const scrollBox = (await page.locator('#paperScroll').boundingBox())!;
+    assert.ok(fitBox.height <= scrollBox.height + 2);
+    await page.locator('#zoom').selectOption('1');
     console.log('Original, comparison dock, mobile language persistence, page jump, keyboard and touch selection, saved-source return, and translation status passed.');
   } finally {
     await browser.close();

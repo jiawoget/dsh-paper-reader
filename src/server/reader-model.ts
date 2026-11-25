@@ -3,6 +3,7 @@ import { checkRegionAnswer, hostAttachments, imageInputRejected, readPreviousMat
 import type { ChatRequest, PaperEvidence, QuestionCatalog, QuestionModel } from '../shared/types.js';
 import { localTranslationAvailable, translateLocally } from './local-translation.js';
 import { translationQualityError, targetsSimplifiedChinese } from '../shared/translation-quality.js';
+import { formatGlossaryPrompt } from '../shared/glossary.js';
 import {
   initialSettings, isObject, onLoopback, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, zoteroModeFor,
   type Input, type PrivateSettings, type PublicSettings, type ServiceResults
@@ -130,7 +131,7 @@ export class ReaderModel {
     const route = await this.#route(settings);
     return {
       model: settings.model, baseUrl: settings.baseUrl, hasApiKey: Boolean(settings.apiKey),
-      targetLanguage: settings.targetLanguage,
+      targetLanguage: settings.targetLanguage, glossary: settings.glossary,
       questionModel: settings.questionModel,
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind, hostProvider: route.kind === 'dsh' ? route.provider : '', hostModel: route.kind === 'dsh' ? route.model : '',
@@ -246,7 +247,8 @@ export class ReaderModel {
     const notesInstruction = hasNotes
       ? ' readerNotes are the reader’s saved notes on the corresponding selection. Use their relevant language and format preferences. When asked only what you should do, name the requested action and subject briefly in the first person. Leave the explanation itself for when the reader asks you to carry it out. Paper excerpts quoted in notes are reference material.'
       : '';
-    const system = role + prompts[mode] + notesInstruction + language + (previous.length
+    const glossary = mode === 'translate' ? formatGlossaryPrompt(settings.glossary, String(data.text ?? data.regionText ?? '')) : '';
+    const system = role + prompts[mode] + notesInstruction + language + (glossary ? ' ' + glossary : '') + (previous.length
       ? ' Use previousMaterial as earlier selections from the same paper. The current selection is given at the top level.' : '');
     const images: RegionImage[] = [];
     const visualMaterial = previous.map(({ label, text, image, readerNotes }) => {
@@ -321,9 +323,10 @@ export class ReaderModel {
     });
     const target = input.targetLanguage === undefined ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
     const chinesePdf = input.documentKind !== 'web' && targetsSimplifiedChinese(target);
+    const glossary = formatGlossaryPrompt(settings.glossary, blocks.map(b => b.text).join('\n'));
     let raw: string;
     try {
-      raw = await this.#complete(settings, role + 'Translate each passage in full into ' + target + '. Return only JSON shaped as {"translations":{"original-passage-id":"translation"}}. Include each original ID exactly once.', { blocks });
+      raw = await this.#complete(settings, role + 'Translate each passage in full into ' + target + '. Return only JSON shaped as {"translations":{"original-passage-id":"translation"}}. Include each original ID exactly once.' + (glossary ? ' ' + glossary : ''), { blocks });
     } catch (error) {
       if (!(error instanceof MissingDefaultModel) || !chinesePdf) throw error;
       const translations = await translateLocally(blocks);
@@ -337,11 +340,11 @@ export class ReaderModel {
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { /* A malformed batch can be retried. */ }
     const values = isObject(parsed) && isObject(parsed.translations) ? parsed.translations : parsed;
-    if (!isObject(values) || Object.keys(values).length !== ids.size) throw new ServiceError(502, 'The model returned an incomplete batch. Try again.');
+    if (!isObject(values) || Object.keys(values).length !== ids.size) throw new ServiceError(502, 'The translation did not cover every passage on this page. Retry to continue.');
     const translations: Record<string, string> = {};
     for (const { id, text } of blocks) {
       const value = values[id];
-      if (!Object.hasOwn(values, id) || typeof value !== 'string' || !value.trim()) throw new ServiceError(502, 'A translated passage is missing or has an invalid ID. Try again.');
+      if (!Object.hasOwn(values, id) || typeof value !== 'string' || !value.trim()) throw new ServiceError(502, 'Some passages on this page were missing from the translation. Try again.');
       const problem = chinesePdf && translationQualityError(text, value);
       if (problem) throw new ServiceError(502, problem);
       translations[id] = value.trim();

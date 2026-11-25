@@ -20,7 +20,7 @@ interface ShortcutActions {
   jumpForward: () => void;
   toggleBilingual: () => void;
   toggleSidebar: (tab: 'contents' | 'notes') => void;
-  setZoom: (value: number) => void;
+  stepZoom: (delta: -1 | 1) => void;
 }
 
 export function installShortcuts(actions: ShortcutActions): { open: () => void } {
@@ -119,9 +119,8 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
     if (e.key === 'n') { e.preventDefault(); actions.toggleSidebar('notes'); }
     if (e.key === 'c') { e.preventDefault(); actions.toggleSidebar('contents'); }
     if (e.key === '=' || e.key === '+' || e.key === '-') {
-      const select = byId<HTMLSelectElement>('zoom');
-      const next = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + (e.key === '-' ? -1 : 1)));
-      if (next !== select.selectedIndex) { e.preventDefault(); select.selectedIndex = next; actions.setZoom(Number(select.value)); }
+      e.preventDefault();
+      actions.stepZoom(e.key === '-' ? -1 : 1);
     }
   });
   return { open };

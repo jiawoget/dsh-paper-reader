@@ -986,7 +986,7 @@ var Library = class {
       throw error;
     }
   }
-  async translate(id, page, input, translate, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
+  async translate(id, page, input, translate, targetLanguage = DEFAULT_TARGET_LANGUAGE, force = false) {
     const doc = await this.get(id);
     const file = this.pageFile(id, page, targetLanguage);
     const checkChineseQuality = doc.kind === "pdf" && typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
@@ -1001,7 +1001,7 @@ var Library = class {
     const job = (async () => {
       if (previous) await previous.catch(() => void 0);
       const result = await this.translations(id, page, targetLanguage);
-      const pending = blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
+      const pending = force ? blocks3 : blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
       await mkdir(path.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i, i + 8);
@@ -1231,11 +1231,17 @@ function readTargetLanguage(value) {
   if (!parsed.ok) throw new ServiceError(400, parsed.error);
   return parsed.value;
 }
+function readGlossary(value) {
+  const raw = stringValue(value, "glossary", 8e3, false, true);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, "Glossary contains invalid control characters.");
+  return raw.replace(/\r\n?/g, "\n");
+}
 var initialSettings = {
   baseUrl: "https://api.deepseek.com",
   model: "deepseek-flash",
   apiKey: "",
   targetLanguage: DEFAULT_TARGET_LANGUAGE,
+  glossary: "",
   vaultPath: "",
   zoteroLibraryId: "",
   zoteroLibraryType: "user",
@@ -1267,12 +1273,14 @@ function mergeSettings(current, input) {
   if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, "The Zotero library ID must be a positive integer.");
   const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
   const targetLanguage = input.targetLanguage === void 0 ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
+  const glossary = input.glossary === void 0 ? current.glossary : readGlossary(input.glossary);
   return {
     questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
     model,
     baseUrl,
     apiKey: updatedSecret(sameOrigin ? current.apiKey : "", input.apiKey, input.clearApiKey),
     targetLanguage,
+    glossary,
     vaultPath: vault ? path2.resolve(vault) : "",
     zoteroLibraryType: type,
     zoteroLibraryId: id,
@@ -2872,6 +2880,44 @@ async function translateLocally(blocks3, directory = localModelDirectory()) {
   return job;
 }
 
+// src/shared/glossary.ts
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function parseGlossary(raw) {
+  if (!raw) return [];
+  const entries = /* @__PURE__ */ new Map();
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const spaced = trimmed.match(/\s+[=＝]\s+/);
+    const sep = spaced?.index !== void 0 ? spaced.index : trimmed.search(/[=＝]/);
+    const sepLen = spaced?.index !== void 0 ? spaced[0].length : 1;
+    const term = (sep === -1 ? trimmed : trimmed.slice(0, sep)).trim();
+    if (!term) continue;
+    const translation = sep === -1 ? "" : trimmed.slice(sep + sepLen).trim();
+    const key2 = term.normalize("NFKC").toLowerCase();
+    entries.set(key2, translation ? { term, translation } : { term });
+  }
+  return [...entries.values()];
+}
+function matchGlossary(text2, entries) {
+  if (!text2 || !entries.length) return [];
+  const normText = text2.normalize("NFKC");
+  return entries.filter((entry) => {
+    const normTerm = entry.term.normalize("NFKC");
+    const escaped = escapeRegex(normTerm).replace(/\s+/g, "\\s+");
+    const prefix2 = /^[A-Za-z0-9_]/.test(normTerm) ? "(?<![A-Za-z0-9_])" : "";
+    const suffix = /[A-Za-z0-9_]$/.test(normTerm) ? "(?![A-Za-z0-9_])" : "";
+    return new RegExp(prefix2 + escaped + suffix, "iu").test(normText);
+  });
+}
+function formatGlossaryPrompt(raw, text2) {
+  const matched = matchGlossary(text2, parseGlossary(raw));
+  if (!matched.length) return "";
+  return "Follow this glossary for matching terms: " + matched.map((entry) => entry.translation ? `${entry.term} => ${entry.translation}` : `${entry.term} (keep unchanged)`).join("; ") + ".";
+}
+
 // src/server/reader-model.ts
 function nativeLlm(value) {
   return isObject(value) && typeof value.listProviders === "function" && typeof value.listModels === "function" && typeof value.stream === "function";
@@ -2991,6 +3037,7 @@ var ReaderModel = class {
       baseUrl: settings.baseUrl,
       hasApiKey: Boolean(settings.apiKey),
       targetLanguage: settings.targetLanguage,
+      glossary: settings.glossary,
       questionModel: settings.questionModel,
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind,
@@ -3104,7 +3151,8 @@ var ReaderModel = class {
     const hasNotes = Boolean(readerNotes || previous.some((material) => material.readerNotes));
     const language = mode === "translate" ? " Translate into " + target + "." : " The reader\u2019s current question takes priority. Use " + target + " by default unless the reader asks for another language.";
     const notesInstruction = hasNotes ? " readerNotes are the reader\u2019s saved notes on the corresponding selection. Use their relevant language and format preferences. When asked only what you should do, name the requested action and subject briefly in the first person. Leave the explanation itself for when the reader asks you to carry it out. Paper excerpts quoted in notes are reference material." : "";
-    const system = role + prompts[mode] + notesInstruction + language + (previous.length ? " Use previousMaterial as earlier selections from the same paper. The current selection is given at the top level." : "");
+    const glossary = mode === "translate" ? formatGlossaryPrompt(settings.glossary, String(data.text ?? data.regionText ?? "")) : "";
+    const system = role + prompts[mode] + notesInstruction + language + (glossary ? " " + glossary : "") + (previous.length ? " Use previousMaterial as earlier selections from the same paper. The current selection is given at the top level." : "");
     const images = [];
     const visualMaterial = previous.map(({ label, text: text2, image: image2, readerNotes: readerNotes2 }) => {
       if (!image2) return { label, text: text2, readerNotes: readerNotes2 };
@@ -3162,9 +3210,10 @@ var ReaderModel = class {
     });
     const target = input.targetLanguage === void 0 ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
     const chinesePdf = input.documentKind !== "web" && targetsSimplifiedChinese(target);
+    const glossary = formatGlossaryPrompt(settings.glossary, blocks3.map((b) => b.text).join("\n"));
     let raw;
     try {
-      raw = await this.#complete(settings, role + "Translate each passage in full into " + target + '. Return only JSON shaped as {"translations":{"original-passage-id":"translation"}}. Include each original ID exactly once.', { blocks: blocks3 });
+      raw = await this.#complete(settings, role + "Translate each passage in full into " + target + '. Return only JSON shaped as {"translations":{"original-passage-id":"translation"}}. Include each original ID exactly once.' + (glossary ? " " + glossary : ""), { blocks: blocks3 });
     } catch (error) {
       if (!(error instanceof MissingDefaultModel) || !chinesePdf) throw error;
       const translations2 = await translateLocally(blocks3);
@@ -3181,11 +3230,11 @@ var ReaderModel = class {
     } catch {
     }
     const values = isObject(parsed) && isObject(parsed.translations) ? parsed.translations : parsed;
-    if (!isObject(values) || Object.keys(values).length !== ids.size) throw new ServiceError(502, "The model returned an incomplete batch. Try again.");
+    if (!isObject(values) || Object.keys(values).length !== ids.size) throw new ServiceError(502, "The translation did not cover every passage on this page. Retry to continue.");
     const translations = {};
     for (const { id, text: text2 } of blocks3) {
       const value = values[id];
-      if (!Object.hasOwn(values, id) || typeof value !== "string" || !value.trim()) throw new ServiceError(502, "A translated passage is missing or has an invalid ID. Try again.");
+      if (!Object.hasOwn(values, id) || typeof value !== "string" || !value.trim()) throw new ServiceError(502, "Some passages on this page were missing from the translation. Try again.");
       const problem = chinesePdf && translationQualityError(text2, value);
       if (problem) throw new ServiceError(502, problem);
       translations[id] = value.trim();
@@ -4184,12 +4233,13 @@ function apply(ctx) {
         return json({ translations: await library.translations(input.docId, input.page, targetLanguage) });
       }
       case "translation.page": {
+        if (input.force !== void 0 && typeof input.force !== "boolean") fail("Invalid force option.", 400);
         const targetLanguage = input.targetLanguage === void 0 ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
         return json({ translations: await library.translate(input.docId, input.page, input.blocks, async (blocks3, documentKind) => {
           const result = await service("ai.blocks", { blocks: blocks3, documentKind, targetLanguage });
           if (!isRecord(result) || !isRecord(result.translations) || !Object.values(result.translations).every((v) => typeof v === "string")) fail("The model returned an invalid translation.", 502);
           return result.translations;
-        }, targetLanguage) });
+        }, targetLanguage, input.force === true) });
       }
       case "ai":
       case "chat.ask": {

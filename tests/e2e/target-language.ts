@@ -4,10 +4,11 @@ import path from 'node:path';
 import { chromium, type FrameLocator, type Page } from 'playwright-core';
 import type { DocumentInfo, ReaderState } from '../../src/shared/types.js';
 import { startVersatileLlmFixture } from './helpers/fixtures.js';
-import { attachErrorGuards, makePdf, rpc, saveTargetLanguage, selectFirstPdfRun } from './helpers/reader.js';
+import { attachErrorGuards, cardMoreAction, makePdf, rpc, saveTargetLanguage, selectFirstPdfRun } from './helpers/reader.js';
 import { openReader, withHost } from './host.js';
 
 type Reader = Page | FrameLocator;
+const selectedLang = (reader: Reader) => reader.locator('#targetLang').evaluate(el => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? '');
 
 async function openConnections(reader: Reader) {
   await reader.getByRole('button', { name: /^(More actions|更多操作)$/ }).click();
@@ -45,7 +46,7 @@ await withHost(async host => {
     await iframeReader.locator('#loading').waitFor({ state: 'hidden' });
     const bundledText = await iframeReader.locator('#translated .pdf-translated-text[lang="zh-CN"][data-block-id]:visible').allInnerTexts();
     assert.ok(/\p{Script=Han}/u.test(bundledText.join('')), 'Bundled pagedattention page 6 must render Chinese.');
-    assert.equal(await iframeReader.locator('#translationInfo').textContent(), 'Simplified Chinese');
+    assert.equal(await selectedLang(iframeReader), 'Simplified Chinese');
     assert.equal(fixture.calls.length, 0);
     console.log('PASS T1-F2-01: Default targetLanguage is Simplified Chinese with bundled page 6 and 0 LLM calls.');
 
@@ -58,7 +59,7 @@ await withHost(async host => {
     const guidance = await unavailable.textContent() ?? '';
     assert.match(guidance, /Connect a translation model|offline translator only supports Simplified Chinese/i);
     assert.equal(await iframeReader.locator('#translated .pdf-translated-text:visible').count(), 0);
-    assert.equal(await iframeReader.locator('#translationInfo').textContent(), 'Traditional Chinese');
+    assert.equal(await selectedLang(iframeReader), 'Traditional Chinese');
 
     const unconfiguredKorean = await rpc(context.request, host.origin, 'translation.page', {
       docId: 'pagedattention',
@@ -100,7 +101,7 @@ await withHost(async host => {
     await page.reload();
     await page.locator('#loading').waitFor({ state: 'hidden' });
     assert.equal((await rpc<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Japanese');
-    assert.equal(await page.locator('#translationInfo').textContent(), 'Japanese');
+    assert.equal(await selectedLang(page), 'Japanese');
     const reopenedDialog = await openConnections(page);
     assert.equal(await reopenedDialog.getByRole('combobox', { name: 'Translation language', exact: true }).inputValue(), 'Japanese');
     assert.equal(await reopenedDialog.getByLabel('Custom target language', { exact: true }).isVisible(), false);
@@ -175,7 +176,7 @@ await withHost(async host => {
     await page.locator('#translated .pdf-translated-text:visible').first().waitFor();
     const ptText = (await page.locator('#translated .pdf-translated-text:visible').allInnerTexts()).join('\n');
     assert.ok(ptText.includes('Tradução em português:'), 'Expected Portuguese translation, got: ' + ptText);
-    assert.equal(await page.locator('#translationInfo').textContent(), 'Portuguese');
+    assert.equal(await selectedLang(page), 'Portuguese');
     assert.ok(fixture.calls.slice(callsBeforePt).some(c => c.mode === 'blocks' && c.target === 'Portuguese'));
 
     const callsAfterPt = fixture.calls.length;
@@ -226,7 +227,7 @@ await withHost(async host => {
     const webSheet = page.locator('.web-reading-sheet[data-side="translation"]');
     await webSheet.waitFor();
     assert.equal(await webSheet.getAttribute('lang'), 'fr');
-    assert.equal(await page.locator('#translationInfo').textContent(), 'French');
+    assert.equal(await selectedLang(page), 'French');
 
     const callsBeforeWeb = fixture.calls.length;
     await page.getByRole('button', { name: 'Translate article', exact: true }).click();
@@ -246,9 +247,37 @@ await withHost(async host => {
     await page.getByRole('group', { name: 'German, page 1', exact: true }).waitFor();
     await page.locator('#translated .pdf-translated-text[lang="de"]:visible').first().waitFor();
 
-    await selectFirstPdfRun(page);
+    const callsBeforeInline = fixture.calls.length;
+    await page.locator('#targetLang').selectOption('Japanese');
+    await page.getByRole('group', { name: 'Japanese, page 1', exact: true }).waitFor();
+    await page.locator('#translated .pdf-translated-text[lang="ja"]:visible').first().waitFor();
+    assert.equal(fixture.calls.length, callsBeforeInline);
 
+    const glossaryDialog = await openConnections(page);
+    await glossaryDialog.locator('#settingsGlossary').fill('memory allocator = メモリ割当器\nTarget Language = ターゲット言語');
+    await glossaryDialog.getByRole('button', { name: 'Save connections', exact: true }).click();
+    await glossaryDialog.waitFor({ state: 'hidden' });
+
+    const callsBeforeRetranslate = fixture.calls.length;
+    await page.locator('#retranslatePage').click();
+    await page.waitForFunction(() => !document.getElementById('retranslatePage')?.hasAttribute('disabled'));
+    assert.ok(fixture.calls.slice(callsBeforeRetranslate).some(c => c.mode === 'blocks' && c.system.includes('memory allocator => メモリ割当器')));
+
+    await selectFirstPdfRun(page);
     const card = page.locator('#card');
+    await card.waitFor({ state: 'visible' });
+    const callsBeforePassageRetranslate = fixture.calls.length;
+    await Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/paper-reader/action') && Boolean(r.request().postData()?.includes('"force":true'))),
+      cardMoreAction(card, 'Re-translate passage')
+    ]);
+    assert.ok(fixture.calls.slice(callsBeforePassageRetranslate).some(c => c.mode === 'blocks' && c.system.includes('Target Language => ターゲット言語') && !c.system.includes('memory allocator')));
+
+    await card.getByRole('button', { name: 'Close selection' }).click();
+    await page.locator('#targetLang').selectOption('German');
+    await page.getByRole('group', { name: 'German, page 1', exact: true }).waitFor();
+    await page.locator('#translated .pdf-translated-text[lang="de"]:visible').first().waitFor();
+    await selectFirstPdfRun(page);
     await card.waitFor({ state: 'visible' });
     await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
     const starter = page.getByRole('button', { name: 'Translate to German', exact: true });
@@ -273,7 +302,7 @@ await withHost(async host => {
     await zhPage.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
     await zhPage.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
     await zhPage.locator('#loading').waitFor({ state: 'hidden' });
-    assert.equal(await zhPage.locator('#translationInfo').textContent(), '日语');
+    assert.equal(await selectedLang(zhPage), '日语');
     const zhDialog = await openConnections(zhPage);
     const zhSelect = zhDialog.getByRole('combobox', { name: '翻译目标语言', exact: true });
     assert.equal(await zhSelect.inputValue(), 'Japanese');

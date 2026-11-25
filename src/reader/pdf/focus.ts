@@ -33,8 +33,11 @@ export class PdfFocus {
   private id = '';
   private mode: TranslationFocus;
   private effective: TranslationFocus = 'page';
+  private narrowLane = false;
+  private allowNarrowPage = false;
   constructor(private layout: PageLayout, private entries: Map<string, FocusEntry>, private source: Sheet,
-    private target: Sheet, mode: TranslationFocus, initial: string | undefined, private changed: (id: string, label: string) => void,
+    private target: Sheet, mode: TranslationFocus, initial: string | undefined,
+    private changed: (id: string, label: string, effective: TranslationFocus, degraded: boolean) => void,
     private repaint: (refit: boolean) => void, signal: AbortSignal, private targetLabel = 'Simplified Chinese') {
     this.columns = columns(layout);
     this.mode = mode;
@@ -60,16 +63,25 @@ export class PdfFocus {
       if (id) this.focus(id);
     }, { signal });
   }
-  setMode(mode: TranslationFocus): void {
+  setLaneWidth(width: number): void {
+    if (width <= 0) return;
+    const next = this.narrowLane ? width < 516 : width < 500;
+    if (next === this.narrowLane) return;
+    this.narrowLane = next;
+    if (!next) this.allowNarrowPage = false;
+    if (this.mode === 'page') this.apply();
+  }
+  setMode(mode: TranslationFocus, explicit = false): void {
     this.mode = mode;
+    this.allowNarrowPage = explicit && mode === 'page' && this.narrowLane;
     this.apply();
   }
   focus(id: string): void {
     if (id === this.id || !this.layout.passages.some(p => p.id === id)) return;
     this.id = id;
-    if (this.mode === 'page') {
+    if (this.mode === 'page' && (!this.narrowLane || this.allowNarrowPage)) {
       this.target.outer.dataset.activeBlock = id;
-      this.changed(id, this.targetLabel);
+      this.changed(id, this.targetLabel, 'page', false);
       return;
     }
     this.apply();
@@ -78,24 +90,25 @@ export class PdfFocus {
     const entry = this.entries.get(this.id), page = this.layout.window;
     const box = entry?.passage.box;
     const index = box ? this.columns.findIndex(c => box.x >= c.left - 3 && box.x + box.width <= c.right + 3) : -1;
-    // A title or abstract spanning several printed columns reads as one passage.
     const previous = this.effective;
-    this.effective = this.mode === 'column' && box && index < 0 ? 'passage' : this.mode;
+    const degraded = this.mode === 'page' && this.narrowLane && !this.allowNarrowPage;
+    const baseMode: TranslationFocus = degraded ? 'column' : this.mode;
+    this.effective = baseMode === 'column' && box && index < 0 ? 'passage' : baseMode;
     const column = this.effective === 'column' ? this.columns[index] : undefined;
     this.target.outer.dataset.focus = this.effective;
-    this.source.outer.dataset.focus = this.mode;
+    this.source.outer.dataset.focus = baseMode;
     this.target.outer.dataset.activeBlock = this.id;
     for (const [id, placed] of this.entries) {
-      const active = this.mode !== 'page' && id === this.id;
+      const active = baseMode !== 'page' && id === this.id;
       for (const node of [placed.source, placed.target, placed.translated]) node.classList.toggle('is-reading', active);
     }
     this.target.setWindow(column ? { ...page, x: column.left, width: column.right - column.left } : page);
     let label = this.targetLabel;
-    if (this.mode === 'column' && column) label = this.columns.length === 1 ? readerLabel('Single printed column', '单栏正文') :
+    if (baseMode === 'column' && column) label = this.columns.length === 1 ? readerLabel('Single printed column', '单栏正文') :
       this.columns.length === 2 ? (index === 0 ? readerLabel('Left printed column', '左侧栏') : readerLabel('Right printed column', '右侧栏')) : readerLabel('Printed column ' + (index + 1), '第 ' + (index + 1) + ' 栏');
     else if (this.effective === 'passage' && entry) label = entry.passage.label;
-    this.changed(this.id, label);
-    this.repaint(previous === 'passage' && this.effective !== 'passage');
+    this.changed(this.id, label, this.effective, degraded);
+    this.repaint(previous !== this.effective);
     const scroller = this.target.outer.parentElement;
     if (column && entry && scroller) {
       const rect = entry.target.getBoundingClientRect(), bounds = scroller.getBoundingClientRect();

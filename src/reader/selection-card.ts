@@ -251,9 +251,9 @@ export class SelectionCard {
     const block = (id = hit.id) => app.view?.blocks.find(item => item.id === id);
     const term = !hit.image && isTerm(selection);
     const parts = hit.segments ?? [];
+    const seenTranslations = new Map(parts.map(part => [part.id, block(part.id)?.translation]));
     const translation = parts.length ? parts.map(part => part.translated).filter(Boolean).join('\n\n') : block()?.translation;
     const exactPair = parts.length ? parts.every(part => part.exactPair) : Boolean(block()?.translation && selection === block()?.text);
-    const glossary = app.doc.id === 'pagedattention' && hit.id === 'block-tables' && /^block tables?$/i.test(selection);
     const translatedContext = () => parts.length ? parts.map(part => block(part.id)?.translation).filter(Boolean).join('\n\n') : block()?.translation;
     const context = () => {
       const zh = translatedContext();
@@ -296,23 +296,25 @@ export class SelectionCard {
     counterpart.setAttribute('aria-live', 'polite');
     reading.append(counterpart);
     body.append(reading);
-    const contextual = () => term && !glossary && !item.exactPair;
-    let lastText: string | undefined, lastSourceMode: boolean | undefined;
-    let lastStatus: PdfPageView['translationStatus'];
+    const contextual = () => term && !item.exactPair;
+    let lastText: string | undefined, lastSourceMode: boolean | undefined, lastStatus: PdfPageView['translationStatus'];
     const partTranslation = (part: (typeof parts)[number]) => {
       if (part.translated) return part.translated;
       const current = block(part.id);
       return current && (correspondingText(current, part.original, 'original', part.offset) || current.translation);
     };
     const counterpartText = () => {
-      if (glossary) return readerLabel('A block table maps each request’s logical KV blocks to physical blocks in the cache.', '块表（block table）将每个请求的逻辑 KV 块映射到显存中的物理块。');
       if (hit.side === 'translation') return original;
       return parts.length ? parts.map(partTranslation).filter(Boolean).join('\n\n') : block()?.translation;
     };
     this.updatePreview = () => {
+      for (const part of parts) {
+        const current = block(part.id)?.translation;
+        if (current !== seenTranslations.get(part.id)) { seenTranslations.set(part.id, current); part.translated = undefined; part.exactPair = false; }
+      }
       const sourceMode = byId('reader').dataset.readingMode === 'source' && hit.side === 'source' && !card.dataset.workspace;
       const text = counterpartText();
-      const needsStatus = sourceMode && !hit.image && hit.side === 'source' && !glossary &&
+      const needsStatus = sourceMode && !hit.image && hit.side === 'source' &&
         (!text || parts.some(part => !partTranslation(part)));
       const status = needsStatus ? (app.view as PdfPageView | undefined)?.translationStatus : undefined;
       const updatedContext = context();
@@ -327,7 +329,7 @@ export class SelectionCard {
       lastText = text;
       lastSourceMode = sourceMode;
       lastStatus = status;
-      if (hit.side === 'source' && !glossary) {
+      if (hit.side === 'source') {
         item.pairedTranslation = text || undefined;
         item.exactPair = parts.length ? parts.every(part => {
           if (part.exactPair) return true;
@@ -342,19 +344,19 @@ export class SelectionCard {
         counterpart.append(el('p', 'selection-context', readerLabel('This term is unchanged in the other language.', '该术语在译文中保持原样。')));
       } else if (text) {
         const sameBlock = hit.side === 'translation' ? original === hit.sourceText : text === block()?.translation;
-        const label = glossary ? readerLabel('Paper glossary','论文释义') : isContext
+        const label = isContext
           ? readerLabel((hit.side === 'translation' ? 'Original' : 'Translated') + (sameBlock ? ' paragraph context' : ' sentence context'),
             (hit.side === 'translation' ? '原文' : '译文') + (sameBlock ? '段落' : '句子'))
           : hit.side === 'translation' ? readerLabel('Original passage','对应原文')
           : item.exactPair ? readerLabel('Passage translation','选段译文') : readerLabel('Translated paragraph context','所在段落的译文');
         const content = el('p', isContext ? 'selection-context' : 'meaning', sourceMode && !term ? excerpt(text, 260) : text);
         content.dir = 'auto';
-        if (hit.side === 'source' && !glossary) {
+        if (hit.side === 'source') {
           const lang = targetLanguageBcp47(app.state.settings.targetLanguage || DEFAULT_TARGET_LANGUAGE);
           if (lang) content.lang = lang;
         }
         if (sourceMode || (term && !isContext)) {
-          if ((sourceMode && !item.exactPair && !glossary) || (term && !isContext)) counterpart.append(el('span', 'tag', label));
+          if ((sourceMode && !item.exactPair) || (term && !isContext)) counterpart.append(el('span', 'tag', label));
           counterpart.append(content);
         } else {
           const details = el('details', 'selection-counterpart');
@@ -386,6 +388,12 @@ export class SelectionCard {
         await api('vocab.save', { ...source, text: selection, meaning: workspace.meaning() ?? (contextual() ? '' : counterpartText() ?? ''), context: item.context });
         await app.refresh();
         toast(readerLabel('Saved to vocabulary.', '已添加到生词本。'));
+      } : undefined,
+      onRetranslate: !hit.image && app.retranslateBlocks ? async () => {
+        const ids = parts.length ? [...new Set(parts.map(part => part.id))] : [hit.id];
+        await app.retranslateBlocks!(ids);
+        for (const part of parts) { part.translated = undefined; part.exactPair = false; }
+        if (this.activeHit === hit) { this.updatePreview?.(); app.view?.select(hit); }
       } : undefined,
       onInsertLink: () => workspace.insertLink(),
       onLocate: () => app.navigate(source.docId, source.page, hit.id, original, target, range),
@@ -463,12 +471,12 @@ export class SelectionCard {
     window.addEventListener('resize', () => this.fit?.(), { signal });
     window.visualViewport?.addEventListener('resize', () => this.fit?.(), { signal });
     signal.addEventListener('abort', () => resize.disconnect(), { once: true });
-    const definition = !contextual() ? counterpartText() : undefined;
+    const lookup = counterpartText();
     if (saved) {
       this.opener = chatAction;
       card.dataset.workspace = 'chat';
       this.fit();
       await workspace.chat.open('ask', true, replyId);
-    } else if (definition && definition !== selection) void record(definition).catch(error => toast(message(error)));
+    } else if (lookup && lookup !== selection) void record(contextual() ? '' : lookup).catch(error => toast(message(error)));
   }
 }

@@ -12,7 +12,8 @@ import { extractLayout } from './pdf/extract.js';
 import { pageGraphics, taggedArtwork } from './pdf/graphics.js';
 import { correspondingText, pairSelection } from './pdf/alignment.js';
 import type { PageLayout, Passage } from './pdf/model.js';
-import { cropFigure, element, fitText, makeSheet, newAnchor, place, translatedText, type Sheet } from './pdf/paper.js';
+import { cropFigure, element, fitPageScale, fitText, makeSheet, newAnchor, place, translatedText, type Sheet } from './pdf/paper.js';
+import type { ZoomSetting } from './pdf-controls.js';
 import { PageRaster, cropPdfPage } from './pdf/raster.js';
 import { pdfRegionPicker } from './pdf/region-picker.js';
 import { readRegion, regionBox, figureAtRegion } from './pdf/region-geometry.js';
@@ -40,7 +41,7 @@ export interface PdfRenderOptions {
   onAmbiguousQuote?: () => void;
   onTranslationState?: () => void;
   /** A scale of one fits the available pane width. */
-  zoom?: number;
+  zoom?: ZoomSetting;
   /** Minimum rendered visual pixel size for translated prose when a sheet scales below 1:1. */
   minReadableFontSize?: number;
   translationVisible?: boolean;
@@ -48,7 +49,7 @@ export interface PdfRenderOptions {
   targetLanguageLabel?: string;
   focusMode?: TranslationFocus;
   focusId?: string;
-  onFocus?: (id: string, label: string) => void;
+  onFocus?: (id: string, label: string, effective?: TranslationFocus, degraded?: boolean) => void;
 }
 
 type PdfTranslationState = 'pending' | 'loading' | 'unavailable' | 'error' | 'scanned';
@@ -66,8 +67,8 @@ export interface PdfPageView extends PageView {
   beginRegion(attach?: boolean): void;
   cancelRegion(): void;
   reopenRegion(id: string, receive?: RegionAction): Promise<void>;
-  setZoom(zoom: number): void;
-  setFocusMode(mode: TranslationFocus): void;
+  setZoom(zoom: ZoomSetting): void;
+  setFocusMode(mode: TranslationFocus, explicit?: boolean): void;
   focusBlock?(id: string): void;
   setTranslationState(state: PdfTranslationState, message: string, actions?: {label: string; run: () => void}[]): void;
 }
@@ -157,7 +158,7 @@ function mount(input: MountedPage): PdfPageView {
   const status = element('div', 'pdf-translation-state');
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
-  target.outer.append(status);
+  target.outer.prepend(status);
   let translationStatus: TranslationStatus | undefined;
   function setTranslationState(state: PdfTranslationState, message: string, actions: {label: string; run: () => void}[] = []): void {
     if (signal.aborted) return;
@@ -181,16 +182,14 @@ function mount(input: MountedPage): PdfPageView {
     }
   }
 
-  let zoom = Number.isFinite(options.zoom) && (options.zoom ?? 0) > 0 ? options.zoom! : 1;
-  const grid = options.sourceEl.closest<HTMLElement>('.pages');
+  let zoom: ZoomSetting = options.zoom === 'fit-page' || (typeof options.zoom === 'number' && Number.isFinite(options.zoom) && options.zoom > 0) ? options.zoom : 1;
+  let factor = typeof zoom === 'number' ? zoom : 1;
+  const paperScroll = options.sourceEl.closest<HTMLElement>('#paperScroll'), grid = options.sourceEl.closest<HTMLElement>('.pages');
   const sharedGrid = grid && grid.contains(options.translationEl) ? grid : null;
   let previousWidth = '';
-  if (sharedGrid) {
-    previousWidth = sharedGrid.style.width;
-    sharedGrid.style.width = zoom * 100 + '%';
-  }
-  source.attach(options.sourceEl, sharedGrid ? 1 : zoom);
-  target.attach(options.translationEl, sharedGrid ? 1 : zoom);
+  if (sharedGrid) { previousWidth = sharedGrid.style.width; sharedGrid.style.width = factor * 100 + '%'; }
+  source.attach(options.sourceEl, sharedGrid ? 1 : factor);
+  target.attach(options.translationEl, sharedGrid ? 1 : factor);
   const reading = pageText(layout.passages, options.onSelect && ((passage, trigger) => {
     if (signal.aborted) return;
     document.getSelection()?.removeAllRanges();
@@ -205,20 +204,20 @@ function mount(input: MountedPage): PdfPageView {
     area => figureAtRegion(area, layout.passages), options.canContinueRegion);
   const minReadableFontSize = options.minReadableFontSize ?? 0;
   let fittedScale = target.scale;
+  const applyWidth = () => { const w = (reading.root.hidden ? factor * 100 : 100) + '%'; if (sharedGrid) sharedGrid.style.width = w; else { source.outer.style.width = w; target.outer.style.width = w; } };
   function syncSheetScale(): void {
-    source.resize(); target.resize();
+    if (zoom === 'fit-page' && reading.root.hidden) {
+      const next = fitPageScale(paperScroll, source.outer.offsetWidth ? source.outer : target.outer, layout.window, factor);
+      if (Math.abs(next - factor) > 0.005) { factor = next; applyWidth(); }
+    }
+    source.resize(); target.resize(); focus?.setLaneWidth(target.outer.clientWidth);
     const scaleChanged = target.outer.dataset.focus !== 'passage' && Math.abs(target.scale - fittedScale) > 0.015;
     if (scaleChanged) fittedScale = target.scale;
     repaint(scaleChanged);
   }
-  function sizeSheets(): void {
-    if (sharedGrid) sharedGrid.style.width = (reading.root.hidden ? zoom * 100 : 100) + '%';
-    else for (const sheet of [source, target]) sheet.outer.style.width = zoom * 100 + '%';
-    syncSheetScale();
-  }
+  const sizeSheets = () => { factor = typeof zoom === 'number' ? zoom : fitPageScale(paperScroll, source.outer.offsetWidth ? source.outer : target.outer, layout.window, factor); applyWidth(); syncSheetScale(); };
   const resize = new ResizeObserver(syncSheetScale);
-  resize.observe(source.outer);
-  resize.observe(target.outer);
+  resize.observe(source.outer); resize.observe(target.outer); if (paperScroll) resize.observe(paperScroll);
   raster.watchDensity(source.outer, target.outer);
   window.visualViewport?.addEventListener('resize', () => raster.schedule(), { signal });
   signal.addEventListener('abort', () => {
@@ -231,13 +230,15 @@ function mount(input: MountedPage): PdfPageView {
     range?: SavedSelectionRange; parts?: Map<PlacedPassage, SelectionSegment> } | undefined;
   let preview: PlacedPassage | undefined;
   const selectedEntries = new Set<PlacedPassage>();
-  function setTranslations(map: Record<string, string>): void {
+  function setTranslations(map: Record<string, string>, overwrite = false): void {
     if (signal.aborted) return;
     for (const record of blocks) {
       const entry = placed.get(record.id)!;
       const supplied = map[record.id]?.trim();
-      const value = entry.passage.translation || (supplied && (!chineseTarget || !translationQualityError(record.text, supplied)) ? supplied : undefined);
+      const fresh = supplied && (!chineseTarget || !translationQualityError(record.text, supplied)) ? supplied : undefined;
+      const value = overwrite ? (fresh ?? entry.passage.translation) : (entry.passage.translation || fresh);
       const changed = value && (entry.translated.hidden || entry.translated.textContent !== value);
+      if (overwrite && fresh) entry.passage.sentencePairs = undefined;
       entry.passage.translation = record.translation = value;
       entry.translated.hidden = !value;
       if (changed) {
@@ -465,7 +466,8 @@ function mount(input: MountedPage): PdfPageView {
     annotationLayoutChanged(source.outer);
   }
   focus = new PdfFocus(layout, placed, source, target, options.focusMode ?? 'page', options.focusId,
-    (id, label) => options.onFocus?.(id, label), repaint, signal, options.targetLanguageLabel ?? targetLanguage);
+    (id, label, effective, degraded) => options.onFocus?.(id, label, effective, degraded), repaint, signal, options.targetLanguageLabel ?? targetLanguage);
+  focus.setLaneWidth(target.outer.clientWidth); if (zoom === 'fit-page') sizeSheets();
   function setTextView(enabled: boolean): void {
     if (signal.aborted || enabled === !reading.root.hidden || (enabled && !reading.entries.size)) return;
     const scroller = options.sourceEl.closest<HTMLElement>('#paperScroll');
@@ -484,7 +486,6 @@ function mount(input: MountedPage): PdfPageView {
       if (entry) revealLocated(entry, false);
     }
   }
-  const paperScroll = options.sourceEl.closest<HTMLElement>('#paperScroll');
   const innerTranslation = () => options.translationEl.scrollHeight > options.translationEl.clientHeight + 1;
   let translationScrolled = false;
   const listen = { signal, passive: true };
@@ -556,11 +557,10 @@ function mount(input: MountedPage): PdfPageView {
     canReadText: reading.entries.size > 0,
     get translationStatus() { return translationStatus; },
     setZoom(value) {
-      if (signal.aborted || !Number.isFinite(value) || value <= 0) return;
-      zoom = value;
-      sizeSheets();
+      if (signal.aborted || (value !== 'fit-page' && (!Number.isFinite(value) || value <= 0))) return;
+      zoom = value; sizeSheets();
     },
-    setFocusMode: mode => { if (!signal.aborted) focus.setMode(mode); },
+    setFocusMode: (mode, explicit) => { if (!signal.aborted) focus.setMode(mode, explicit); },
     focusBlock: id => { if (!signal.aborted) focus.focus(id); }, dispose: () => controller.abort() };
   return withAnnotationSurface(view, { original: source.outer, blocks: orderedBlocks, signal,
     revealPassage(id, quote, offset) {

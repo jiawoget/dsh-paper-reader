@@ -153,12 +153,13 @@ export function apply(ctx:ReaderHost):void {
         return json({translations:await library.translations(input.docId,input.page,targetLanguage)});
       }
       case 'translation.page': {
+        if (input.force !== undefined && typeof input.force !== 'boolean') fail('Invalid force option.', 400);
         const targetLanguage = input.targetLanguage === undefined ? store.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
         return json({translations:await library.translate(input.docId,input.page,input.blocks,async (blocks,documentKind)=>{
           const result:unknown=await service('ai.blocks',{blocks,documentKind,targetLanguage});
           if(!isRecord(result)||!isRecord(result.translations)||!Object.values(result.translations).every(v=>typeof v==='string')) fail('The model returned an invalid translation.',502);
           return result.translations as Record<string,string>;
-        },targetLanguage)});
+        },targetLanguage,input.force===true)});
       }
       case 'ai':
       case 'chat.ask': {

@@ -112,3 +112,27 @@ test('translate guards Object.prototype block IDs such as toString on cache look
     (error: unknown) => error instanceof Error && (error as Error & { status?: number }).status === 502 && /omitted a paragraph/i.test(error.message)
   );
 });
+
+test('translate with force overwrites only requested blocks and preserves cache on failure', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-ts-force-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const library = new Library(root);
+  const doc = await library.importPdf('Force.pdf', Buffer.from('%PDF-1.7\nforce test'));
+  const blocks = [{ id: 'b1', text: 'First block text.' }, { id: 'b2', text: 'Second block text.' }];
+  await library.translate(doc.id, 1, blocks, async () => ({ b1: '初版一。', b2: '初版二。' }));
+
+  const updated = await library.translate(doc.id, 1, [blocks[0]], async batch => {
+    assert.deepEqual(batch.map(b => b.id), ['b1']);
+    return { b1: '重译一。' };
+  }, undefined, true);
+  assert.equal(updated.b1, '重译一。');
+  assert.equal(updated.b2, '初版二。');
+
+  await assert.rejects(
+    library.translate(doc.id, 1, [blocks[0]], async () => { throw Object.assign(new Error('upstream failed'), { status: 502 }); }, undefined, true),
+    { status: 502 }
+  );
+  const afterFailure = await library.translations(doc.id, 1);
+  assert.equal(afterFailure.b1, '重译一。');
+  assert.equal(afterFailure.b2, '初版二。');
+});
