@@ -143,8 +143,10 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
     assert.equal(await reader.getAttribute('data-notebook-open'), 'false');
     await page.keyboard.press('Control++');
     assert.equal(await zoom.inputValue(), '1');
-    await page.keyboard.press('Alt+ArrowLeft');
+    await page.keyboard.press('Control+ArrowLeft');
     assert.equal(await page.locator('#pageCount').innerText(), '16 / 16');
+    await page.keyboard.press('Alt+ArrowLeft'); await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '1 / 16');
+    await page.keyboard.press('Alt+ArrowRight'); await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '16 / 16');
 
     // T2-F6-03: Suppression when #pageJump popover or libraryDialog is open
     await page.locator('#pageCount').click();

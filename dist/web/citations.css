@@ -1,46 +1,56 @@
 .paper-citation {
   color: var(--purple);
-  cursor: help;
+  cursor: pointer;
   text-decoration: underline dotted var(--quote-border);
   text-underline-offset: 3px;
 }
 .paper-citation:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 2px; }
 .pdf-citation-focus {
-  position: absolute;
-  z-index: 4;
-  display: block;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  pointer-events: none;
+  position: absolute; z-index: 4; display: grid; place-items: center;
+  min-width: 0; padding: 0; border: 0; border-radius: 3px;
+  background: transparent; pointer-events: auto; cursor: pointer; user-select: none;
 }
-.pdf-citation-focus:focus-visible, .pdf-citation-focus.citation-active {
-  border-radius: 2px;
-  outline: 1px solid var(--quote-border);
-  outline-offset: 1px;
-  background: rgb(193 157 212 / 14%);
+.pdf-citation-focus::after {
+  content: ""; width: var(--cite-w, 100%); height: var(--cite-h, 100%);
+  border-radius: 2px; border-bottom: 1.5px dotted var(--quote-border);
 }
+.pdf-citation-focus:hover::after, .pdf-citation-focus:focus-visible::after, .pdf-citation-focus.citation-active::after {
+  border-bottom-style: solid; border-bottom-color: var(--purple); background: rgb(156 117 211 / 16%);
+}
+.pdf-citation-focus:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .citation-preview {
   position: fixed;
   z-index: 50;
   width: max-content;
-  max-width: min(370px, calc(100vw - 16px));
-  max-height: min(46dvh, 340px);
+  max-width: min(390px, calc(100vw - 16px));
+  max-height: min(52dvh, 380px);
   overflow: auto;
   box-sizing: border-box;
   background: var(--paper);
   color: var(--desk-ink);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 9px;
   box-shadow: var(--shadow-popover);
-  padding: 9px 12px 10px;
-  font: 13px/1.4 system-ui, sans-serif;
+  padding: 10px 12px 11px;
+  font: 13px/1.45 system-ui, sans-serif;
   text-align: left;
 }
-.citation-preview header { margin: 0 0 5px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.citation-preview header { margin: 0 0 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .citation-preview ul, .citation-preview p { margin: 0; padding: 0; list-style: none; }
 .citation-preview li { display: flex; gap: 8px; overflow-wrap: anywhere; }
-.citation-preview li + li { margin-top: 5px; }
-.citation-index { flex: none; color: var(--purple); font-variant-numeric: tabular-nums; }
+.citation-preview li + li { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.citation-index { flex: none; color: var(--purple); font-weight: 600; font-variant-numeric: tabular-nums; }
+.citation-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.citation-title { font-weight: 560; color: var(--desk-ink); }
+.citation-meta { color: var(--muted); font-size: 12px; }
 .citation-entry, .citation-lookup { color: var(--desk-ink); }
+.citation-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.citation-actions .btn { min-height: 28px; padding: 3px 8px; font-size: 12px; }
+@media (pointer: coarse), (max-width: 700px) {
+  .citation-actions .btn { min-width: 44px; min-height: 44px; padding: 6px 10px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-theme-switching]) :is(.pdf-citation-focus::after, .citation-actions .btn) {
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+  }
+}

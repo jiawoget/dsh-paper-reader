@@ -611,7 +611,7 @@
   .rail-head { padding-inline: 8px; }
   .rail-head [role="tablist"] { gap: 6px; }
 }
-@container reading-area (max-width: 1020px) {
+@container reading-area (max-width: 1080px) {
   .topbar { gap: 5px; padding-inline: 12px; }
   .topbar :is(#library, #contentsToggle, #mobileRail, #more) { gap: 4px; padding: 0 6px; }
   .topbar #captureRegion { gap: 4px; padding-inline: 7px; }
@@ -621,9 +621,9 @@
   #pageCount { min-width: 44px; }
   .reader-mode-switch :is(#originalMode, #parallel) { padding: 3px 6px; }
 }
-@container reading-area (max-width: 860px) {
-  .topbar :is(#library, #contentsToggle, #mobileRail) > span { display: none; }
-  .topbar :is(#library, #contentsToggle, #mobileRail) { min-width: 34px; padding-inline: 6px; }
+@container reading-area (max-width: 900px) {
+  .topbar :is(#library, #contentsToggle, #captureRegion, #mobileRail) > span { display: none; }
+  .topbar :is(#library, #contentsToggle, #captureRegion, #mobileRail) { min-width: 34px; padding-inline: 6px; }
 }
 @container reading-area (max-width: 750px) {
   .topbar {
@@ -885,7 +885,7 @@
   .topbar #library { border-color: transparent; }
   .doc-heading { min-width: 0; flex: 1 1 auto; }
   .doc-heading span, #pageTextHint, #pageFormat #readText, #reader:not([data-placing-pin="true"]) #pageFormat, #mobileBar #captureRegion .capture-label,
-  #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle :is(.paper-chat-summary, svg:last-child) { display: none; }
+  #mobileBar .jump-history, #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle :is(.paper-chat-summary, svg:last-child) { display: none; }
   #pageFormat { width: 100%; min-height: 48px; padding: 2px 8px; justify-content: flex-end; }
   #menu { max-height: calc(100dvh - 64px); overflow-y: auto; }
   #reader #menu #zoomControl { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 0; padding: 6px 8px 2px; border-top: 1px solid var(--line); font-size: 13px; }

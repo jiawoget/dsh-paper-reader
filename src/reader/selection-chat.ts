@@ -38,8 +38,8 @@ export class SelectionChat {
   readonly root = el('aside', 'selection-chat');
   readonly heading = el('header', 'chat-heading');
   readonly action = button(label('Ask AI', '提问'), () => this.open('ask'), 'btn primary selection-chat-action');
-  private log = createChatLog('selection-chat-log', label('Selection chat history', '选段讨论记录'));
-  private stream = createStreamSlot(this.log);
+  private log = createChatLog('selection-chat-log', label('Selection chat history', '选段讨论记录'), p => { void this.app.navigate(this.app.doc.id, p).catch(e => toast(message(e))); });
+  private stream = createStreamSlot(this.log, () => this.app.pageCount);
   private quoteBar = el('div', 'answer-selection');
   private connection = el('div', 'chat-notice');
   private form = el('form', 'chat-composer');
@@ -277,7 +277,7 @@ export class SelectionChat {
         if (!actions) this.answerActions.set(index, actions = new AnswerNotebookAction(this.app, turn.source ?? chatSource(this.item), turn.content, turn.requestId!, 'discussion'));
         return renderAnswerRow({
           rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'),
-          bodyClass: 'selection-answer selection-prose', actionsClass: 'selection-reply-actions', content: turn.content,
+          bodyClass: 'selection-answer selection-prose', actionsClass: 'selection-reply-actions', content: turn.content, maxPage: this.app.pageCount,
           dataset: { turn: String(index), replyId: turn.requestId },
           quote: turn.quote ? { css: 'answer-quote', text: turn.quote.text } : undefined,
           actions: [actions.root], onDelete: turn.requestId ? () => this.deleteTurn(turn.requestId!) : undefined
@@ -305,7 +305,7 @@ export class SelectionChat {
     if (stopped && !pending && !this.stoppedRow) {
       const question = rowFor({ role: 'user', content: stopped.request.prompt, quote: stopped.request.quote, source: stopped.request.item && chatSource(stopped.request.item) }, turns.length);
       const reply = renderStoppedReply({
-        rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'), answer: stopped.answer,
+        rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'), answer: stopped.answer, maxPage: this.app.pageCount,
         onRetry: () => this.ask({ ...stopped.request, requestId: crypto.randomUUID(), payload: undefined }),
         onDelete: () => { this.state.stopped = undefined; this.render(); }
       });

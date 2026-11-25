@@ -139,6 +139,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 svg { flex-shrink: 0; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 27px; height: 27px; border-radius: 6px; }
 .icon-btn:hover { background: var(--lavender); }
+.jump-history { display: flex; align-items: center; gap: 2px; padding-inline-end: 4px; margin-inline-end: 2px; border-inline-end: 1px solid var(--line); }
+.jump-history:has(+ .page-navigation[hidden]):has(~ #articleNavigation[hidden]) { border-inline-end: 0; padding-inline-end: 0; margin-inline-end: 0; }
 #loading { position: absolute; left: 50%; top: 20%; transform: translateX(-50%); background: var(--paper); padding: 10px 15px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
 .trail { display: flex; align-items: center; gap: 5px; margin: 2px 0 12px; color: var(--muted); font-size: 12px; }
 .sample-section { margin: 0 0 16px; }

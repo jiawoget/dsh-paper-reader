@@ -28,11 +28,8 @@ import { isScreenshotAnchor } from './selection-context.js';
 import { discussionId } from './passage-links.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, toast, type Glyph, type ReaderPort } from './ui.js';
+import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './jump-history.js';
 
-interface ReadingPosition {
-  doc: string; page: number; mode: ReadingMode; text: boolean;
-  top: number; left: number; translationTop: number; translationLeft: number; historyTop?: number;
-}
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
 type SidebarTab = typeof sidebarTabs[keyof typeof sidebarTabs];
 
@@ -125,11 +122,13 @@ class Reader implements ReaderPort {
   private get pdfView(): PdfPageView | undefined {
     return this.view && 'setTextView' in this.view ? this.view as PdfPageView : undefined;
   }
+  get pageCount(): number { return this.pdf?.pages || this.doc.book?.sections.length || 0; }
   private readonly translate=byId<HTMLButtonElement>('translate');
+  private readonly jumpHistory=new JumpHistory(()=>this.jumpControls?.sync()); private jumpControls?: ReturnType<typeof bindJumpHistoryControls>;
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
 
   async start():Promise<void>{
-    installCitationPreviews(() => this.pdf);
+    installCitationPreviews(() => this.pdf, { jumpToPage: page => this.navigate(this.doc.id, page), openDocument: opened => this.openDocument(opened) });
     byId('selectionDock').after(this.chat.root);
     this.controls();
     const address=new URL(location.href),params=address.searchParams;
@@ -144,7 +143,7 @@ class Reader implements ReaderPort {
     window.addEventListener('popstate',()=>{
       const current=new URL(location.href),query=current.searchParams;
       if(discussionId(current)){void this.openNotebookSource(current).catch(error=>toast(message(error)));return;}
-      void this.navigate(query.get('doc')||'pagedattention',Number(query.get('page'))||undefined,query.get('anchor')||undefined,query.get('quote')||undefined,readTranslatedLocator(current),readSelectionRange(current)).then(()=>this.keepSourceReply(current)).catch(error=>toast(message(error)));
+      void this.navigate(query.get('doc')||'pagedattention',Number(query.get('page'))||undefined,query.get('anchor')||undefined,query.get('quote')||undefined,readTranslatedLocator(current),readSelectionRange(current),{skipHistory:true}).then(()=>this.keepSourceReply(current)).catch(error=>toast(message(error)));
     });
   }
   async refresh():Promise<void>{
@@ -234,6 +233,7 @@ class Reader implements ReaderPort {
     const anchor = query.get('anchor') ?? '', quote = query.get('quote') ?? '';
     const target = readTranslatedLocator(url), range = readSelectionRange(url);
     if (this.view && !this.navigating && this.doc.id === doc && this.page === page && this.card.inspectSource()) {
+      this.jumpHistory.push(this.readingPosition(false));
       this.desk.showNotebook(false);
       if (needsTranslation(anchor, target)) this.setReadingMode('bilingual');
       else if (this.desk.isNarrow) this.setReadingMode('source');
@@ -282,7 +282,7 @@ class Reader implements ReaderPort {
   discardDocument(docId: string): void {
     discardNotebook(this, docId);
     if (this.doc.id === docId) {
-      this.leaveBookReading?.(false);
+      this.jumpHistory.clear(); this.leaveBookReading?.(false);
       this.leaveBookReading = undefined;
       this.notebook = undefined;
       this.notebookError = undefined;
@@ -355,7 +355,8 @@ class Reader implements ReaderPort {
     return this.navigate(opened.doc.id,opened.page,opened.anchor,'',undefined,undefined,{opened:opened.doc});
   }
   async navigate(id:string,page?:number,anchor='',quote='',target?:TranslatedLocator,range?:SavedSelectionRange,
-    options?:{opened?:DocumentInfo;restoreWithinPage?:boolean;fromContents?:boolean}):Promise<void>{
+    options?:{opened?:DocumentInfo;restoreWithinPage?:boolean;fromContents?:boolean;skipHistory?:boolean}):Promise<void>{
+    if(!options?.skipHistory && this.view && this.loadedId===id && ((page??this.page)!==this.page || Boolean(anchor) || Boolean(options?.fromContents && byId('paperScroll').scrollTop>4)))this.jumpHistory.push(this.readingPosition(false));
     this.cancelCapture(false); this.beforeCapture=undefined;
     this.cancelPin();this.marks.closePageEditor();
     const readingLink=Boolean(anchor && !options?.fromContents && !outlineLocation(anchor));
@@ -411,7 +412,7 @@ class Reader implements ReaderPort {
         const previous=this.pdf;this.pdf=pdf;if(previous && previous!==pdf)void previous.destroy().catch(()=>undefined);
         this.doc=doc;this.loadedId=id;this.page=number;
         if(changed){
-          const last=localStorage.getItem('reader.tab.'+doc.id);
+          this.jumpHistory.clear(); const last=localStorage.getItem('reader.tab.'+doc.id);
           this.tab=Object.values(sidebarTabs).find(tab=>tab===last) ?? (doc.book?'contents':'notes');
         }
         this.desk.setDocument(Boolean(pdf),Boolean(doc.book));
@@ -490,6 +491,7 @@ class Reader implements ReaderPort {
       if(this.parallel)void this.translatePdf(view,doc,page);
     };
     const options={doc,page,sourceEl,translationEl,translations,targetLanguage,targetLanguageLabel:this.targetLanguageLabel,onSelect,onMounted,
+      onLink:(dest:{page:number;top?:number})=>{void this.openContentsEntry({...dest,title:''}).catch(error=>toast(message(error)));},
       onNavigateAnchor:(anchor:string)=>this.navigate(doc.id,page,anchor),
       onBookSection:(number:number,fragment?:string)=>this.navigate(doc.id,number,fragment?'publisher:'+fragment:''),
       onAmbiguousQuote:()=>toast(label('This quote occurs more than once. Showing its paragraph.', '这段引文在段内出现多次，已定位到段落。')),
@@ -644,7 +646,7 @@ class Reader implements ReaderPort {
   private syncMenuActions(): void {
     const narrow=this.desk.isMobileBar, pin=byId('placePin'), read=byId('readText');
     this.menuPin.hidden=!narrow || pin.hidden; this.menuPin.lastChild!.textContent=pin.textContent;
-    this.menuRead.hidden=!narrow || read.hidden; this.menuRead.lastChild!.textContent=read.textContent;
+    this.menuRead.hidden=!narrow || read.hidden; this.menuRead.lastChild!.textContent=read.textContent; this.jumpControls?.sync();
   }
   private setReadingMode(mode: ReadingMode):void {
     if(mode===this.desk.mode)return;
@@ -708,11 +710,12 @@ class Reader implements ReaderPort {
       this.card.returnFromSource();
     }else if(restore)byId('captureRegion').focus({preventScroll:true});
   }
-  private readingPosition():ReadingPosition {
+  private readingPosition(includeChat = true):ReadingPosition {
     const paper=byId('paperScroll'), translation=byId('translated');
     return {doc:this.doc.id, page:this.page, mode:this.desk.mode, text:this.readingText, top:paper.scrollTop, left:paper.scrollLeft,
-      translationTop:translation.scrollTop, translationLeft:translation.scrollLeft, historyTop:this.chat.readingPosition};
+      translationTop:translation.scrollTop, translationLeft:translation.scrollLeft, ...(includeChat && { historyTop:this.chat.readingPosition })};
   }
+  private async jumpInHistory(dir:'back'|'forward'):Promise<void> { const next=this.jumpHistory[dir](this.readingPosition(false)); if(next)await this.restoreReading(next); }
   regionDiscussionClosed(explicit:boolean):void {
     const initial=this.beforeCapture;
     this.beforeCapture=undefined;
@@ -720,7 +723,7 @@ class Reader implements ReaderPort {
     void this.restoreReading(initial).catch(error=>toast(message(error)));
   }
   private async restoreReading(initial:ReadingPosition):Promise<void> {
-    if(initial.page!==this.page)await this.navigate(initial.doc,initial.page);
+    if(initial.doc!==this.doc.id || initial.page!==this.page)await this.navigate(initial.doc,initial.page,'','',undefined,undefined,{skipHistory:true});
     if(initial.doc!==this.doc.id || initial.page!==this.page)return;
     this.setReadingMode(initial.mode);
     this.readingText=initial.text;this.updatePageFormat();
@@ -875,6 +878,7 @@ class Reader implements ReaderPort {
       canPrevPage:()=>Boolean(this.pdf && this.page>1),
       canNextSection:()=>Boolean(this.doc.book && this.page<this.doc.book.sections.length),
       canPrevSection:()=>Boolean(this.doc.book && this.page>1),
+      canJumpBack:()=>this.jumpHistory.canBack(), canJumpForward:()=>this.jumpHistory.canForward(), jumpBack:()=>{void this.jumpInHistory('back').catch(e=>toast(message(e)));}, jumpForward:()=>{void this.jumpInHistory('forward').catch(e=>toast(message(e)));},
       toggleBilingual:()=>this.setReadingMode(this.desk.mode==='bilingual'?'source':'bilingual'),
       toggleSidebar:tab=>this.toggleSidebar(tab),
       setZoom:resizePages
@@ -897,7 +901,8 @@ class Reader implements ReaderPort {
     ];
     this.menuPin=button('',()=>{this.closeMenu(false);togglePlacePin();},'','pin'); this.menuPin.hidden=true;
     this.menuRead=button('',()=>{this.closeMenu(true);toggleReadText();},'','note'); this.menuRead.hidden=true;
-    byId('menu').append(this.menuPin,this.menuRead);
+    this.jumpControls=bindJumpHistoryControls({history:this.jumpHistory,isMobileBar:()=>this.desk.isMobileBar,closeMenu:r=>this.closeMenu(r),onBack:()=>this.jumpInHistory('back'),onForward:()=>this.jumpInHistory('forward')});
+    byId('menu').append(...this.jumpControls.menuButtons,this.menuPin,this.menuRead);
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
     this.desk.connect(mode=>{if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setFocusMode(mode);}, () => refreshNotebookHighlights(this));
     byId('menu').addEventListener('focusout',event=>{
@@ -906,7 +911,7 @@ class Reader implements ReaderPort {
     document.addEventListener('pointerdown',e=>{
       if(!(e.target instanceof Element))return;
       if(!e.target.closest('#menu,#more'))this.closeMenu();
-      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,dialog'))this.card.dismiss();
+      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,.citation-preview,dialog'))this.card.dismiss();
     });
   }
   private selectTab(tab:SidebarTab):void {

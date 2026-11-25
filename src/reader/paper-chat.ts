@@ -13,7 +13,7 @@ import { sourceChip } from './notes-panel.js';
 import { settingsDialog } from './settings-dialog.js';
 import { questionConnected, questionModelButton } from './question-model.js';
 import type { PdfDocument } from './pdf-view.js';
-import { api, apiStream, button, el, icon, message, readerLabel as label, type ReaderPort } from './ui.js';
+import { api, apiStream, button, el, icon, message, readerLabel as label, toast, type ReaderPort } from './ui.js';
 
 interface Conversation {
   draft: string; exchanges: ChatExchange[]; loaded: boolean; version: number;
@@ -27,8 +27,8 @@ export class PaperChat {
   private readonly toggle = el('button', 'paper-chat-toggle');
   private readonly detail = el('span', 'paper-chat-summary');
   private readonly content = el('div', 'paper-chat-content');
-  private readonly log = createChatLog('paper-chat-log', label('Paper chat history','全文问答记录'));
-  private readonly stream = createStreamSlot(this.log);
+  private readonly log = createChatLog('paper-chat-log', label('Paper chat history','全文问答记录'), p => { void this.app.navigate(this.app.doc.id, p).catch(e => toast(message(e))); });
+  private readonly stream = createStreamSlot(this.log, () => this.app.pageCount);
   private readonly notice = el('div', 'paper-chat-notice');
   private readonly drafts = el('details', 'paper-chat-drafts');
   private readonly attachment = el('div', 'paper-chat-attachment');
@@ -251,7 +251,7 @@ export class PaperChat {
       }
       this.log.append(renderAnswerRow({
         rowClass: 'paper-chat-reply', speakerClass: 'paper-chat-speaker', speakerText: 'AI',
-        bodyClass: 'paper-answer selection-prose', actionsClass: 'paper-reply-actions', content: exchange.answer,
+        bodyClass: 'paper-answer selection-prose', actionsClass: 'paper-reply-actions', content: exchange.answer, maxPage: this.app.pageCount,
         dataset: { exchangeId: exchange.requestId }, beforeActions: evidence, actions,
         onDelete: () => this.deleteExchange(exchange.requestId)
       }));
@@ -260,7 +260,7 @@ export class PaperChat {
       const stopped = state.stopped;
       this.question(stopped.request, false);
       this.log.append(renderStoppedReply({
-        rowClass: 'paper-chat-reply', speakerClass: 'paper-chat-speaker', speakerText: 'AI', answer: stopped.answer,
+        rowClass: 'paper-chat-reply', speakerClass: 'paper-chat-speaker', speakerText: 'AI', answer: stopped.answer, maxPage: this.app.pageCount,
         onRetry: () => this.send({ ...stopped.request, requestId: crypto.randomUUID() }),
         onDelete: () => { state.stopped = undefined; this.render(); }
       }));

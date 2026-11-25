@@ -8,20 +8,25 @@ interface StreamSlot {
   cancel(): void;
 }
 
-export function createChatLog(css: string, ariaLabel: string): HTMLDivElement {
+export function createChatLog(css: string, ariaLabel: string, onJumpPage?: (page: number) => void): HTMLDivElement {
   const log = el('div', css);
   log.setAttribute('role', 'log'); log.ariaLabel = ariaLabel; log.setAttribute('aria-live', 'polite'); log.tabIndex = 0;
+  if (onJumpPage) log.addEventListener('click', event => {
+    const chip = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.page-cite-chip[data-page]') : null;
+    const page = Number(chip?.dataset.page);
+    if (chip && Number.isInteger(page) && page >= 1) onJumpPage(page);
+  });
   return log;
 }
 
-export function createStreamSlot(log: HTMLElement, intervalMs = 80): StreamSlot {
+export function createStreamSlot(log: HTMLElement, maxPage?: () => number, intervalMs = 80): StreamSlot {
   let target: HTMLElement | undefined, latest = '', rendered = '', lastRender = -intervalMs;
   let timer: ReturnType<typeof setTimeout> | undefined, raf = 0;
   const paint = () => {
     raf = 0;
     if (!target || latest === rendered) return;
     const atBottom = log.scrollHeight - log.clientHeight - log.scrollTop < 32;
-    target.innerHTML = answerMarkdown(latest); rendered = latest; lastRender = performance.now();
+    target.innerHTML = answerMarkdown(latest, maxPage?.() ?? 0); rendered = latest; lastRender = performance.now();
     if (atBottom) log.scrollTop = log.scrollHeight;
   };
   const stop = () => {
@@ -33,7 +38,7 @@ export function createStreamSlot(log: HTMLElement, intervalMs = 80): StreamSlot 
       stop();
       const row = el('div', opts.rowClass + ' is-streaming'), body = el('div', 'chat-stream-body');
       body.dir = 'auto'; target = body; latest = rendered = opts.streamText || ''; lastRender = -intervalMs;
-      if (opts.streamText) body.innerHTML = answerMarkdown(opts.streamText);
+      if (opts.streamText) body.innerHTML = answerMarkdown(opts.streamText, maxPage?.() ?? 0);
       else body.append(el('p', 'chat-stream-wait', opts.waitingText));
       row.append(el('span', opts.speakerClass, opts.speakerText), body);
       return row;
@@ -55,7 +60,7 @@ export function settleStreamFailure(opts: {
   restoreDraft: () => void; onStopped: (answer: string) => void; onError: () => void;
 }): void {
   if (opts.aborted) { if (opts.streamText?.trim()) opts.onStopped(opts.streamText); else opts.restoreDraft(); }
-  else { if (!opts.dispatched) opts.restoreDraft(); opts.onError(); }
+  else { if (!opts.streamText?.trim()) opts.restoreDraft(); opts.onError(); }
 }
 
 export function bindChatComposer(textarea: HTMLTextAreaElement, form: HTMLFormElement, canSubmit: () => boolean): void {
@@ -118,13 +123,13 @@ export function renderQuestionRow(opts: {
 
 export function renderAnswerRow(opts: {
   rowClass: string; speakerClass: string; speakerText: string; bodyClass: string;
-  actionsClass: string; content: string; dataset: Record<string, string | undefined>;
+  actionsClass: string; content: string; maxPage?: number; dataset: Record<string, string | undefined>;
   quote?: { css: string; text: string }; beforeActions?: HTMLElement; actions: HTMLElement[]; onDelete?: () => unknown;
 }): HTMLDivElement {
   const row = el('div', opts.rowClass), body = el('div', opts.bodyClass), actions = el('div', opts.actionsClass);
   body.dir = 'auto'; body.tabIndex = -1;
   for (const [k, v] of Object.entries(opts.dataset)) if (v !== undefined) body.dataset[k] = v;
-  body.innerHTML = answerMarkdown(opts.content);
+  body.innerHTML = answerMarkdown(opts.content, opts.maxPage);
   row.append(el('span', opts.speakerClass, opts.speakerText));
   if (opts.quote) row.append(el('blockquote', opts.quote.css, opts.quote.text));
   row.append(body);
@@ -135,10 +140,10 @@ export function renderAnswerRow(opts: {
 }
 
 export function renderStoppedReply(opts: {
-  rowClass: string; speakerClass: string; speakerText: string; answer: string; onRetry: () => unknown; onDelete: () => unknown;
+  rowClass: string; speakerClass: string; speakerText: string; answer: string; maxPage?: number; onRetry: () => unknown; onDelete: () => unknown;
 }): HTMLElement {
   const row = el('div', opts.rowClass + ' is-stopped'), body = el('div', 'chat-stopped-body'), bar = el('div', 'chat-stopped-bar');
-  body.dir = 'auto'; body.innerHTML = answerMarkdown(opts.answer);
+  body.dir = 'auto'; body.innerHTML = answerMarkdown(opts.answer, opts.maxPage);
   bar.setAttribute('role', 'status');
   bar.append(el('span', 'chat-stopped-label', label('Generation stopped', '已停止生成')),
     button(label('Retry', '重试'), opts.onRetry, 'text-btn'), chatAnswerTools({ text: opts.answer, onDelete: opts.onDelete }));

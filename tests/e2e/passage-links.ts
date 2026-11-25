@@ -192,7 +192,7 @@ await withHost(async host => {
     await caret(page, rail, secondRow, secondRow.indexOf(' for the'));
     await page.getByRole('button', { name: 'Next page' }).click();
     const paperRun = run(shortcut);
-    const tooltip = page.getByRole('tooltip');
+    const tooltip = page.locator('.citation-preview');
     const checkTitles = async () => {
       for (const title of referenceTitles) await tooltip.getByText(title, { exact: true }).waitFor();
       assert.equal(await tooltip.locator('li').count(), 2);
@@ -200,10 +200,20 @@ await withHost(async host => {
     await paperRun.waitFor();
     await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
     await page.getByRole('button', { name: 'Bilingual', exact: true, pressed: true }).waitFor();
-    await page.locator('#original .pdf-citation-focus').filter({ visible: true }).first().waitFor();
+    const firstCite = page.locator('#original .pdf-citation-focus').filter({ visible: true }).first();
+    await firstCite.waitFor();
+    const citeBox = (await firstCite.boundingBox())!;
+    assert.ok(citeBox.width >= 23.5 && citeBox.height >= 23.5);
     const printed = await glyph(paperRun, '[34, 49]');
     await page.mouse.move(printed.x, printed.y);
     await checkTitles();
+    await firstCite.click();
+    await tooltip.getByRole('button', { name: 'Copy', exact: true }).first().waitFor();
+    const jumpRef = tooltip.getByRole('button', { name: /^Jump to References \(p\. \d+\)$/ }).first();
+    await jumpRef.click();
+    await tooltip.waitFor({ state: 'hidden' });
+    await page.locator('#jumpBack').click();
+    await paperRun.waitFor();
     const directory = path.join(host.artifacts, 'reviews', 'reading-desk');
     await mkdir(directory, { recursive: true });
     if (actualPaper) await page.screenshot({ path: path.join(directory, 'numbered-reference-preview.png'), animations: 'disabled' });
