@@ -160,6 +160,7 @@ export interface ServiceResults {
   'chat.ask': { text: string };
   'chat.searchTerms': { text: string };
   'chat.history': { exchanges: ChatExchange[] };
+  'chat.delete': Operations['chat.delete'][1];
   'ai.blocks': { translations: Record<string, string>; provider?: 'local' };
   'obsidian.export': { path: string; notes: number; words: number };
   'zotero.collections': Operations['zotero.collections'][1];

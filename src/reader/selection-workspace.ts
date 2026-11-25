@@ -187,7 +187,7 @@ export class SelectionWorkspace {
   get currentQuestion(): DiscussionRef | undefined {
     const ref = this.recent;
     const state = ref && this.discussions.get(ref.thread);
-    return ref?.source.docId === this.app.doc.id && state && (state.turns.length || state.pending || state.failure)
+    return ref?.source.docId === this.app.doc.id && state && (state.turns.length || state.pending || state.failure || state.stopped)
       ? ref : undefined;
   }
 
@@ -224,6 +224,19 @@ export class SelectionWorkspace {
     };
   }
   refresh(): void { this.active?.notes.refresh(); this.active?.chat.refresh(); }
+  exchangeDeleted(thread: string, requestId: string): void {
+    const state = this.discussions.get(thread);
+    if (!state) return;
+    const index = state.turns.findIndex(turn => turn.role === 'assistant' && turn.requestId === requestId);
+    if (index >= 0) {
+      const start = index > 0 && state.turns[index - 1].role === 'user' ? index - 1 : index;
+      state.turns.splice(start, index - start + 1);
+      state.answerActions?.clear();
+    }
+    if (this.active?.thread === thread) this.active.chat.resetLog();
+    else if (!state.turns.length && !state.pending && !state.failure && !state.stopped && ![...state.drafts.values()].some(draft => draft.text))
+      this.discussions.delete(thread);
+  }
   close(): void {
     if (!this.active) return;
     const { thread, selection, chat, notes } = this.active;
@@ -231,7 +244,7 @@ export class SelectionWorkspace {
     chat.destroy();
     if (!this.notesBySelection.get(selection)?.draft) this.notesBySelection.delete(selection);
     const state = this.discussions.get(thread)!;
-    if (!state.turns.length && !state.pending && !state.failure && ![...state.drafts.values()].some(draft => draft.text))
+    if (!state.turns.length && !state.pending && !state.failure && !state.stopped && ![...state.drafts.values()].some(draft => draft.text))
       this.discussions.delete(thread);
     this.active = undefined;
   }

@@ -309,6 +309,7 @@ class Reader implements ReaderPort {
     byId(mode==='source'?'originalMode':'parallel').focus({preventScroll:true});
   }
   discussionChanged(docId: string):void { void this.chat.reload(docId); }
+  exchangeDeleted(thread: string, requestId: string):void { this.card.exchangeDeleted(thread, requestId); }
   private syncHighlightPreference():void {
     byId<HTMLSelectElement>('highlightDisplay').closest('label')!.hidden = this.tab !== 'notes' || this.marks.savedHighlights().length === 0;
   }

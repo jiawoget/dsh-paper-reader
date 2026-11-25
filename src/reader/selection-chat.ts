@@ -1,8 +1,12 @@
 import type { ChatSource, Operations, ReadingSide } from '../shared/types.js';
 import { maxPreviousMaterials } from '../shared/types.js';
 import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47, targetLanguageLabel, targetsSimplifiedChinese } from '../shared/languages.js';
-import { answerMarkdown, selectedAnswer } from './answer-markdown.js';
+import { selectedAnswer } from './answer-markdown.js';
 import { AnswerNotebookAction } from './answer-notebook.js';
+import {
+  bindChatComposer, createChatLog, createSendStopPair, createStreamSlot,
+  renderAnswerRow, renderChatNotice, renderQuestionRow, renderStoppedReply, settleStreamFailure
+} from './chat-stream.js';
 import { readQuestions, saveQuestions, type AnswerQuote, type MessageDraft } from './discussion-drafts.js';
 import { compactReader } from './reading-desk.js';
 import { settingsDialog } from './settings-dialog.js';
@@ -15,28 +19,14 @@ import { activateAfterTouchDrag, api, apiStream, button, byId, el, icon, message
 
 interface Turn { role: 'user' | 'assistant'; content: string; quote?: AnswerQuote; source?: ChatSource; requestId?: string }
 interface Request {
-  item?: SelectionContext;
-  savingNotes?: SelectionNotes;
-  requestId?: string;
-  mode: Operations['ai'][0]['mode'];
-  prompt: string;
-  draftKey?: string;
-  quote?: AnswerQuote;
-  payload?: Operations['ai'][0];
-  side?: ReadingSide;
-  controller?: AbortController;
-  streamText?: string;
+  item?: SelectionContext; savingNotes?: SelectionNotes; requestId?: string;
+  mode: Operations['ai'][0]['mode']; prompt: string; draftKey?: string; quote?: AnswerQuote;
+  payload?: Operations['ai'][0]; side?: ReadingSide; controller?: AbortController; streamText?: string;
 }
 export interface ChatState {
-  restored?: Promise<void>;
-  turns: Turn[];
-  drafts: Map<string, MessageDraft>;
-  activeDraft: string;
-  pending?: Request;
-  failure?: { request: Request; error: string };
-  meanings?: Record<string, string>;
-  draftSource?: ChatSource;
-  answerActions?: Map<number, AnswerNotebookAction>;
+  restored?: Promise<void>; turns: Turn[]; drafts: Map<string, MessageDraft>; activeDraft: string;
+  pending?: Request; failure?: { request: Request; error: string }; stopped?: { request: Request; answer: string };
+  meanings?: Record<string, string>; draftSource?: ChatSource; answerActions?: Map<number, AnswerNotebookAction>;
 }
 const quoteKey = (quote: AnswerQuote) => JSON.stringify([quote.turn, quote.text]);
 const summary = (text: string) => {
@@ -48,7 +38,8 @@ export class SelectionChat {
   readonly root = el('aside', 'selection-chat');
   readonly heading = el('header', 'chat-heading');
   readonly action = button(label('Ask AI', '提问'), () => this.open('ask'), 'btn primary selection-chat-action');
-  private log = el('div', 'selection-chat-log');
+  private log = createChatLog('selection-chat-log', label('Selection chat history', '选段讨论记录'));
+  private stream = createStreamSlot(this.log);
   private quoteBar = el('div', 'answer-selection');
   private connection = el('div', 'chat-notice');
   private form = el('form', 'chat-composer');
@@ -59,7 +50,8 @@ export class SelectionChat {
   private readonly answerActions: Map<number, AnswerNotebookAction>;
   private dragging = false;
   private renderedTurns = 0;
-  private pendingRow?: { request: Request; question: HTMLElement; wait: HTMLElement };
+  private pendingRow?: { request: Request; question: HTMLElement; reply: HTMLElement };
+  private stoppedRow?: { request: Request; question: HTMLElement; reply: HTMLElement };
   private quoteVersion = '';
   private disconnected?: boolean;
   private readonly modelPicker: ReturnType<typeof questionModelButton>;
@@ -77,11 +69,7 @@ export class SelectionChat {
     const close = button('', () => { this.show(false); closeChat(); }, 'icon-btn chat-close');
     close.ariaLabel = label('Close chat', '收起讨论');
     close.append(icon('close', 14));
-    this.heading.append(el('h3', '', label('Reading discussion', '阅读讨论')), this.modelPicker.button, close);
-    this.log.setAttribute('role', 'log');
-    this.log.ariaLabel = label('Selection chat history', '选段讨论记录');
-    this.log.tabIndex = 0;
-    this.log.setAttribute('aria-live', 'polite');
+    this.heading.append(el('h3', '', label('Reading discussion', '阅读讨论')), close);
     this.quoteBar.setAttribute('role', 'group');
     this.quoteBar.ariaLabel = label('Selected answer text', '选中的回答文本');
     this.quoteBar.hidden = true;
@@ -117,8 +105,9 @@ export class SelectionChat {
         ));
       }
     }
-    content.append(this.starters);
-    content.append(this.log, this.quoteBar, this.connection, this.form);
+    const modelBar = el('div', 'chat-model-bar');
+    modelBar.append(this.starters, this.modelPicker.button);
+    content.append(this.log, this.quoteBar, this.connection, modelBar, this.form);
     const signal = this.events.signal;
     this.log.addEventListener('pointerdown', () => { this.dragging = true; }, { signal });
     document.addEventListener('pointerup', () => {
@@ -187,10 +176,8 @@ export class SelectionChat {
     else this.log.focus({ preventScroll: true });
   }
   destroy(): void {
-    this.events.abort();
-    this.root.hidden = true;
-    this.clearSelection();
-    this.quoteBar.remove();
+    this.events.abort(); this.stream.cancel(); this.modelPicker.destroy();
+    this.root.hidden = true; this.clearSelection(); this.quoteBar.remove();
   }
   private focusComposer(): void { this.form.querySelector('textarea')?.focus({ preventScroll: true }); }
   private restore(): Promise<void> {
@@ -217,35 +204,22 @@ export class SelectionChat {
     saveQuestions({ thread: this.thread, source: this.state.draftSource ?? chatSource(this.item) }, this.state.activeDraft, this.state.drafts);
   }
 
-  private clearSelection(): void {
-    if (!this.selected) return;
-    this.selected = undefined;
-    this.renderQuote();
-  }
+  private clearSelection(): void { if (!this.selected) return; this.selected = undefined; this.renderQuote(); }
   private capture(): void {
     if (this.root.hidden || !this.root.isConnected) return;
     if (byId('card').dataset.workspace === 'note' || document.activeElement?.closest('.answer-notebook')) return;
     const selected = selectedAnswer(this.log);
-    if (!selected) {
-      this.clearSelection();
-      return;
-    }
+    if (!selected) { this.clearSelection(); return; }
     const { body, text } = selected, turn = Number(body.dataset.turn);
     if (this.selected?.text === text && this.selected.turn === turn) return;
-    this.selected = { turn, text };
-    this.draftExcerpt = undefined;
-    this.renderQuote();
+    this.selected = { turn, text }; this.draftExcerpt = undefined; this.renderQuote();
   }
   private useQuote(quote: AnswerQuote): void {
     const key = quoteKey(quote);
     if (!this.state.drafts.has(key)) this.state.drafts.set(key, { quote, text: '' });
-    this.state.activeDraft = key;
-    this.selected = undefined;
-    this.draftExcerpt = undefined;
+    this.state.activeDraft = key; this.selected = this.draftExcerpt = undefined;
     document.getSelection()?.removeAllRanges();
-    this.renderQuote();
-    this.renderComposer();
-    this.focusComposer();
+    this.renderQuote(); this.renderComposer(); this.focusComposer();
   }
   renderQuote(): void {
     const live = this.selected, quote = live ?? this.draftExcerpt;
@@ -280,75 +254,84 @@ export class SelectionChat {
     this.modelPicker.refresh();
     const { pending, failure } = this.state;
     for (const starter of this.starters.querySelectorAll('button')) starter.disabled = Boolean(pending || this.disconnected);
-    this.connection.replaceChildren();
-    this.connection.hidden = !this.disconnected && !failure;
     const connect = () => {
       byId<HTMLDialogElement>('dialog').addEventListener('close', () => this.refresh(), { once: true, signal: this.events.signal });
       settingsDialog(this.app);
     };
-    if (this.disconnected) {
-      this.connection.setAttribute('role', 'status');
-      this.connection.append(el('span', '', label('Connect a model to chat about this selection.', '连接模型后即可提问。')), button(label('Connections', '连接设置'), connect, 'text-btn'));
-    } else if (failure) {
-      this.connection.setAttribute('role', 'alert');
-      this.connection.append(el('span', '', failure.error), button(label('Retry', '重试'), () => this.ask(failure.request), 'text-btn'));
-      if (!failure.request.savingNotes) this.connection.append(button(label('Connections', '连接设置'), connect, 'text-btn'));
-    }
-    this.renderLog();
-    this.renderComposer();
-    this.renderQuote();
+    renderChatNotice(this.connection, {
+      disconnected: this.disconnected,
+      disconnectedText: label('Connect a model to chat about this selection.', '连接模型后即可提问。'),
+      error: this.disconnected ? undefined : failure?.error,
+      onRetry: failure ? () => this.ask(failure.request) : undefined,
+      onConnect: this.disconnected || !failure?.request.savingNotes ? connect : undefined
+    });
+    this.renderLog(); this.renderComposer(); this.renderQuote();
   }
   private renderLog(): void {
-    const { turns, pending } = this.state;
-    if (this.renderedTurns === turns.length && this.pendingRow?.request === pending) return;
+    const { turns, pending, stopped } = this.state;
+    if (this.renderedTurns === turns.length && this.pendingRow?.request === pending && this.stoppedRow?.request === stopped?.request) return;
     const atEnd = this.log.scrollHeight - this.log.clientHeight - this.log.scrollTop < 24;
     const rowFor = (turn: Turn, index: number) => {
-      const row = el('div', 'chat-turn ' + turn.role);
-      row.append(el('span', 'speaker', turn.role === 'user' ? label('You', '我') : label('AI', 'AI 回答')));
-      if (turn.quote) row.append(el('blockquote', 'answer-quote', turn.quote.text));
       if (turn.role === 'assistant') {
-        const body = el('div', 'selection-answer selection-prose');
-        body.dataset.turn = String(index);
-        body.dataset.replyId = turn.requestId;
-        body.tabIndex = -1;
-        body.dir = 'auto';
-        body.innerHTML = answerMarkdown(turn.content);
         let actions = this.answerActions.get(index);
-        if (!actions) {
-          actions = new AnswerNotebookAction(this.app, turn.source ?? chatSource(this.item), turn.content, turn.requestId!, 'discussion');
-          this.answerActions.set(index, actions);
-        }
-        row.append(body, actions.root);
-      } else {
-        if (turn.source && this.earlierSources().length) row.append(this.sourceLink(turn.source));
-        const text = el('p', '', turn.content);
-        text.dir = 'auto';
-        row.append(text);
+        if (!actions) this.answerActions.set(index, actions = new AnswerNotebookAction(this.app, turn.source ?? chatSource(this.item), turn.content, turn.requestId!, 'discussion'));
+        return renderAnswerRow({
+          rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'),
+          bodyClass: 'selection-answer selection-prose', actionsClass: 'selection-reply-actions', content: turn.content,
+          dataset: { turn: String(index), replyId: turn.requestId },
+          quote: turn.quote ? { css: 'answer-quote', text: turn.quote.text } : undefined,
+          actions: [actions.root], onDelete: turn.requestId ? () => this.deleteTurn(turn.requestId!) : undefined
+        });
       }
-      return row;
+      return renderQuestionRow({
+        rowClass: 'chat-turn user', speakerClass: 'speaker', quoteClass: 'answer-quote', text: turn.content,
+        quote: turn.quote?.text, source: turn.source && this.earlierSources().length ? this.sourceLink(turn.source) : undefined
+      });
     };
-    if (this.pendingRow && this.pendingRow.request !== pending) {
-      if (turns[this.renderedTurns]?.role === 'user' && turns[this.renderedTurns].content === this.pendingRow.request.prompt) {
-        this.renderedTurns++;
-      } else this.pendingRow.question.remove();
-      this.pendingRow.wait.remove();
-      this.pendingRow = undefined;
+    if (this.stoppedRow && this.stoppedRow.request !== stopped?.request) {
+      this.stoppedRow.question.remove(); this.stoppedRow.reply.remove(); this.stoppedRow = undefined;
     }
+    if (this.pendingRow && this.pendingRow.request !== pending) {
+      this.stream.cancel();
+      if (turns[this.renderedTurns]?.role === 'user' && turns[this.renderedTurns].content === this.pendingRow.request.prompt) this.renderedTurns++;
+      else this.pendingRow.question.remove();
+      this.pendingRow.reply.remove(); this.pendingRow = undefined;
+    }
+    const anchor = this.stoppedRow?.question ?? this.pendingRow?.question ?? null;
     while (this.renderedTurns < turns.length) {
       const index = this.renderedTurns++;
-      this.log.insertBefore(rowFor(turns[index], index), this.pendingRow?.question ?? null);
+      this.log.insertBefore(rowFor(turns[index], index), anchor);
+    }
+    if (stopped && !pending && !this.stoppedRow) {
+      const question = rowFor({ role: 'user', content: stopped.request.prompt, quote: stopped.request.quote, source: stopped.request.item && chatSource(stopped.request.item) }, turns.length);
+      const reply = renderStoppedReply({
+        rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'), answer: stopped.answer,
+        onRetry: () => this.ask({ ...stopped.request, requestId: crypto.randomUUID(), payload: undefined }),
+        onDelete: () => { this.state.stopped = undefined; this.render(); }
+      });
+      this.log.append(question, reply);
+      this.stoppedRow = { request: stopped.request, question, reply };
     }
     if (pending && !this.pendingRow) {
-      const question = rowFor({ role: 'user', content: pending.prompt, quote: pending.quote,
-        source: pending.item && chatSource(pending.item) }, turns.length);
-      const wait = el('p', 'chat-wait', pending.streamText || label('Waiting for a reply…', '正在回答…'));
-      wait.dir = 'auto';
-      this.log.append(question, wait);
-      this.pendingRow = { request: pending, question, wait };
-    } else if (pending && this.pendingRow && pending.streamText) {
-      this.pendingRow.wait.textContent = pending.streamText;
+      const question = rowFor({ role: 'user', content: pending.prompt, quote: pending.quote, source: pending.item && chatSource(pending.item) }, turns.length);
+      const reply = this.stream.mount({ rowClass: 'chat-turn assistant', speakerClass: 'speaker', speakerText: label('AI', 'AI 回答'), waitingText: label('Waiting for a reply…', '正在回答…'), streamText: pending.streamText });
+      this.log.append(question, reply);
+      this.pendingRow = { request: pending, question, reply };
     }
     if (atEnd && !this.selected) this.log.scrollTop = this.log.scrollHeight;
+  }
+  resetLog(): void {
+    this.renderedTurns = 0; this.pendingRow = this.stoppedRow = undefined; this.stream.cancel();
+    this.log.replaceChildren(); this.answerActions.clear(); this.clearSelection(); this.changed();
+  }
+  private async deleteTurn(requestId: string): Promise<void> {
+    await api('chat.delete', { docId: this.item.source.docId, requestId });
+    const index = this.state.turns.findIndex(turn => turn.role === 'assistant' && turn.requestId === requestId);
+    if (index >= 0) {
+      const start = index > 0 && this.state.turns[index - 1].role === 'user' ? index - 1 : index;
+      this.state.turns.splice(start, index - start + 1);
+    }
+    this.app.discussionChanged?.(this.item.source.docId); this.resetLog();
   }
   private earlierSources(current = chatSource(this.item)): ChatSource[] {
     const sources = this.state.turns.flatMap(turn => turn.role === 'assistant' && turn.source ? [turn.source] : []);
@@ -427,27 +410,17 @@ export class SelectionChat {
       ? label('Ask a follow-up…', '继续追问…') : this.item.hit.regionText !== undefined
       ? label('Ask about this screenshot…', '想问这张截图什么？') : label('Ask about this selection…', '想问这段原文什么？');
     input.value = draft.text;
-    const submit = el('button', 'btn primary', label('Send', '发送'));
-    submit.type = 'submit';
-    if (this.item.hit.regionText !== undefined) activateAfterTouchDrag(submit);
-    const enabled = () => { submit.disabled = Boolean(this.disconnected || this.state.pending || !input.value.trim()); };
+    const sendStop = createSendStopPair(() => { this.state.pending?.controller?.abort(); });
+    if (this.item.hit.regionText !== undefined) activateAfterTouchDrag(sendStop.send);
+    const enabled = () => { sendStop.sync(Boolean(this.state.pending), Boolean(!this.disconnected && input.value.trim())); };
     enabled();
     input.oninput = () => { draft.text = input.value; this.rememberDraft(); enabled(); };
-    input.onkeydown = event => {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        if (!submit.disabled) this.form.requestSubmit();
-      }
-    };
+    bindChatComposer(input, this.form, () => !sendStop.send.disabled);
     this.form.onsubmit = event => {
       event.preventDefault();
-      if (!submit.disabled) void this.ask({ mode: 'followup', prompt: input.value.trim(), draftKey: activeDraft, quote: draft.quote });
+      if (!sendStop.send.disabled) void this.ask({ mode: 'followup', prompt: input.value.trim(), draftKey: activeDraft, quote: draft.quote });
     };
-    row.append(input, submit);
-    if (this.state.pending) {
-      const stop = button(label('Stop', '停止'), () => { this.state.pending?.controller?.abort(); }, 'btn');
-      row.append(stop);
-    }
+    row.append(input, sendStop.send, sendStop.stop);
     this.form.append(row);
     if (cursor) {
       input.focus({ preventScroll: true });
@@ -461,9 +434,10 @@ export class SelectionChat {
     const item = request.item ??= this.item;
     const draft = request.draftKey ? state.drafts.get(request.draftKey) : undefined;
     if (draft?.text.trim() === request.prompt) draft.text = '';
-    state.pending = request;
-    state.failure = undefined;
+    const controller = request.controller = new AbortController();
+    request.streamText = ''; state.stopped = state.failure = undefined; state.pending = request;
     this.changed();
+    let dispatched = false;
     try {
       if (!request.payload && request.mode !== 'translate') {
         if (this.notes.saving) request.savingNotes ??= this.notes;
@@ -496,37 +470,32 @@ export class SelectionChat {
         targetLanguage: request.mode === 'translate' && item.hit.side === 'translation' ? 'English' : target,
         record: { docId: item.source.docId, requestId: request.requestId, thread: this.thread,
           question: request.prompt, source: chatSource(item), answerQuote: request.quote?.text, answerTurn: request.quote?.turn } };
-      const controller = request.controller = new AbortController();
-      request.streamText = '';
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      dispatched = true;
       const reply = await apiStream('ai', { ...request.payload, questionModel }, delta => {
         request.streamText = (request.streamText ?? '') + delta;
-        if (this.pendingRow?.request === request) {
-          const atBottom = this.log.scrollHeight - this.log.clientHeight - this.log.scrollTop < 32;
-          this.pendingRow.wait.textContent = request.streamText;
-          if (atBottom) this.log.scrollTop = this.log.scrollHeight;
-        }
+        if (this.pendingRow?.request === request) this.stream.push(request.streamText);
       }, controller.signal);
+      if (this.pendingRow?.request === request) this.stream.finish();
       this.app.discussionChanged?.(item.source.docId);
       state.turns.push({ role: 'user', content: request.prompt, quote: request.quote, source: request.payload.record?.source },
         { role: 'assistant', content: reply.text, source: request.payload.record?.source, requestId: request.requestId });
       if (request.mode !== 'followup') (state.meanings ??= {})[selectionKey(item) + request.side] = reply.text;
       if (request.draftKey && request.quote && !draft?.text && state.activeDraft === request.draftKey) {
-        state.drafts.delete(request.draftKey);
-        state.activeDraft = 'paper';
+        state.drafts.delete(request.draftKey); state.activeDraft = 'paper';
       }
       void item.record?.(reply.text).catch(error => toast(message(error)));
     } catch (error) {
-      if (request.controller?.signal.aborted) {
-        if (draft && !draft.text) draft.text = request.prompt;
-      } else {
-        state.failure = { request, error: message(error) };
-        if (draft && !draft.text) draft.text = request.prompt;
-      }
+      if (this.pendingRow?.request === request) this.stream.finish();
+      settleStreamFailure({
+        aborted: controller.signal.aborted, dispatched, streamText: request.streamText,
+        restoreDraft: () => { if (draft && !draft.text) draft.text = request.prompt; },
+        onStopped: answer => { state.stopped = { request, answer }; },
+        onError: () => { state.failure = { request, error: message(error) }; }
+      });
     } finally {
-      request.controller = undefined;
-      state.pending = undefined;
-      this.rememberDraft();
-      this.changed();
+      request.controller = undefined; state.pending = undefined;
+      this.rememberDraft(); this.changed();
     }
   }
 }

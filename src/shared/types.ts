@@ -161,6 +161,7 @@ export interface Operations {
     targetLanguage?: string; question?: string; answerQuote?: string; questionModel?: QuestionModel | null;
     history?: {role: 'assistant'|'user'; content: string}[]; record?: ChatRequest & { thread: string } }, { text: string }];
   'chat.history': [{ docId: string; thread?: string }, { exchanges: ChatExchange[] }];
+  'chat.delete': [{ docId: string; requestId?: string; thread?: string }, { deleted: number }];
   'chat.ask': [ChatRequest & { paper: PaperEvidence; questionModel?: QuestionModel | null }, { text: string }];
   'chat.searchTerms': [{question: string; questionModel?: QuestionModel | null}, { text: string }];
   'annotation.list': [{ docId: string }, { annotations: PaperAnnotation[] }];

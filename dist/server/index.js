@@ -1938,6 +1938,9 @@ var ReaderStore = class {
       return JSON.parse(readColumn(row, "exchange"));
     });
   }
+  deleteChat(docId, filter) {
+    return this.#transaction(true, (db) => Number((filter.requestId && filter.thread ? db.prepare("DELETE FROM chat_exchanges WHERE docId=? AND requestId=? AND thread=?").run(docId, filter.requestId, filter.thread) : filter.requestId ? db.prepare("DELETE FROM chat_exchanges WHERE docId=? AND requestId=?").run(docId, filter.requestId) : db.prepare("DELETE FROM chat_exchanges WHERE docId=? AND thread=?").run(docId, filter.thread)).changes));
+  }
   zoteroAuthorization(serverId, update) {
     return this.#transaction(update !== void 0, (db) => {
       if (update !== void 0) {
@@ -3192,6 +3195,7 @@ var ReaderModel = class {
 };
 
 // src/server/paper-discussion.ts
+var requestIdRe = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
 function threadId(value) {
   if (value === "paper" || typeof value === "string" && /^selection-[a-f0-9]{64}$/.test(value)) return value;
   throw new ServiceError(400, "Invalid conversation.");
@@ -3236,6 +3240,14 @@ var PaperDiscussions = class {
   history(input) {
     return { exchanges: this.store.chatHistory(single(input.docId, "document ID", 512, true), input.thread === void 0 ? void 0 : threadId(input.thread)) };
   }
+  delete(input) {
+    const docId = single(input.docId, "document ID", 512, true);
+    const requestId = input.requestId === void 0 ? void 0 : single(input.requestId, "message ID", 36, true);
+    if (requestId !== void 0 && !requestIdRe.test(requestId)) throw new ServiceError(400, "Invalid message ID.");
+    const thread = input.thread === void 0 ? void 0 : threadId(input.thread);
+    if (requestId === void 0 && thread === void 0) throw new ServiceError(400, "Specify a message ID or conversation to delete.");
+    return { deleted: this.store.deleteChat(docId, { requestId, thread }) };
+  }
   ask(input, options) {
     return this.record(input, "paper", async (request) => {
       const history = this.store.chatHistory(request.docId).slice(-12).map((turn) => ({
@@ -3257,7 +3269,7 @@ var PaperDiscussions = class {
   }
   record(input, thread, complete) {
     const docId = single(input.docId, "document ID", 512, true), requestId = single(input.requestId, "message ID", 36, true);
-    if (!/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i.test(requestId)) throw new ServiceError(400, "Invalid message ID.");
+    if (!requestIdRe.test(requestId)) throw new ServiceError(400, "Invalid message ID.");
     const question = stringValue(input.question, "question", 16e3, true), source2 = chatSource(input.source, docId);
     const answerQuote = input.answerQuote === void 0 ? void 0 : stringValue(input.answerQuote, "quoted answer", 1e5, true);
     const answerTurn = typeof input.answerTurn === "number" && Number.isSafeInteger(input.answerTurn) && input.answerTurn >= 0 ? input.answerTurn : void 0;
@@ -3964,6 +3976,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "history.add": (input) => ({ entry: database.save("history", input) }),
     ai: (input, options) => discussions.passage(input, options),
     "chat.history": (input) => discussions.history(input),
+    "chat.delete": (input) => discussions.delete(input),
     "chat.ask": (input, options) => discussions.ask(input, options),
     "chat.searchTerms": (input) => model.searchTerms(database.settings(), input),
     "ai.blocks": (input) => model.blocks(database.settings(), input),

@@ -26,6 +26,7 @@ export interface ReaderPort {
   paperSelection?(source?: ChatSource): void;
   showReadingSide?(side: 'source' | 'translation'): void;
   discussionChanged?(docId: string): void;
+  exchangeDeleted?(thread: string, requestId: string): void;
   regionDiscussionClosed?(explicit: boolean): void;
   notebook?: NotebookSnapshot;
   notebookError?: string;

@@ -61,6 +61,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'history.add': input => ({ entry: database.save('history', input) }),
     ai: (input, options) => discussions.passage(input, options),
     'chat.history': input => discussions.history(input),
+    'chat.delete': input => discussions.delete(input),
     'chat.ask': (input, options) => discussions.ask(input, options),
     'chat.searchTerms': input => model.searchTerms(database.settings(), input),
     'ai.blocks': input => model.blocks(database.settings(), input),

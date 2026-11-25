@@ -3,6 +3,8 @@ import { ReaderStore } from './reader-store.js';
 import { ReaderModel, type StreamOptions } from './reader-model.js';
 import { address, inputObject, isObject, pageNumber, ServiceError, single, stringValue, type Input } from './service-types.js';
 
+const requestIdRe = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
+
 function threadId(value: unknown): string {
   if (value === 'paper' || typeof value === 'string' && /^selection-[a-f0-9]{64}$/.test(value)) return value;
   throw new ServiceError(400, 'Invalid conversation.');
@@ -37,6 +39,14 @@ export class PaperDiscussions {
   history(input: Input): { exchanges: ChatExchange[] } {
     return { exchanges: this.store.chatHistory(single(input.docId, 'document ID', 512, true), input.thread === undefined ? undefined : threadId(input.thread)) };
   }
+  delete(input: Input): { deleted: number } {
+    const docId = single(input.docId, 'document ID', 512, true);
+    const requestId = input.requestId === undefined ? undefined : single(input.requestId, 'message ID', 36, true);
+    if (requestId !== undefined && !requestIdRe.test(requestId)) throw new ServiceError(400, 'Invalid message ID.');
+    const thread = input.thread === undefined ? undefined : threadId(input.thread);
+    if (requestId === undefined && thread === undefined) throw new ServiceError(400, 'Specify a message ID or conversation to delete.');
+    return { deleted: this.store.deleteChat(docId, { requestId, thread }) };
+  }
   ask(input: Input, options?: StreamOptions): Promise<{ text: string }> {
     return this.record(input, 'paper', async request => {
       const history = this.store.chatHistory(request.docId).slice(-12).map(turn => ({
@@ -55,7 +65,7 @@ export class PaperDiscussions {
   }
   private record(input: Input, thread: string, complete: (request: ChatRequest) => Promise<{ text: string; coverage?: ChatExchange['coverage'] }>): Promise<{ text: string }> {
     const docId = single(input.docId, 'document ID', 512, true), requestId = single(input.requestId, 'message ID', 36, true);
-    if (!/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i.test(requestId)) throw new ServiceError(400, 'Invalid message ID.');
+    if (!requestIdRe.test(requestId)) throw new ServiceError(400, 'Invalid message ID.');
     const question = stringValue(input.question, 'question', 16_000, true), source = chatSource(input.source, docId);
     const answerQuote = input.answerQuote === undefined ? undefined : stringValue(input.answerQuote, 'quoted answer', 100_000, true);
     const answerTurn = typeof input.answerTurn === 'number' && Number.isSafeInteger(input.answerTurn) && input.answerTurn >= 0 ? input.answerTurn : undefined;

@@ -69,8 +69,10 @@
   font-size: 13px;
 }
 #card .chat-heading { justify-content: space-between; flex: none; }
-#card .chat-heading h3 { font-size: 15px; letter-spacing: -.015em; }
+#card .chat-heading h3 { font-size: 14px; letter-spacing: -.02em; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
 #card .chat-heading .icon-btn { color: var(--muted); }
+#card .chat-model-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; flex: none; min-width: 0; }
+#card .chat-model-bar .question-model-trigger { max-width: 100%; margin-inline-start: auto; }
 #card .chat-starters { flex-wrap: wrap; flex: none; }
 #card .chat-starter {
   min-height: 28px;
@@ -102,28 +104,28 @@
 #card .chat-turn.user p { margin: 1px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 #card .chat-turn .speaker { display: block; margin-bottom: 2px; color: var(--purple); font-size: 12px; font-weight: 650; }
 #card .chat-turn.assistant .speaker { color: var(--muted); }
-#card .chat-wait { color: var(--muted); font-size: 12px; }
-#card .selection-prose { min-width: 0; overflow-wrap: anywhere; user-select: text; }
-#card .selection-prose > :first-child { margin-top: 0; }
-#card .selection-prose > :last-child { margin-bottom: 0; }
-#card .selection-prose p { margin: 0 0 6px; }
-#card .selection-prose :is(h1,h2,h3,h4,h5,h6) { font-size: 14px; margin: 9px 0 4px; }
-#card .selection-prose :is(ul,ol) { margin: 5px 0 6px; padding-inline-start: 1.5em; }
-#card .selection-prose li { margin: 2px 0; }
-#card .selection-prose a { color: var(--purple); text-decoration: underline; text-underline-offset: 2px; }
-#card .selection-prose pre, #card .selection-prose :not(pre) > code {
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) { min-width: 0; overflow-wrap: anywhere; user-select: text; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) > :first-child { margin-top: 0; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) > :last-child { margin-bottom: 0; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) p { margin: 0 0 6px; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) :is(h1,h2,h3,h4,h5,h6) { font-size: 14px; margin: 9px 0 4px; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) :is(ul,ol) { margin: 5px 0 6px; padding-inline-start: 1.5em; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) li { margin: 2px 0; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) a { color: var(--purple); text-decoration: underline; text-underline-offset: 2px; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) pre,
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) :not(pre) > code {
   background: var(--code-bg);
   border-radius: 4px;
   font-family: "Courier Prime", Consolas, monospace;
   font-size: .92em;
 }
-#card .selection-prose pre { margin: 5px 0; padding: 7px 8px; overflow-x: auto; }
-#card .selection-prose :not(pre) > code { padding: 1px 4px; }
-#card .selection-prose blockquote { margin: 4px 0; padding-left: 8px; border-left: 2px solid var(--quote-border); }
-#card .selection-prose .katex-block { overflow-x: auto; padding-block: 2px; }
-#card .selection-prose .katex-display { margin: .4em 0; }
-#card .selection-prose table { display: block; overflow-x: auto; border-collapse: collapse; }
-#card .selection-prose :is(th,td) { padding: 3px 6px; border: 1px solid var(--line); }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) pre { margin: 5px 0; padding: 7px 8px; overflow-x: auto; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) :not(pre) > code { padding: 1px 4px; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) blockquote { margin: 4px 0; padding-left: 8px; border-left: 2px solid var(--quote-border); }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) .katex-block { overflow-x: auto; padding-block: 2px; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) .katex-display { margin: .4em 0; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) table { display: block; overflow-x: auto; border-collapse: collapse; }
+#card :is(.selection-prose, .chat-stream-body, .chat-stopped-body) :is(th,td) { padding: 3px 6px; border: 1px solid var(--line); }
 #card .chat-composer { display: grid; gap: 5px; flex: none; }
 #card .followup-material {
   display: flex;
@@ -171,21 +173,23 @@
   font-size: 12px;
 }
 #card .chat-notice[role="status"] { background: var(--surface-tint); color: var(--desk-ink); }
-#card .answer-notebook, #card .answer-selection {
+#card .selection-reply-actions, #card .answer-notebook, #card .answer-selection {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 2px 12px;
 }
-#card .answer-notebook { margin-block-start: 6px; }
-#card .answer-notebook .text-btn {
+#card .selection-reply-actions { margin-block-start: 6px; }
+#card .selection-reply-actions .text-btn {
   min-height: 30px;
+  min-width: 24px;
   padding: 2px 0;
   color: var(--purple);
   font-size: 13px;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+#card .selection-reply-actions .chat-delete-btn { color: var(--danger); }
 #card .answer-notebook-status { color: var(--success); font-size: 12px; overflow-wrap: anywhere; }
 #card .discussion-source {
   color: var(--muted);
@@ -239,4 +243,10 @@
 @media (max-width: 680px) {
   #card .selection-chat { border-left: 0; border-top: 1px solid var(--line); padding: 10px 12px; gap: 6px; }
   #card .selection-chat-log { max-height: min(27dvh, 240px); }
+}
+@media (pointer: coarse), (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
+  #card .chat-model-bar .question-model-trigger, #card .chat-input-row button,
+  #card .selection-reply-actions .text-btn, #card .chat-notice .text-btn, #card .chat-close {
+    min-width: 44px; min-height: 44px; justify-content: center;
+  }
 }
