@@ -79,7 +79,8 @@
 .annotation-error { color: var(--danger); margin-block: 8px; overflow-wrap: anywhere; }
 .annotation-error:empty { display: none; }
 .annotation-error p { margin: 5px 0; }
-.annotation-editor .source-chip, .annotation-extras .text-btn { min-height: 24px; }
+.annotation-error .text-btn { margin-inline-start: 8px; }
+.annotation-editor .source-chip { min-height: 24px; }
 .annotation-editor-actions { gap: 4px 6px; }
 .annotation-editor-actions .btn { padding: 5px 7px; font-size: 12px; gap: 4px; white-space: nowrap; }
 .annotation-remove { margin-inline-start: auto; color: var(--danger); min-height: 28px; padding: 4px; font-size: 12px; white-space: nowrap; border-radius: 5px; }

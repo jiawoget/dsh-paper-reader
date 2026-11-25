@@ -51,7 +51,7 @@
   overflow-wrap: anywhere;
 }
 #card .selection-problem { margin-top: 6px; }
-#card .selection-problem .text-btn, #card .chat-notice .text-btn { margin-inline-start: 6px; min-height: 24px; }
+#card .selection-problem .text-btn, #card .chat-notice .text-btn { margin-inline-start: 8px; }
 #card .selection-problem blockquote { margin: 5px 0; padding-left: 8px; border-left: 2px solid var(--danger-border); }
 #card .selection-chat {
   min-width: 0;
