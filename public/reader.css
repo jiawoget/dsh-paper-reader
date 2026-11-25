@@ -193,7 +193,8 @@ dialog:has(.dialog-footer) #dialogBody { padding-bottom: 0; }
 .list-row { padding: 9px 0; border-top: 1px solid var(--line); }
 .list-row p { font-size: 12px; margin: 4px 0; }
 .external { color: var(--purple); font-size: 12px; }
-dialog :is(.subtle, .text-btn) { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; }
+dialog .subtle { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; }
+dialog .text-btn { min-width: 24px; min-height: 24px; max-width: 100%; justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
 dialog a.external { display: inline-flex; align-items: center; min-height: 24px; }
 dialog summary { min-height: 24px; padding-block: 2px; }
 #toast { position: fixed; z-index: 12; bottom: 15px; left: 50%; transform: translateX(-50%); border-radius: 8px; background: var(--toast-bg); color: var(--toast-ink); padding: 8px 13px; max-width: 90%; font-size: 12px; }

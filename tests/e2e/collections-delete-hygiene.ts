@@ -36,7 +36,7 @@ try {
     const sourceUrl = host.origin + appPath + '?doc=pagedattention&page=6&anchor=block-tables';
     for (const word of ['alpha-term', 'beta-term']) {
       const r = await rpc(context.request, host.origin, 'vocab.save', {
-        docId: 'pagedattention', title: 'PagedAttention.pdf', page: 6, anchor: 'block-tables',
+        docId: 'pagedattention', title: word === 'alpha-term' ? 'PagedAttention.pdf' : '2309_06180_Efficient_Memory_Management_PagedAttention_vLLM.pdf', page: 6, anchor: 'block-tables',
         label: 'Left column', sourceUrl, text: word, meaning: word === 'alpha-term' ? 'Meaning for ' + word : '', context: 'Context for ' + word
       });
       assert.equal(r.status, 200);
