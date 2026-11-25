@@ -4,7 +4,7 @@ import type { Passage } from './model.js';
 import { element, place, type Sheet } from './paper.js';
 import { pairSelection } from './alignment.js';
 
-interface Glyph { node: Text; offset: number; end: number }
+interface Glyph<T extends { readonly data: string } = Text> { node: T; offset: number; end: number }
 
 function searchable(character: string): string {
   return character.normalize('NFKC').toLowerCase().replace(/[\s\u00ad\-‐‑]/gu, '');
@@ -12,40 +12,21 @@ function searchable(character: string): string {
 
 /** The layout supplies spaces between positioned runs that the DOM text nodes can omit. */
 function sourceSlice(paragraph: string, prefix: string, selected: string): { text: string; offset?: number } {
-  const offsets: number[] = [];
-  let corpus = '', index = 0;
-  for (const character of paragraph) {
-    const key = searchable(character);
-    for (let i = 0; i < key.length; i++) offsets.push(index);
-    corpus += key;
-    index += character.length;
-  }
   const needle = searchable(selected);
+  if (!needle) return { text: selected };
+  const { corpus, offsets } = indexNodes([{ data: paragraph }]);
   const hint = searchable(prefix).length;
   const at = corpus.startsWith(needle, hint) ? hint : corpus.indexOf(needle);
-  if (!needle || at < 0) return { text: selected };
-  const offset = offsets[at], last = offsets[at + needle.length - 1];
-  const length = String.fromCodePoint(paragraph.codePointAt(last)!).length;
-  return { text: paragraph.slice(offset, last + length), offset };
+  if (at < 0) return { text: selected };
+  const offset = offsets[at].offset, end = offsets[at + needle.length - 1].end;
+  return { text: paragraph.slice(offset, end), offset };
 }
 
 /** Native PDF runs can split any word across fonts, lines or hyphenation marks. */
 export function findQuote(spans: HTMLElement[], quote: string, prefix?: string): Range | null {
   const needle = searchable(quote);
   if (!needle) return null;
-  let corpus = '';
-  const offsets: Glyph[] = [];
-  for (const span of spans) {
-    const node = span.firstChild;
-    if (!(node instanceof Text)) continue;
-    let offset = 0;
-    for (const character of node.data) {
-      const key = searchable(character);
-      for (let i = 0; i < key.length; i++) offsets.push({ node, offset, end: offset + character.length });
-      corpus += key;
-      offset += character.length;
-    }
-  }
+  const { corpus, offsets } = indexNodes(spans.map(s => s.firstChild).filter((n): n is Text => n instanceof Text));
   const hint = prefix === undefined ? -1 : searchable(prefix).length;
   const at = hint >= 0 && corpus.startsWith(needle, hint) ? hint : corpus.indexOf(needle);
   if (at < 0) return null;
@@ -54,6 +35,55 @@ export function findQuote(spans: HTMLElement[], quote: string, prefix?: string):
   range.setStart(first.node, first.offset);
   range.setEnd(last.node, last.end);
   return range;
+}
+
+function indexNodes<T extends { readonly data: string }>(nodes: Iterable<T>): { corpus: string; offsets: Glyph<T>[] } {
+  let corpus = '';
+  const offsets: Glyph<T>[] = [];
+  for (const node of nodes) {
+    let offset = 0;
+    for (const character of node.data) {
+      const key = searchable(character);
+      for (let i = 0; i < key.length; i++) offsets.push({ node, offset, end: offset + character.length });
+      corpus += key; offset += character.length;
+    }
+  }
+  return { corpus, offsets };
+}
+
+export function findTextMatches<T extends { readonly data: string }>(nodes: Iterable<T>, query: string): { node: T; start: number; end: number }[][] {
+  let needle = '', pendingSpace = false;
+  const breaks: number[] = [];
+  for (const character of query) {
+    if (/\s/u.test(character)) { if (needle) pendingSpace = true; continue; }
+    const key = searchable(character);
+    if (!key) continue;
+    if (pendingSpace) { breaks.push(needle.length); pendingSpace = false; }
+    needle += key;
+  }
+  if (!needle) return [];
+  const { corpus, offsets } = indexNodes(nodes);
+  const matches: { node: T; start: number; end: number }[][] = [];
+  for (let pos = 0; (pos = corpus.indexOf(needle, pos)) >= 0; ) {
+    if (!breaks.every(b => { const p = offsets[pos + b - 1], n = offsets[pos + b]; return p.node !== n.node || /[\s\u00ad\-‐‑]/u.test(p.node.data.slice(p.end, n.offset)); })) { pos++; continue; }
+    const parts: { node: T; start: number; end: number }[] = [];
+    let start = offsets[pos], end = start;
+    for (let i = pos + 1; i < pos + needle.length; i++) {
+      const cur = offsets[i];
+      if (cur.node === end.node) end = cur;
+      else { parts.push({ node: start.node, start: start.offset, end: end.end }); start = end = cur; }
+    }
+    parts.push({ node: start.node, start: start.offset, end: end.end });
+    matches.push(parts); pos += needle.length;
+    while (pos < offsets.length && offsets[pos].node === end.node && offsets[pos].offset === end.offset && offsets[pos].end === end.end) pos++;
+  }
+  return matches;
+}
+
+export function findQuotes(nodes: Iterable<Text>, query: string): Range[][] {
+  return findTextMatches(nodes, query).map(parts => parts.map(({ node, start, end }) => {
+    const range = node.ownerDocument.createRange(); range.setStart(node, start); range.setEnd(node, end); return range;
+  }));
 }
 
 export function paintRange(range: Range, sheet: Sheet, width: number): HTMLElement[] {

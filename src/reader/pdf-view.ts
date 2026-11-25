@@ -68,6 +68,7 @@ export interface PdfPageView extends PageView {
   reopenRegion(id: string, receive?: RegionAction): Promise<void>;
   setZoom(zoom: number): void;
   setFocusMode(mode: TranslationFocus): void;
+  focusBlock?(id: string): void;
   setTranslationState(state: PdfTranslationState, message: string, actions?: {label: string; run: () => void}[]): void;
 }
 
@@ -559,7 +560,8 @@ function mount(input: MountedPage): PdfPageView {
       zoom = value;
       sizeSheets();
     },
-    setFocusMode: mode => { if (!signal.aborted) focus.setMode(mode); }, dispose: () => controller.abort() };
+    setFocusMode: mode => { if (!signal.aborted) focus.setMode(mode); },
+    focusBlock: id => { if (!signal.aborted) focus.focus(id); }, dispose: () => controller.abort() };
   return withAnnotationSurface(view, { original: source.outer, blocks: orderedBlocks, signal,
     revealPassage(id, quote, offset) {
       focus?.focus(id);
