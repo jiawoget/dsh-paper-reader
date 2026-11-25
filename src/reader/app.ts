@@ -761,9 +761,9 @@ class Reader implements ReaderPort {
     byId('mobileRail').append(el('span','',label('Notes','笔记')));
     byId('captureRegion').append(icon('capture'),el('span','capture-label'),el('span','capture-short'));
     click('captureRegion',()=>this.beginCapture());
-    byId('originalMode').textContent=label('Original','原文');
+    byId('originalMode').querySelector('.mode-full')!.textContent=label('Original','原文');byId('originalMode').querySelector('.mode-compact')!.textContent=label('Orig','原文');
     byId('parallel').querySelector('.mode-wide')!.textContent=label('Bilingual','双语对照');
-    byId('parallel').querySelector('.mode-narrow')!.textContent=label('Translation','译文');
+    byId('parallel').querySelector('.mode-narrow')!.textContent=label('Translation','译文');byId('parallel').querySelector('.mode-compact')!.textContent=label('Trans','译文');
     byId('notebookHandle').textContent=label('Notes','笔记');
     byId('closeRail').ariaLabel=byId('closeRail').title=label('Close notes','关闭笔记');
     byId('annotationsTab').textContent=label('Marks','标记');
@@ -811,7 +811,7 @@ class Reader implements ReaderPort {
       jump.hidePopover();
       void this.navigate(this.doc.id,input.valueAsNumber).catch(error=>toast(message(error)));
     });
-    window.addEventListener('resize',()=>{if(jump.matches(':popover-open'))jump.hidePopover();});
+    window.addEventListener('resize',()=>{if(jump.matches(':popover-open'))jump.hidePopover();if(!byId('menu').hidden)this.closeMenu();});
     const toggleReadText=()=>{
       this.cancelCapture(false);
       this.cancelPin();this.marks.closePageEditor();

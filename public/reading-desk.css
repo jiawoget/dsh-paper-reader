@@ -308,7 +308,7 @@ input::placeholder, textarea::placeholder {
   background: var(--paper);
   box-shadow: var(--shadow-subtle);
 }
-.mode-narrow { display: none; }
+.mode-narrow, .mode-compact { display: none; }
 
 #pageFormat {
   display: flex;
@@ -1067,7 +1067,7 @@ input::placeholder, textarea::placeholder {
   #pageFormat { min-height: 51px; gap: 6px; }
   .pdf-reading-text { padding-block: 12px 24px; }
   #menu { top: 51px; }
-  #closeDialog, #closeShortcuts, #card[data-selection] :is(.word-head, .chat-heading) .icon-btn { min-width: 44px; min-height: 44px; height: 44px; }
+  #closeDialog, #closeShortcuts, #pageJump .btn, #card[data-selection] :is(.word-head, .chat-heading) .icon-btn { min-width: 44px; min-height: 44px; height: 44px; }
   #shortcutsBody { padding: 12px 14px 18px; gap: 12px; }
   .shortcuts-table td:first-child { width: 44%; }
   #selectionDock { --dock-height: min(50dvh, 430px); }
@@ -1092,18 +1092,19 @@ input::placeholder, textarea::placeholder {
   .topbar :is(#library, #contentsToggle, #mobileRail, #more) { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
   .topbar #library { border-color: transparent; }
   .doc-heading { min-width: 0; flex: 1 1 auto; }
-  .doc-heading span, #pageTextHint, #reader:not([data-placing-pin="true"]) #pageFormat, #mobileBar #captureRegion :is(.capture-label, .capture-short),
+  .doc-heading span, #pageTextHint, #pageFormat #readText, #reader:not([data-placing-pin="true"]) #pageFormat, #mobileBar #captureRegion :is(.capture-label, .capture-short),
   #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle :is(.paper-chat-summary, svg:last-child) { display: none; }
   #pageFormat { width: 100%; min-height: 48px; padding: 2px 8px; justify-content: flex-end; }
   #menu { max-height: calc(100dvh - 64px); overflow-y: auto; }
   #reader #menu #zoomControl { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 0; padding: 6px 8px 2px; border-top: 1px solid var(--line); font-size: 13px; }
   #reader #menu .menu-zoom-label { display: inline; color: var(--muted); }
   #reader #menu #zoom { padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--paper); color: var(--desk-ink); }
-  #mobileBar { display: flex; align-items: center; gap: 2px; flex: none; padding: 1px 4px calc(1px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--paper); }
+  #mobileBar { display: flex; align-items: center; gap: 2px; flex: none; padding: 1px 2px calc(1px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--paper); }
   #mobileBar .toolbar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 2px; padding: 0; }
   #mobileBar .page-navigation { gap: 0; }
+  #mobileBar #pageCount { padding: 0 2px; font-variant-numeric: tabular-nums; }
   #mobileBar .reader-mode-switch { padding: 0; gap: 0; border-radius: 7px; overflow: hidden; }
-  #mobileBar .reader-mode-switch :is(#originalMode, #parallel) { padding: 0 6px; font-size: 12px; border-radius: 0; }
+  #mobileBar .reader-mode-switch :is(#originalMode, #parallel) { position: relative; padding: 0 4px; font-size: 12px; border-radius: 0; }
   #mobileBar #captureRegion { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 44px; min-height: 44px; padding: 0; border-color: transparent; color: var(--purple); }
   #mobileBar #captureRegion[aria-pressed="true"] { background: var(--lavender); border-color: var(--purple); }
   #mobileBar .paper-chat[data-open="false"] { flex: none; border-top: 0; background: transparent; }
@@ -1117,10 +1118,9 @@ input::placeholder, textarea::placeholder {
   #mobileBar .paper-chat[data-open="true"] .paper-chat-toggle { width: 100%; min-height: 44px; padding: 4px 14px; justify-content: flex-start; }
   #returnDiscussion, body > #toast { bottom: calc(58px + env(safe-area-inset-bottom)); }
 }
-@media (max-width: 380px) {
-  #mobileBar { gap: 1px; padding-inline: 2px; }
-  #mobileBar .toolbar { gap: 1px; }
-  #mobileBar .reader-mode-switch :is(#originalMode, #parallel) { padding: 0 4px; }
+@media (max-width: 420px) {
+  #mobileBar .reader-mode-switch :is(.mode-full, .mode-narrow) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #mobileBar .reader-mode-switch .mode-compact { display: inline; }
 }
 @media (max-width: 359px) {
   #mobileBar .toolbar .icon-btn { min-width: 26px; padding: 0; }
