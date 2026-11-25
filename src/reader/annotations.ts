@@ -64,7 +64,7 @@ export class AnnotationWorkspace {
     this.popover.hidden = true;
     this.popover.ariaLabel = label('Page note', '页边笔记');
     this.popover.addEventListener('keydown', event => {
-      if (event.key === 'Escape') { event.preventDefault(); this.closeEditor(true); }
+      if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); this.closeEditor(true); }
     });
     document.addEventListener('pointerdown', event => {
       const node = event.target;

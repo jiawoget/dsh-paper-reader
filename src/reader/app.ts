@@ -885,6 +885,7 @@ class Reader implements ReaderPort {
     });
     document.addEventListener('keydown',e=>{
       if(document.querySelector(':popover-open'))return;
+      if(e.isComposing || e.keyCode===229)return;
       const openDialog=document.querySelector('dialog[open]');
       if(e.key==='Escape' && !e.defaultPrevented && !openDialog){
         if(this.capturing){e.preventDefault();this.cancelCapture(true);return;}
@@ -892,7 +893,7 @@ class Reader implements ReaderPort {
         if(this.desk.dismissDrawer())return;
         if(!byId('card').hidden){this.card.dismiss(true);return;}
       }
-      if(e.isComposing || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || openDialog)return;
+      if(e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || openDialog)return;
       if(e.shiftKey && e.key!=='?' && e.key!=='+')return;
       if(this.capturing || this.placingPin || !byId('menu').hidden || byId('rail').hasAttribute('aria-modal'))return;
       if(e.target instanceof Element && e.target.closest('#card,#selectionDock,.annotation-popover,input,textarea,select,dialog,#menu,.desk-split,.paper-chat-grip,[contenteditable]:not([contenteditable="false"]),.cm-editor'))return;

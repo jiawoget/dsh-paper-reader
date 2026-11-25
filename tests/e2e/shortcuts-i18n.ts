@@ -416,6 +416,79 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
   } finally { await browser.close(); }
 }
 
+async function testImeEscapeGuards(host: HostFixture): Promise<void> {
+  const browser = await chromium.launch({ executablePath: host.executable });
+  try {
+    const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
+    const page = await openReaderPage(context, host);
+    const { pageErrors, consoleErrors } = attachErrorGuards(page);
+    const reader = page.locator('#reader');
+
+    const dispatchImeEscapes = async (selector: string): Promise<void> => {
+      const checked = await page.locator(selector).evaluate(target => {
+        const el = target as HTMLElement;
+        el.focus();
+        const evComposing = new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true });
+        el.dispatchEvent(evComposing);
+        const evKeyCode229 = new KeyboardEvent('keydown', { key: 'Escape', keyCode: 229, bubbles: true, cancelable: true });
+        el.dispatchEvent(evKeyCode229);
+        return { isComposing: evComposing.isComposing, keyCode229: evKeyCode229.keyCode };
+      });
+      assert.equal(checked.isComposing, true, `KeyboardEvent.isComposing must be true on ${selector}`);
+      assert.equal(checked.keyCode229, 229, `KeyboardEvent.keyCode must be 229 on ${selector}`);
+    };
+
+    // (a) Notes CodeMirror editor (.cm-content)
+    await page.locator('#mobileRail').click();
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'true');
+    const cmContent = page.locator('.cm-content');
+    await cmContent.waitFor({ state: 'visible' });
+    await cmContent.click();
+    await dispatchImeEscapes('.cm-content');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'true', 'IME Escape in Notes CodeMirror editor must not close sidebar.');
+    await page.keyboard.press('Escape');
+    assert.equal(await reader.getAttribute('data-notebook-open'), 'false', 'Normal Escape in Notes CodeMirror editor must still close sidebar.');
+
+    // (b) Selection Card chat composer (#card .chat-composer textarea)
+    await page.locator('#readText').click();
+    await page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段 · 左栏 · 块表$/ }).click();
+    const card = page.locator('#card');
+    await card.waitFor({ state: 'visible' });
+    await card.getByRole('button', { name: '提问', exact: true }).click();
+    const chatComposer = page.locator('#card .chat-composer textarea');
+    await chatComposer.waitFor({ state: 'visible' });
+    assert.equal(await card.getAttribute('data-workspace'), 'chat');
+    await dispatchImeEscapes('#card .chat-composer textarea');
+    assert.equal(await card.isVisible(), true, 'IME Escape in Selection Card chat composer must keep card open.');
+    assert.equal(await card.getAttribute('data-workspace'), 'chat', 'IME Escape in Selection Card chat composer must keep chat workspace open.');
+    await page.keyboard.press('Escape');
+    assert.equal(await card.getAttribute('data-workspace'), null, 'Normal Escape must exit Selection Card chat workspace.');
+    await page.keyboard.press('Escape');
+    await card.waitFor({ state: 'hidden' });
+    await page.locator('#readText').click();
+
+    // (c) Marks popover textarea (.annotation-popover textarea)
+    const figure = page.locator('#original .pdf-figure[data-block-id="figure-6"]');
+    await figure.scrollIntoViewIfNeeded();
+    const bounds = (await figure.boundingBox())!;
+    await page.locator('#placePin').click();
+    await page.mouse.click(bounds.x + bounds.width * 0.2, bounds.y + bounds.height * 0.35);
+    const popover = page.locator('.annotation-popover');
+    await popover.waitFor({ state: 'visible' });
+    const popoverTextarea = page.locator('.annotation-popover textarea');
+    await popoverTextarea.waitFor({ state: 'visible' });
+    await dispatchImeEscapes('.annotation-popover textarea');
+    assert.equal(await popover.isVisible(), true, 'IME Escape in Marks popover textarea must keep popover open.');
+    await page.keyboard.press('Escape');
+    await popover.waitFor({ state: 'hidden' });
+
+    assert.deepEqual(pageErrors, [], 'IME Escape test pageerrors: ' + pageErrors.join('; '));
+    assert.deepEqual(consoleErrors, [], 'IME Escape test console errors: ' + consoleErrors.join('; '));
+    await context.close();
+    console.log('PASS IME Escape guards: Notes (.cm-content), Selection Card chat composer, and Marks popover ignore composing Escape and dismiss on normal Escape.');
+  } finally { await browser.close(); }
+}
+
 async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
   const browser = await chromium.launch({ executablePath: host.executable });
   try {
@@ -768,6 +841,7 @@ try {
   try {
     await withHost(async host => {
       await testF6Shortcuts(host);
+      await testImeEscapeGuards(host);
       await testF7AndF8I18nAndTerminology(host);
       await testExtensionLocale(host, 'zh-CN');
       await testExtensionLocale(host, 'en-US');

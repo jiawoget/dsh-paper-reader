@@ -394,3 +394,37 @@ test('regression: control-character-only title falls back to Untitled and empty 
   const mixedAuthorsBib = formatBibTeX({ title: 'Valid Title', authors: ['\x07', 'Alice Smith'] });
   assert.ok(mixedAuthorsBib.includes('  author = {Alice Smith}\n}'), mixedAuthorsBib);
 });
+
+test('regression: Object.prototype property names in zoteroType fall back safely to @misc and TY  - GEN', () => {
+  const protoNames = ['constructor', '__proto__', 'prototype', 'toString', 'valueOf', 'hasOwnProperty'];
+  for (const zoteroType of protoNames) {
+    const meta: CitationMetadata = { title: 'Test Paper', authors: ['Alice Smith'], year: '2025', zoteroType };
+    const bib = formatBibTeX(meta);
+    assertBalancedBraces(bib);
+    assertLatexBalancedBraces(bib);
+    assert.match(bib, /^@[a-z]+\{[a-z0-9]+,\n/, `Unexpected BibTeX header for zoteroType=${zoteroType}:\n${bib}`);
+    assert.ok(bib.startsWith('@misc{'), `Expected @misc fallback for zoteroType=${zoteroType}, got:\n${bib}`);
+
+    const ris = formatRIS(meta);
+    const firstLine = ris.split('\n')[0];
+    assert.match(firstLine, /^TY  - [A-Z]{3,4}$/, `Unexpected RIS TY line for zoteroType=${zoteroType}: ${firstLine}`);
+    assert.equal(firstLine, 'TY  - GEN', `Expected TY  - GEN fallback for zoteroType=${zoteroType}, got: ${firstLine}`);
+  }
+
+  // End-to-end buildCitationMetadata path with untrusted Zotero itemType
+  const doc: DocumentInfo = { id: 'pdf-' + 'e'.repeat(64), kind: 'pdf', title: 'paper.pdf' };
+  const maliciousZotero: ZoteroItem = {
+    key: 'MALZOT1',
+    title: 'Malicious Zotero Item',
+    type: 'constructor',
+    creator: 'Alice Smith',
+    date: '2025',
+    collections: []
+  };
+  const merged = buildCitationMetadata(doc, maliciousZotero);
+  const mergedBib = formatBibTeX(merged);
+  assertBalancedBraces(mergedBib);
+  assert.match(mergedBib, /^@misc\{smith2025malicious,\n/);
+  const mergedRis = formatRIS(merged);
+  assert.equal(mergedRis.split('\n')[0], 'TY  - GEN');
+});

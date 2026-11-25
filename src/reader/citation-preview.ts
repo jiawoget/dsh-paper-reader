@@ -206,7 +206,7 @@ export function installCitationPreviews(currentPaper: () => PdfDocument | undefi
     if (focused?.node === event.target) { focused = undefined; show(hovered); }
   });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && active) {
+    if (event.key === 'Escape' && active && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault(); event.stopImmediatePropagation();
       pointer = hovered = focused = undefined; show();
     } else if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element && anchors.has(event.target)) {
