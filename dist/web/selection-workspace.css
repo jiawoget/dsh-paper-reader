@@ -51,7 +51,7 @@
   overflow-wrap: anywhere;
 }
 #card .selection-problem { margin-top: 6px; }
-#card .selection-problem .text-btn, #card .chat-notice .text-btn { margin-inline-start: 6px; }
+#card .selection-problem .text-btn, #card .chat-notice .text-btn { margin-inline-start: 6px; min-height: 24px; }
 #card .selection-problem blockquote { margin: 5px 0; padding-left: 8px; border-left: 2px solid var(--danger-border); }
 #card .selection-chat {
   min-width: 0;
@@ -83,7 +83,7 @@
 }
 #card .chat-starter:hover { background: var(--lavender); }
 @media (pointer: coarse), (max-width: 700px) {
-  #card .chat-starter { min-height: 44px; padding: 8px 12px; }
+  #card .chat-starter { min-width: 44px; min-height: 44px; padding: 8px 12px; }
 }
 #card .selection-chat-log {
   min-height: min(88px, 13dvh);
@@ -154,8 +154,8 @@
 }
 #card .material-remove { min-width: 26px; justify-content: center; }
 #card .add-discussion-material { margin-inline-start: auto; }
-@media (pointer: coarse) {
-  #card .followup-material button { min-height: 40px; }
+@media (pointer: coarse), (max-width: 700px) {
+  #card .followup-material button { min-width: 44px; min-height: 44px; }
 }
 #card .chat-input-row { align-items: flex-end; }
 #card .chat-input-row textarea { flex: 1; max-height: 23vh; }
@@ -191,7 +191,7 @@
   color: var(--muted);
   font-size: 13px;
 }
-#card .discussion-source summary { width: fit-content; cursor: pointer; color: var(--purple); }
+#card .discussion-source summary { width: fit-content; min-height: 24px; padding-block: 2px; cursor: pointer; color: var(--purple); }
 #card .discussion-source blockquote {
   max-height: 6.5em;
   overflow: auto;

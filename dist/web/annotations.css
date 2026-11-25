@@ -7,6 +7,7 @@
 .annotation-filter, .annotation-color-filter, .annotation-swatch {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   background: var(--surface-sunken);
   border: 1px solid transparent;
@@ -78,9 +79,14 @@
 .annotation-error { color: var(--danger); margin-block: 8px; overflow-wrap: anywhere; }
 .annotation-error:empty { display: none; }
 .annotation-error p { margin: 5px 0; }
-.annotation-remove { margin-inline-start: auto; color: var(--danger); min-height: 28px; padding: 4px 8px; border-radius: 5px; }
+.annotation-editor .source-chip, .annotation-extras .text-btn { min-height: 24px; }
+.annotation-editor-actions { gap: 4px 6px; }
+.annotation-editor-actions .btn { padding: 5px 7px; font-size: 12px; gap: 4px; white-space: nowrap; }
+.annotation-remove { margin-inline-start: auto; color: var(--danger); min-height: 28px; padding: 4px; font-size: 12px; white-space: nowrap; border-radius: 5px; }
 .annotation-remove:hover, .annotation-remove:focus-visible { background: var(--danger-bg); text-decoration: none; }
 .annotation-extras { justify-content: space-between; gap: 10px; margin-top: 8px; }
+.annotation-popover .annotation-editor-actions .btn svg { display: none; }
+@media (min-width: 701px) and (max-width: 1380px) { .annotation-editor-actions .btn svg { display: none; } }
 .annotation-popover {
   position: fixed;
   z-index: 31;
@@ -112,6 +118,12 @@
   .annotation-search { min-height: 44px; }
   .annotation-editor .icon-btn { height: 44px; }
   .annotation-editor .source-chip { padding-inline: 10px; }
+  #railBody:has(.annotation-editor) { padding-top: 10px; padding-bottom: 0; }
+  .annotation-heading { margin-bottom: 6px; }
+  .annotation-editor .field, .annotation-palette { margin-block: 8px; }
+  .annotation-quote { margin: 6px 0; padding: 6px 10px; max-height: 4.8em; }
+  .annotation-text { min-height: 60px; }
+  #railBody .annotation-editor-actions { position: sticky; bottom: 0; z-index: 1; background: var(--paper); padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 }
 @media (prefers-reduced-motion: no-preference) {
   :root:not([data-theme-switching]) :is(.annotation-filter, .annotation-color-filter, .annotation-swatch, .annotation-remove) {

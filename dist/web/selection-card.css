@@ -81,7 +81,7 @@
 #card .selection-disclosure svg { transform: rotate(90deg); }
 #card .selection-disclosure[aria-expanded="true"] svg { transform: rotate(-90deg); }
 #card .selection-counterpart { margin: 5px 0; color: var(--purple); font-size: 12px; }
-#card .selection-counterpart summary { width: fit-content; cursor: pointer; }
+#card .selection-counterpart summary { width: fit-content; min-height: 24px; padding-block: 2px; cursor: pointer; }
 #card .selection-context, #card .selection-counterpart .meaning {
   max-height: min(155px, 27dvh);
   margin: 6px 0;
@@ -138,6 +138,7 @@
 #card .selection-more-chevron { transform: rotate(90deg); }
 #card .selection-more[aria-expanded="true"] .selection-more-chevron { transform: rotate(-90deg); }
 .selection-more-menu {
+  direction: ltr;
   position: fixed;
   inset: auto;
   margin: 0;
@@ -177,6 +178,8 @@
 @media (max-width: 700px), (pointer: coarse) {
   #card .highlight-dot { min-width: 44px; min-height: 44px; }
   #card .highlight-dot::before { width: 16px; height: 16px; }
+  #card .selection-excerpt { grid-template-columns: minmax(0, 1fr) 44px; align-items: center; }
+  #card .selection-disclosure { width: 44px; height: 44px; }
   .selection-more-item { min-height: 44px; padding: 8px 12px; font-size: 14px; }
 }
 @media (prefers-reduced-motion: no-preference) {

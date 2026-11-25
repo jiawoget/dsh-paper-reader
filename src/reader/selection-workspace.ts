@@ -112,10 +112,10 @@ export function buildCardActions(opts: CardActionsOptions): CardActionsHandle {
     if (restoreFocus && more.isConnected) more.focus({ preventScroll: true });
     return true;
   };
-  const reposition = (): void => {
-    if (!menu.matches(':popover-open')) return;
+  const reposition = (opening = false): void => {
+    if (!opening && !menu.matches(':popover-open')) return;
     const trigger = more.getBoundingClientRect();
-    if (!trigger.width && !trigger.height) { closeMenu(false); return; }
+    if (!trigger.width && !trigger.height) { if (!opening) closeMenu(false); return; }
     const width = menu.offsetWidth || 184;
     const height = menu.offsetHeight || 160;
     const spaceBelow = innerHeight - trigger.bottom - 12;
@@ -138,6 +138,7 @@ export function buildCardActions(opts: CardActionsOptions): CardActionsHandle {
   language.append(languageCaption);
   menu.append(language);
 
+  menu.addEventListener('beforetoggle', event => { if (event.newState === 'open') reposition(true); });
   menu.addEventListener('toggle', () => {
     const open = menu.matches(':popover-open');
     more.setAttribute('aria-expanded', String(open));

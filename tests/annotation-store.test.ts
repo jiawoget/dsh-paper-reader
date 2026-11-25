@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test, type TestContext } from 'node:test';
 import { createServices } from '../src/server/services.js';
 import type { PaperAnnotation } from '../src/shared/annotations.js';
-import { ANNOTATION_COLORS, colorMeaning, filterAnnotations, highlightColorLabel, highlightDotAriaLabel, highlightName } from '../src/reader/annotation-colors.js';
+import { ANNOTATION_COLORS, colorMeaning, filterAnnotations, hasActiveMarksFilter, highlightColorLabel, highlightDotAriaLabel, highlightName } from '../src/reader/annotation-colors.js';
 
 const paper = { docId: 'pagedattention', title: 'PagedAttention', sourceUrl:
   'http://localhost:29812/api/paper-reader/app/index.html?doc=pagedattention&page=6&anchor=fig6&rangeStart=4&rangeEnd=10&endAnchor=fig6&rangeTail=blocks' };
@@ -117,6 +117,9 @@ test('multi-color highlights persist and annotation-colors filters and formats E
   assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'all', query: '  逻辑块方法 ' }, translatedOf).map(a => a.id), [saved[1].id]);
   assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'all', query: 'figure 6' }, translatedOf).map(a => a.id), [pin.id]);
   assert.deepEqual(filterAnnotations(listed, { kind: 'all', color: 'all', query: 'unmatched' }, translatedOf), []);
+  assert.equal(hasActiveMarksFilter({ kind: 'pin', color: 'green', query: '' }), false);
+  assert.equal(hasActiveMarksFilter({ kind: 'pin', color: 'green', query: 'margin' }), true);
+  assert.equal(hasActiveMarksFilter({ kind: 'highlight', color: 'green', query: '' }), true);
 
   const prevNav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   try {

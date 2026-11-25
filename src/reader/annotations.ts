@@ -55,6 +55,7 @@ export class AnnotationWorkspace {
   private problem = '';
   private lastTrigger?: HTMLElement;
   private returnFromInline?: () => void;
+  private highlightQueue = Promise.resolve();
   revision = 0;
 
   constructor(private readonly controls: Controls) {
@@ -151,31 +152,32 @@ export class AnnotationWorkspace {
       if (note.text && note.quote) { const quote = el('span', 'annotation-excerpt', visibleQuote(note)); quote.dir = 'auto'; row.append(quote); }
       nodes.push(row);
     }
-    if (!items.length) {
-      nodes.push(buildEmptyMarksNotice(all.length > 0, this.filterState, () => {
-        this.filterState = { kind: 'all', color: 'all', query: '' };
-        this.filters.reset();
-        this.renderIndex();
-      }));
-    }
+    if (!items.length) nodes.push(buildEmptyMarksNotice(all.length > 0, this.filterState, () => {
+      this.filterState = { kind: 'all', color: 'all', query: '' }; this.filters.reset(); this.renderIndex();
+    }));
     this.list.replaceChildren(...nodes);
     if (focusedId) this.list.querySelector<HTMLElement>('[data-id="' + CSS.escape(focusedId) + '"]')?.focus({ preventScroll: true });
   }
-  async highlight(source: SourceRecord, quote: string, color: AnnotationColor = 'yellow'): Promise<void> {
-    const existing = this.all().find(n => n.kind === 'highlight' && n.sourceUrl === source.sourceUrl && n.quote === quote);
-    if (existing && existing.color === color) { this.open(existing.id, undefined, true); return; }
-    const note: PaperAnnotation = existing ? { ...existing, color }
-      : { ...source, id: crypto.randomUUID(), kind: 'highlight', color, quote, text: '', createdAt: '', updatedAt: '' };
-    this.drafts.set(note.id, note); this.remember(); this.revision++;
-    try {
-      const saved = await this.write(note);
-      if (this.docId !== saved.docId) return;
-      if (existing) toast(label('Highlight color updated.', '已更新高亮颜色。'));
-      else toast(label('Highlight saved.', '已保存高亮。'), { label: label('Undo', '撤销'), run: () => this.remove(saved, false) });
-    } catch (error) {
-      if (this.docId === note.docId) { this.renderIndex(); this.controls.repaintPage(); this.open(note.id, undefined, true); this.showProblem(message(error)); }
-      throw error;
-    }
+  highlight(source: SourceRecord, quote: string, color: AnnotationColor = 'yellow'): Promise<void> {
+    const run = this.highlightQueue.then(async () => {
+      if (this.docId !== source.docId) return;
+      const existing = this.all().find(n => n.kind === 'highlight' && n.sourceUrl === source.sourceUrl && n.quote === quote);
+      if (existing && existing.color === color) { this.open(existing.id, undefined, true); return; }
+      const note: PaperAnnotation = existing ? { ...existing, color }
+        : { ...source, id: crypto.randomUUID(), kind: 'highlight', color, quote, text: '', createdAt: '', updatedAt: '' };
+      this.drafts.set(note.id, note); this.remember(); this.revision++;
+      try {
+        const saved = await this.write(note);
+        if (this.docId !== saved.docId) return;
+        if (existing) toast(label('Highlight color updated.', '已更新高亮颜色。'));
+        else toast(label('Highlight saved.', '已保存高亮。'), { label: label('Undo', '撤销'), run: () => this.remove(saved, false) });
+      } catch (error) {
+        if (this.docId === note.docId) { this.renderIndex(); this.controls.repaintPage(); this.open(note.id, undefined, true); this.showProblem(message(error)); }
+        throw error;
+      }
+    });
+    this.highlightQueue = run.catch(() => {});
+    return run;
   }
   addPin(doc: {id:string;title:string}, page: number, point: Point): void {
     const anchor = 'point-' + Math.round(point.x * 1e6) + '-' + Math.round(point.y * 1e6);

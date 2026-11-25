@@ -105,12 +105,16 @@ export function buildMarksFilters(
   };
 }
 
+export function hasActiveMarksFilter(filter: AnnotationFilter): boolean {
+  return (filter.kind !== 'pin' && filter.color !== 'all') || filter.query.trim().length > 0;
+}
+
 export function buildEmptyMarksNotice(
   hasAny: boolean,
   filter: AnnotationFilter,
   onClear: () => void
 ): HTMLElement {
-  if (hasAny && (filter.color !== 'all' || filter.query.trim())) {
+  if (hasAny && hasActiveMarksFilter(filter)) {
     const empty = el('div', 'annotation-empty');
     empty.append(
       el('p', 'hint', label('No marks match the current filter.', '没有符合当前筛选条件的标记。')),
