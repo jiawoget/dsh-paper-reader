@@ -27,7 +27,8 @@ import { readRegion } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
 import { discussionId } from './passage-links.js';
 import type { DiscussionRef } from './discussion-drafts.js';
-import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, toast, type Glyph, type ReaderPort } from './ui.js';
+import { api, button, byId, el, icon, message, readerLabel as label, responseJson, sourceUrl, syncTheme, toast, type Glyph, type ReaderPort } from './ui.js';
+import { DocSearch } from './doc-search.js';
 import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './jump-history.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
@@ -36,34 +37,6 @@ type SidebarTab = typeof sidebarTabs[keyof typeof sidebarTabs];
 function needsTranslation(anchor: string, target?: TranslatedLocator): boolean {
   const side = readArticleRegion(anchor)?.side;
   return Boolean(target) || side === 'translation' || side === 'both';
-}
-
-function syncTheme(): void {
-  const media = matchMedia('(prefers-color-scheme: dark)');
-  const apply = () => {
-    let dark: boolean | undefined;
-    try {
-      const parentDoc = window.parent !== window ? window.parent.document : undefined;
-      if (parentDoc?.body) {
-        const attr = parentDoc.body.getAttribute('data-ds-dark-theme')?.trim().toLowerCase() ?? null;
-        dark = attr !== null && attr !== 'false' && attr !== '0';
-      }
-    } catch { /* Standalone or cross-origin: fall back to system preference. */ }
-    const root = document.documentElement, next = (dark ?? media.matches) ? 'dark' : 'light';
-    if (root.dataset.theme && root.dataset.theme !== next) {
-      root.dataset.themeSwitching = '1';
-      root.dataset.theme = next;
-      void root.offsetWidth;
-      delete root.dataset.themeSwitching;
-    } else root.dataset.theme = next;
-  };
-  apply();
-  media.addEventListener('change', apply);
-  try {
-    if (window.parent !== window && window.parent.document.body) {
-      new MutationObserver(apply).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
-    }
-  } catch { /* Ignore cross-origin parent access. */ }
 }
 
 class Reader implements ReaderPort {
@@ -125,6 +98,12 @@ class Reader implements ReaderPort {
   get pageCount(): number { return this.pdf?.pages || this.doc.book?.sections.length || 0; }
   private readonly translate=byId<HTMLButtonElement>('translate');
   private readonly jumpHistory=new JumpHistory(()=>this.jumpControls?.sync()); private jumpControls?: ReturnType<typeof bindJumpHistoryControls>;
+  private readonly search=new DocSearch({
+    doc:()=>this.doc, page:()=>this.page, targetLanguage:()=>this.targetLanguage, view:()=>this.view,
+    isBilingual:()=>this.parallel, showTranslation:()=>this.setReadingMode('bilingual'),
+    navigateToPage:page=>this.navigate(this.doc.id,page), pushHistory:()=>this.jumpHistory.push(this.readingPosition(false)),
+    focusBlock:id=>this.pdfView?.focusBlock?.(id)
+  });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
 
   async start():Promise<void>{
@@ -282,7 +261,7 @@ class Reader implements ReaderPort {
   discardDocument(docId: string): void {
     discardNotebook(this, docId);
     if (this.doc.id === docId) {
-      this.jumpHistory.clear(); this.leaveBookReading?.(false);
+      this.jumpHistory.clear(); this.search.reset(); this.leaveBookReading?.(false);
       this.leaveBookReading = undefined;
       this.notebook = undefined;
       this.notebookError = undefined;
@@ -421,6 +400,7 @@ class Reader implements ReaderPort {
         this.marks.switchDocument(id,doc.book);
         this.syncHighlightPreference();
         this.chat.document(doc,pdf);
+        this.search.document(doc,pdf);
         await this.refresh();
         if(version!==this.epoch)return;
       }
@@ -446,6 +426,7 @@ class Reader implements ReaderPort {
     const targetLanguage=this.targetLanguage;
     const translations=pdf ? {} : (await api('translation.get',{docId:doc.id,page,targetLanguage})).translations;
     if(version!==this.epoch)return;
+    if(!pdf)this.search.recordTranslations(doc.id,page,translations);
     document.title=doc.title+' · Paper Reader';byId('docTitle').textContent=doc.title;
     const section=doc.book?.sections[page-1];
     byId('docMeta').textContent=section ? section.title : doc.authors ? [doc.authors,doc.venue].filter(Boolean).join(' · ') : doc.kind==='web' && doc.url ? new URL(doc.url).hostname : '';
@@ -477,7 +458,7 @@ class Reader implements ReaderPort {
     const onMounted=(view:PdfPageView)=>{
       if(version!==this.epoch)return;
       this.view=view;
-      this.paintMarks();
+      this.paintMarks(); this.search.syncPage();
       const events={signal:opening.signal};
       for(const event of ['pointerdown','keydown','wheel'])byId('reader').addEventListener(event,markInteraction,events);
       document.addEventListener('selectionchange',()=>{
@@ -535,6 +516,7 @@ class Reader implements ReaderPort {
     this.translate.textContent = doc.book ? label('Translate section','翻译本节') : doc.kind === 'web' ? label('Translate article', '翻译文章') : label('Translate page', '翻译本页');
     byId('loading').hidden=true;
     this.repaintNotes();
+    this.search.syncPage();
     if(interacted){this.remember(capturedAnchor);return;}
     byId('paperScroll').scrollTop=0;
     this.remember(anchor,quote,target,range);
@@ -560,6 +542,7 @@ class Reader implements ReaderPort {
       const cached = await api('translation.get', {docId: doc.id, page, targetLanguage: target});
       if (!active()) return;
       view.setTranslations?.(cached.translations);
+      this.search.recordTranslations(doc.id, page, cached.translations);
       this.card.refresh();
       const missing = view.blocks.filter(block => !block.translation);
       if (!missing.length) return;
@@ -590,6 +573,7 @@ class Reader implements ReaderPort {
       const translated = await request;
       if (!active()) return;
       view.setTranslations?.(translated);
+      this.search.recordTranslations(doc.id, page, translated);
       this.card.refresh();
       if (view.blocks.some(block => !block.translation)) throw new Error(label('The model returned incomplete translations for this page.','模型返回的本页译文不完整。'));
     } catch (error) {
@@ -613,7 +597,7 @@ class Reader implements ReaderPort {
     this.translate.disabled=true;this.translate.textContent=label('Translating…','正在翻译…');
     try{
       const {translations}=await api('translation.page',{docId:doc.id,page,targetLanguage:this.targetLanguage,blocks:blocks.map(({id,text})=>({id,text}))});
-      if(version===this.epoch){this.view?.setTranslations?.(translations);this.card.refresh();this.translate.hidden=true;}
+      if(version===this.epoch){this.view?.setTranslations?.(translations);this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.translate.hidden=true;}
     }catch(error){if(version===this.epoch)toast(message(error));}
     finally{if(version===this.epoch){this.translate.disabled=false;this.translate.textContent=doc.book ? label('Translate section','翻译本节') : doc.kind==='web' ? label('Translate article','翻译文章') : label('Translate page','翻译本页');}}
   }
@@ -641,7 +625,7 @@ class Reader implements ReaderPort {
     byId('readText').textContent=reading?label('View PDF page','查看 PDF 原页'):label('Read text','读正文');
     byId('pageTextHint').textContent=this.capturing?label('Drag over the area, then choose Explain or Ask.','拖框选中图或文字，再点「解释」或「提问」。'):this.placingPin?label('Click the PDF, or use arrow keys and Enter.','点击原页放置，或用方向键定位后按回车。'):reading?label('Figures and equations are in the PDF.','图表和公式可在 PDF 原页查看。'):this.parallel?'':label('Select a passage to translate or highlight.','划选原文可查看译文或高亮。');
     byId('zoomControl').hidden=reading;
-    view?.setTextView(reading); this.syncMenuActions();
+    view?.setTextView(reading); this.search.paintPage(); this.syncMenuActions();
   }
   private syncMenuActions(): void {
     const narrow=this.desk.isMobileBar, pin=byId('placePin'), read=byId('readText');
@@ -665,7 +649,7 @@ class Reader implements ReaderPort {
       if(mode==='bilingual')void this.translatePdf(view,this.doc,this.page);
     }
     if(format===byId('reader').dataset.pageFormat)paper.scrollTop=offset*visiblePane().scrollHeight;
-    this.card.revealIn(visiblePane());
+    this.search.paintPage(); this.card.revealIn(visiblePane());
   }
   private cancelPin():void {
     if(!this.placingPin)return;
@@ -841,7 +825,7 @@ class Reader implements ReaderPort {
     click('translate',()=>this.translatePage());
     const resizePages=(value:number)=>{
       this.zoom=value; this.desk.setZoom(value);
-      if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setZoom(value);
+      if(this.pdfView)this.pdfView.setZoom(value);
       else if(!this.pdf){
         document.querySelector<HTMLElement>('.pages')!.style.width=value*100+'%';
         for(const sheet of document.querySelectorAll<HTMLElement>('.web-reading-sheet'))sheet.style.setProperty('--article-zoom',String(value));
@@ -851,7 +835,7 @@ class Reader implements ReaderPort {
     byId<HTMLSelectElement>('translationMode').onchange=event=>{
       const mode=(event.currentTarget as HTMLSelectElement).value as TranslationFocus;
       this.desk.setFocus(mode);
-      if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setFocusMode(mode);
+      this.pdfView?.setFocusMode(mode);
     };
     click('originalMode',()=>this.setReadingMode('source'));
     click('parallel',()=>this.setReadingMode('bilingual'));
@@ -870,6 +854,7 @@ class Reader implements ReaderPort {
     const shortcuts=installShortcuts({
       isCapturing:()=>this.capturing,
       isPlacingPin:()=>this.placingPin,
+      isSearchOpen:()=>this.search.isOpen, openSearch:()=>this.search.open(), closeSearch:()=>this.search.close(),
       cancelCapture:()=>this.cancelCapture(true),
       closeMenu:()=>this.closeMenu(true),
       dismissDrawer:()=>this.desk.dismissDrawer(),
@@ -888,13 +873,12 @@ class Reader implements ReaderPort {
       menu.style.top=byId('more').getBoundingClientRect().bottom+4+'px';
       byId('more').setAttribute('aria-expanded','true');menu.querySelector<HTMLElement>('button:not([hidden])')?.focus();});
     const items:[string,Glyph,()=>unknown][]=[
+      [label('Find in document','文档内搜索'),'search',()=>this.search.open()],
       [label('Vocabulary and history','生词与历史'),'clock',async()=>{await this.refresh();collectionsDialog(this);}],
       [label('Keyboard shortcuts','快捷键'),'keyboard',()=>shortcuts.open()],
       [label('Reset reading layout','重置阅读布局'),'columns',()=>{
         this.readingText=false;this.desk.reset();this.updatePageFormat();resizePages(1);byId<HTMLSelectElement>('zoom').value='1';
-        if(this.view && 'setFocusMode' in this.view){
-          (this.view as PdfPageView).setFocusMode(this.desk.focus);
-        }
+        this.pdfView?.setFocusMode(this.desk.focus);
         toast(label('Reading layout reset.','阅读布局已重置。'));
       }],
       [label('Connections','连接设置'),'settings',()=>settingsDialog(this)],[label('Open in new tab','在新标签页打开'),'popout',()=>window.open(sourceUrl(this.doc.id,this.page),'_blank','noopener')]
@@ -904,14 +888,14 @@ class Reader implements ReaderPort {
     this.jumpControls=bindJumpHistoryControls({history:this.jumpHistory,isMobileBar:()=>this.desk.isMobileBar,closeMenu:r=>this.closeMenu(r),onBack:()=>this.jumpInHistory('back'),onForward:()=>this.jumpInHistory('forward')});
     byId('menu').append(...this.jumpControls.menuButtons,this.menuPin,this.menuRead);
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
-    this.desk.connect(mode=>{if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setFocusMode(mode);}, () => refreshNotebookHighlights(this));
+    this.desk.connect(mode=>this.pdfView?.setFocusMode(mode), () => refreshNotebookHighlights(this));
     byId('menu').addEventListener('focusout',event=>{
       if(event.relatedTarget instanceof HTMLElement && !event.relatedTarget.closest('#menu,#more'))this.closeMenu();
     });
     document.addEventListener('pointerdown',e=>{
       if(!(e.target instanceof Element))return;
       if(!e.target.closest('#menu,#more'))this.closeMenu();
-      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,.citation-preview,dialog'))this.card.dismiss();
+      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#docSearch,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,.citation-preview,dialog'))this.card.dismiss();
     });
   }
   private selectTab(tab:SidebarTab):void {

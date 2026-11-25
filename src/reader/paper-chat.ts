@@ -48,7 +48,6 @@ export class PaperChat {
   private notebookRevision?: string;
   private doc?: DocumentInfo;
   private pdf?: PdfDocument;
-  private pages?: ReturnType<typeof readPaper>;
   private selectionCandidate?: ChatSource;
   private expanded = localStorage.getItem('reader.paper-chat.open') === 'true';
   private logVersion = '';
@@ -105,7 +104,7 @@ export class PaperChat {
   }
   document(doc: DocumentInfo, pdf?: PdfDocument): void {
     this.stream.cancel(); this.clearChat.reset(); this.noteActions.clear();
-    this.excerptAction = this.notebookRevision = this.pages = this.selectionCandidate = undefined;
+    this.excerptAction = this.notebookRevision = this.selectionCandidate = undefined;
     this.doc = doc; this.pdf = pdf; this.logVersion = '';
     this.root.ariaLabel = this.toggle.ariaLabel = doc.book ? label('Section chat','本节问答') : label('Paper chat','全文问答');
     this.toggle.querySelector('strong')!.textContent = this.toggle.ariaLabel;
@@ -334,7 +333,7 @@ export class PaperChat {
     state.streamText = ''; state.stopped = state.issue = state.retry = undefined; state.pending = request;
     this.clearChat.reset(); this.render();
     try {
-      const pages = await (this.pages ??= readPaper(doc, this.pdf).catch(error => { if (doc === this.doc) this.pages = undefined; throw error; }));
+      const pages = await readPaper(doc, this.pdf);
       const expansion = needsEnglishSearch(pages, request.question)
         ? await api('chat.searchTerms', { question: request.question, questionModel }).then(reply => reply.text, () => '') : '';
       const query = [request.question, expansion, request.source?.selected, request.source?.original, ...state.exchanges.slice(-2).map(turn => turn.question)].join(' ');

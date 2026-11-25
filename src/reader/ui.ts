@@ -65,7 +65,8 @@ const paths = {
   clock:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M12 6v6l4 2', refresh:'M20 12a8 8 0 1 1-2.3-5.6L20 9m0-5v5h-5', globe:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18z',
   folder:'M3 6h7l2 2h9v12H3z', popout:'M13 3h8v8M21 3 10 14M9 6H4v14h15v-5',
   keyboard:'M3 6h18v12H3zM7 10h.1M11 10h.1M15 10h.1M17 10h.1M7 14h10',
-  trash:'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3'
+  trash:'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
+  search:'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14m9 16-4.35-4.35', up:'m6 14 6-6 6 6', down:'m6 10 6 6 6-6'
 } as const;
 export type Glyph = keyof typeof paths;
 export function icon(name: Glyph, size = 16): SVGSVGElement {
@@ -286,4 +287,31 @@ export function bindTablist<T extends string>(
   });
   select(initial, false);
   return select;
+}
+export function syncTheme(): void {
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const apply = () => {
+    let dark: boolean | undefined;
+    try {
+      const parentDoc = window.parent !== window ? window.parent.document : undefined;
+      if (parentDoc?.body) {
+        const attr = parentDoc.body.getAttribute('data-ds-dark-theme')?.trim().toLowerCase() ?? null;
+        dark = attr !== null && attr !== 'false' && attr !== '0';
+      }
+    } catch {}
+    const root = document.documentElement, next = (dark ?? media.matches) ? 'dark' : 'light';
+    if (root.dataset.theme && root.dataset.theme !== next) {
+      root.dataset.themeSwitching = '1';
+      root.dataset.theme = next;
+      void root.offsetWidth;
+      delete root.dataset.themeSwitching;
+    } else root.dataset.theme = next;
+  };
+  apply();
+  media.addEventListener('change', apply);
+  try {
+    if (window.parent !== window && window.parent.document.body) {
+      new MutationObserver(apply).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
+    }
+  } catch {}
 }

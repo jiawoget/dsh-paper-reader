@@ -45,6 +45,8 @@
   --hl-yellow: rgb(246 205 64 / 48%);
   --hl-green: rgb(123 198 143 / 49%);
   --hl-purple: rgb(182 142 222 / 49%);
+  --find-match: rgb(246 196 42 / 38%);
+  --find-current: rgb(245 148 34 / 62%);
   --pin-bg: #f1e6fa;
   --pin-ink: #492a68;
   --pin-border: #9d85b4;
@@ -111,6 +113,8 @@
   --hl-yellow: rgb(212 162 24 / 30%);
   --hl-green: rgb(68 176 112 / 30%);
   --hl-purple: rgb(162 118 228 / 34%);
+  --find-match: rgb(230 176 46 / 32%);
+  --find-current: rgb(224 128 24 / 45%);
   --pin-bg: #362a52;
   --pin-ink: #e5d7ff;
   --pin-border: #8c72b8;

@@ -10,6 +10,8 @@
   --hl-yellow: rgb(246 205 64 / 48%);
   --hl-green: rgb(123 198 143 / 49%);
   --hl-purple: rgb(182 142 222 / 49%);
+  --find-match: rgb(246 196 42 / 38%);
+  --find-current: rgb(245 148 34 / 62%);
   touch-action: pan-x pan-y pinch-zoom;
 }
 .pdf-scale-plane, .pdf-coordinate-plane {

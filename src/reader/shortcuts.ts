@@ -3,6 +3,9 @@ import { byId, el, readerLabel as label } from './ui.js';
 interface ShortcutActions {
   isCapturing: () => boolean;
   isPlacingPin: () => boolean;
+  isSearchOpen: () => boolean;
+  openSearch: () => void;
+  closeSearch: () => void;
   cancelCapture: () => void;
   closeMenu: () => void;
   dismissDrawer: () => boolean;
@@ -37,6 +40,7 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
       [label('Reading', '阅读'), [
         [['←', '→'], label('Previous or next page / book section', '上一页或下一页 / 书籍上一节或下一节')],
         [['Alt+←', 'Alt+→'], label('Jump back or forward in reading history', '在阅读跳转历史中后退或前进')],
+        [['Ctrl/Cmd+F'], label('Find in document', '文档内搜索')],
         [['b'], label('Toggle original and bilingual view', '切换原文与双语对照')],
         [['+', '=', '-'], label('Zoom in or zoom out', '放大或缩小页面')],
         [['?'], label('Open keyboard shortcuts', '打开快捷键帮助')],
@@ -81,6 +85,12 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
       if (!byId('menu').hidden) { actions.closeMenu(); return; }
       if (actions.dismissDrawer()) return;
       if (!byId('card').hidden) { actions.dismissCard(); return; }
+      if (actions.isSearchOpen()) { e.preventDefault(); actions.closeSearch(); return; }
+    }
+    if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f' && !openDialog) {
+      if (byId('rail').hasAttribute('aria-modal')) return;
+      if (e.target instanceof Element && e.target.closest('.cm-editor, dialog')) return;
+      e.preventDefault(); actions.openSearch(); return;
     }
     if (!e.defaultPrevented && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !openDialog && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       if (actions.isCapturing() || actions.isPlacingPin() || !byId('menu').hidden || byId('rail').hasAttribute('aria-modal')) return;
@@ -93,7 +103,7 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || openDialog) return;
     if (e.shiftKey && e.key !== '?' && e.key !== '+') return;
     if (actions.isCapturing() || actions.isPlacingPin() || !byId('menu').hidden || byId('rail').hasAttribute('aria-modal')) return;
-    if (e.target instanceof Element && e.target.closest('#card,#selectionDock,.annotation-popover,input,textarea,select,dialog,#menu,.desk-split,.paper-chat-grip,[contenteditable]:not([contenteditable="false"]),.cm-editor')) return;
+    if (e.target instanceof Element && e.target.closest('#card,#selectionDock,.doc-search,.annotation-popover,input,textarea,select,dialog,#menu,.desk-split,.paper-chat-grip,[contenteditable]:not([contenteditable="false"]),.cm-editor')) return;
     if (e.key === '?') { e.preventDefault(); open(); return; }
     const caret = document.getSelection()?.focusNode;
     const inPdfText = Boolean(caret?.parentElement?.closest('.pdf-native-text,.pdf-reading-text'));

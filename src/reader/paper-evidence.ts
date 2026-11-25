@@ -1,30 +1,38 @@
 import type { DocumentInfo, PaperEvidence } from '../shared/types.js';
 import type { PdfDocument } from './pdf-view.js';
 
-type Page = PaperEvidence['excerpts'][number];
+export type PaperPage = PaperEvidence['excerpts'][number];
+const paperCache = new WeakMap<PdfDocument, Promise<PaperPage[]>>();
 const budget = 96_000;
 
-export function needsEnglishSearch(pages: Page[], question: string): boolean {
+export function needsEnglishSearch(pages: PaperPage[], question: string): boolean {
   if (!/\p{Script=Han}/u.test(question) || pages.reduce((sum, p) => sum + p.text.length, 0) <= budget) return false;
   const sample = pages.slice(0, 4).map(p => p.text.slice(0, 1200)).join(' ');
   return (sample.match(/[A-Za-z]{3,}/gu)?.length ?? 0) > (sample.match(/\p{Script=Han}/gu)?.length ?? 0);
 }
 
 /** Keep the source page number even when PDF.js supplies only a sparse or partly scanned document. */
-export async function readPaper(doc: DocumentInfo, pdf?: PdfDocument): Promise<Page[]> {
-  if (!pdf) return [{ page: doc.sectionPage ?? 1, text: (doc.paragraphs ?? []).map((p, i) => '[Paragraph ' + (i + 1) + '] ' + p).join('\n\n') }];
-  const pages: Page[] = [];
-  for (let page = 1; page <= pdf.pages; page++) {
-    const content = await pdf.textContent(page);
-    const text = content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('')
-      .replace(/(\p{L})-\n(?=\p{Ll})/gu, '$1').replace(/[^\S\n]+/gu, ' ').trim();
-    pages.push({ page, text });
-  }
-  return pages;
+export function readPaper(doc: DocumentInfo, pdf?: PdfDocument): Promise<PaperPage[]> {
+  if (!pdf) return Promise.resolve([{ page: doc.sectionPage ?? 1, text: (doc.paragraphs ?? []).map((p, i) => '[Paragraph ' + (i + 1) + '] ' + p).join('\n\n') }]);
+  const cached = paperCache.get(pdf);
+  if (cached) return cached;
+  const request = (async () => {
+    const pages: PaperPage[] = [];
+    for (let page = 1; page <= pdf.pages; page++) {
+      const content = await pdf.textContent(page);
+      const text = content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('')
+        .replace(/(\p{L})-\n(?=\p{Ll})/gu, '$1').replace(/[^\S\n]+/gu, ' ').trim();
+      pages.push({ page, text });
+    }
+    return pages;
+  })();
+  paperCache.set(pdf, request);
+  void request.catch(() => { if (paperCache.get(pdf) === request) paperCache.delete(pdf); });
+  return request;
 }
 
 /** Short papers are sent in full. For long documents, search every page and retain distributed context. */
-export function paperEvidence(title: string, pages: Page[], query: string): PaperEvidence {
+export function paperEvidence(title: string, pages: PaperPage[], query: string): PaperEvidence {
   const content = pages.filter(p => p.text.trim());
   if (!content.length) throw Error(typeof navigator !== 'undefined' && /^zh(?:-|$)/i.test(navigator.language || '') ? '这份文档没有可检索文字。请先导入 OCR 副本再进行全文问答。' : 'This document has no searchable text. Import an OCR copy to chat about its contents.');
   const pageCount = pages.at(-1)!.page;
