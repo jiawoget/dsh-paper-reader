@@ -104,3 +104,28 @@
   background: var(--purple, #59358e);
 }
 .annotation-crosshair::after { inset: -4px 7px; }
+@media (max-width: 700px), (pointer: coarse) {
+  .annotation-pin, .annotation-location {
+    min-width: 44px;
+    min-height: 44px;
+    height: auto;
+    padding: 8px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    isolation: isolate;
+  }
+  .annotation-pin::before, .annotation-location::before {
+    content: "";
+    position: absolute;
+    inset: 8px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--pin-border, #9d85b4);
+    background: var(--pin-bg, #f1e6fa);
+    box-shadow: var(--shadow-subtle, 0 1px 3px rgb(43 24 52 / 15%));
+    z-index: -1;
+  }
+  .annotation-pin:hover { background: transparent; }
+  .annotation-pin:hover::before { background: var(--pin-hover, #e5d3f3); }
+  .annotation-chooser button { min-height: 44px; }
+}

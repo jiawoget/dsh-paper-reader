@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium, type Locator, type Page } from 'playwright-core';
+import { chromium, type Browser, type Locator, type Page } from 'playwright-core';
+import { assertMobileChromeBudget } from './helpers/dom-probes.js';
+import { assertNoZhEnglishLeaks, collectChromeStrings } from './helpers/i18n.js';
 import { openReader, withHost } from './host.js';
 import { idleDensity } from './idle-density.js';
 
@@ -188,6 +190,81 @@ async function chatDuringFirstPaint(page: Page, run: Locator, word: string, prev
   } finally { gate.resolve(); }
 }
 
+async function mobileChromeJourney(page: Page, browser: Browser, authUrl: string, url: string, pageNum: number): Promise<void> {
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
+  for (const vp of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }, { width: 1024, height: 768 }]) {
+    await page.setViewportSize(vp);
+    assert.ok(await page.locator('#mobileBar').isHidden());
+    assert.ok(await page.locator('#pageFormat').isVisible());
+    assert.ok((await box(page.locator('#docTitle'))).width >= 80);
+    assert.ok(await page.locator('.topbar').evaluate(n => n.scrollWidth <= n.clientWidth + 1));
+    const toggle = page.getByRole('region', { name: 'Paper chat' }).getByRole('button', { name: 'Paper chat' });
+    await toggle.click();
+    assert.equal(await page.locator('.paper-chat').getAttribute('data-open'), 'true');
+    await toggle.click();
+    assert.equal(await page.locator('.paper-chat').getAttribute('data-open'), 'false');
+  }
+  await page.setViewportSize({ width: 360, height: 740 });
+  await assertMobileChromeBudget(page, 740);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertMobileChromeBudget(page, 844);
+  await page.locator('#next').click();
+  await page.locator('#loading').waitFor({ state: 'hidden' });
+  assert.ok((await page.locator('#pageCount').innerText()).startsWith(`${pageNum + 1} /`));
+  await page.locator('#prev').click();
+  await page.locator('#loading').waitFor({ state: 'hidden' });
+  await page.locator('#pageCount').click();
+  const jumpBox = await box(page.locator('#pageJump')), countBox = await box(page.locator('#pageCount'));
+  assert.ok(jumpBox.y >= 8 && jumpBox.y + jumpBox.height <= countBox.y + 1 && jumpBox.x >= 8 && jumpBox.x + jumpBox.width <= 383);
+  await page.keyboard.press('Escape');
+  await page.locator('#parallel').click();
+  assert.ok(await page.locator('#translated').isVisible() && await page.locator('#original').isHidden());
+  await page.locator('#originalMode').click();
+  assert.ok(await page.locator('#original').isVisible());
+  await page.locator('#captureRegion').click();
+  await page.locator('.pdf-capture-surface').waitFor();
+  await page.keyboard.press('Escape');
+  const chatToggle = page.getByRole('region', { name: 'Paper chat' }).getByRole('button', { name: 'Paper chat' });
+  await chatToggle.click();
+  assert.equal(await page.locator('.paper-chat').getAttribute('data-open'), 'true');
+  await chatToggle.click();
+  assert.equal(await page.locator('.paper-chat').getAttribute('data-open'), 'false');
+  await page.locator('#mobileRail').click();
+  assert.equal(await page.locator('#rail').getAttribute('aria-modal'), 'true');
+  await page.locator('#closeRail').click();
+  await page.locator('#more').click();
+  await page.locator('#menu').getByRole('button', { name: 'Read text', exact: true }).click();
+  await page.getByRole('region', { name: 'Page text' }).waitFor();
+  await page.locator('#more').click();
+  await page.locator('#menu').getByRole('button', { name: 'View PDF page', exact: true }).click();
+  await page.locator('#more').click();
+  await page.locator('#menu').getByRole('button', { name: 'Add page note', exact: true }).click();
+  const placement = page.locator('#original .pdf-sheet .annotation-placement');
+  await placement.waitFor();
+  await placement.click({ position: { x: 140, y: 180 } });
+  const pinEditor = page.locator('#rail').getByRole('textbox').first();
+  await pinEditor.waitFor();
+  await pinEditor.fill('Mobile pin target');
+  await page.locator('#rail').getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('#closeRail').click();
+  await page.locator('#original .annotation-pin').first().waitFor();
+  await assertMobileChromeBudget(page, 844, true);
+  const zhCtx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 844 } });
+  try {
+    const zhPage = await zhCtx.newPage();
+    await zhPage.goto(authUrl);
+    await zhPage.goto(url);
+    await zhPage.locator('#original .pdf-native-text span[data-block-id]').first().waitFor();
+    await zhPage.locator('#loading').waitFor({ state: 'hidden' });
+    await assertMobileChromeBudget(zhPage, 844);
+    await zhPage.locator('#more').click();
+    for (const label of ['添加页边笔记', '读正文']) {
+      assert.ok((await box(zhPage.locator('#menu').getByRole('button', { name: label, exact: true }))).height >= 44);
+    }
+    assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN mobile chrome');
+  } finally { await zhCtx.close(); }
+}
+
 await withHost(async host => {
   const browser = await chromium.launch({ executablePath: host.executable });
   try {
@@ -351,6 +428,7 @@ await withHost(async host => {
     await page.getByRole('button', { name: 'Bilingual', exact: true }).click();
     assert.equal(await page.getByLabel('Translation scope').inputValue(), 'page');
     assert.ok(Math.abs((await box(original)).width - (await box(translated)).width) < 2);
+    await mobileChromeJourney(page, browser, host.authenticatedUrl, host.origin + '/api/paper-reader/app/index.html?doc=' + id + '&page=' + pageNumber, pageNumber);
 
     const laptops = [];
     for (const size of [{ width: 1280, height: 720, dpr: 1.5 }, { width: 1536, height: 864, dpr: 1.25 }]) {

@@ -132,8 +132,8 @@
   box-shadow: var(--shadow-popover, 0 6px 22px rgb(48 51 70 / 22%));
 }
 .pdf-capture-actions .btn { min-height: 34px; padding-inline: 13px; }
-@media (pointer: coarse) {
-  .pdf-capture-actions .btn { min-height: 44px; }
+@media (pointer: coarse), (max-width: 700px) {
+  .pdf-capture-actions .btn, .pdf-status-action { min-height: 44px; }
 }
 .pdf-translated-text {
   z-index: 3;

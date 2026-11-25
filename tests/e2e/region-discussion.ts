@@ -332,13 +332,16 @@ await withHost(async host => {
     await phone.goto(host.authenticatedUrl);
     await phone.goto(entry);
     await figure(phone).waitFor();
+    await phone.locator('#more').tap();
     await phone.locator('#zoom').selectOption('1.5');
     await phone.locator('#parallel').tap();
     await touchCancelRestoresView(phone, phone.locator('#translated .pdf-sheet'));
     assert.equal(await phone.locator('#parallel').getAttribute('aria-pressed'), 'true');
     await phone.locator('#originalMode').tap();
+    await phone.locator('#more').tap();
     await phone.locator('#zoom').selectOption('1');
-    await phone.locator('#readText').tap();
+    await phone.locator('#more').tap();
+    await phone.locator('#menu').getByRole('button', { name: 'Read text' }).tap();
     const pageText = phone.getByRole('region', { name: 'Page text' });
     await touchCancelRestoresView(phone, pageText);
     assert.equal(model.calls.length, 4, 'Canceling in translated or reflowed reading must not contact the model.');

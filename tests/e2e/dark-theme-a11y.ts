@@ -13,7 +13,7 @@ import {
   inspectShadowCardMetrics, measureLocator, parseCssColor, relLum,
   type RawBorderSample, type RawElementSample
 } from './helpers/contrast.js';
-import { inspectTranslatedBlocks } from './helpers/dom-probes.js';
+import { assertMobileChromeBudget, inspectTranslatedBlocks } from './helpers/dom-probes.js';
 import { closeServer } from './helpers/fixtures.js';
 import { action, attachErrorGuards, openReaderPage, type ErrorScope } from './helpers/reader.js';
 import { openReader, withHost, type HostFixture } from './host.js';
@@ -821,16 +821,22 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       // Reset zoom & check 390x844 mobile dark mode (T2-F5-04).
       await page.locator('#zoom').selectOption('1');
       await page.locator('#closeRail').click();
+      await page.locator('#originalMode').click();
       await page.setViewportSize({ width: 390, height: 844 });
-      const mobile = await page.evaluate(() => ({
-        titleWidth: document.getElementById('docTitle')!.getBoundingClientRect().width,
-        overflow: document.documentElement.scrollWidth - window.innerWidth
-      }));
-      assert.ok(mobile.titleWidth >= 64, `Mobile #docTitle width must be >= 64px, got ${mobile.titleWidth}px`);
-      assert.ok(mobile.overflow <= 1, `Mobile dark mode must have zero horizontal overflow, got ${mobile.overflow}px`);
+      await assertMobileChromeBudget(page, 844);
       await assertDarkSurface(page.locator('.topbar'), 'mobile dark .topbar', 0.08);
+      await assertDarkSurface(page.locator('#mobileBar'), 'mobile dark #mobileBar', 0.08);
       await assertContrast(page.locator('#docTitle'), 'mobile dark #docTitle', 4.5);
+      await assertContrast(page.locator('#pageCount'), 'mobile dark #pageCount', 4.5);
+      await page.emulateMedia({ colorScheme: 'light' });
+      await assertContrast(page.locator('#docTitle'), 'mobile light #docTitle', 4.5);
+      await assertContrast(page.locator('#pageCount'), 'mobile light #pageCount', 4.5);
+      await page.emulateMedia({ colorScheme: 'dark' });
       await page.locator('#more').click();
+      for (const name of ['Add page note', 'Read text']) {
+        const box = (await page.locator('#menu').getByRole('button', { name, exact: true }).boundingBox())!;
+        assert.ok(box.height >= 44, `Mobile #menu ${name} height ${box.height} < 44`);
+      }
       await page.getByRole('button', { name: 'Connections', exact: true }).click();
       const mobileDialog = page.getByRole('dialog');
       await mobileDialog.waitFor({ state: 'visible' });

@@ -36,7 +36,7 @@
             <button id="previousSection" type="button" class="icon-btn" aria-label="Previous section" hidden></button>
             <button id="nextSection" type="button" class="icon-btn" aria-label="Next section" hidden></button>
           </div>
-          <div id="zoomControl"><select id="zoom" aria-label="Zoom"><option value="1">Fit width</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
+          <div id="zoomControl"><label for="zoom" class="menu-zoom-label"></label><select id="zoom" aria-label="Zoom"><option value="1">Fit width</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div>
           <div class="reader-mode-switch" role="group" aria-label="Reading mode"><button id="originalMode" type="button" aria-pressed="true">Original</button><button id="parallel" type="button" aria-pressed="false"><span class="mode-wide">Bilingual</span><span class="mode-narrow">Translation</span></button></div>
         </div>
         <button id="captureRegion" class="btn" type="button" aria-pressed="false" hidden></button>
@@ -57,6 +57,7 @@
       <section id="selectionDock" aria-label="Passage workspace" hidden>
         <div id="passageSplit" role="separator" tabindex="0" aria-orientation="horizontal" aria-controls="card"></div>
       </section>
+      <div id="mobileBar" class="mobile-bar" hidden></div>
       <button id="returnDiscussion" class="btn" type="button" hidden></button>
     </section>
     <div id="notesSplit" class="desk-split" role="separator" tabindex="0" aria-label="Resize notes" aria-orientation="vertical" aria-controls="rail" title="Resize notes"></div>

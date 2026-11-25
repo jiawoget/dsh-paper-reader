@@ -116,6 +116,7 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     assert.equal(await reader.getAttribute('data-reading-mode'), 'bilingual');
     assert.ok(await translated.isVisible(), 'The compact reader should resume in Simplified Chinese.');
 
+    await reader.locator('#more').click();
     await reader.getByRole('combobox', { name: 'Zoom' }).selectOption('2');
     await reader.getByRole('button', { name: 'Original', exact: true }).click();
     const savedSource = new URL(origin + '/api/paper-reader/app/index.html');
@@ -142,7 +143,8 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     await number.press('Enter');
     await renderPage();
 
-    const readText = reader.getByRole('button', { name: 'Read text' });
+    await reader.locator('#more').click();
+    const readText = reader.locator('#menu').getByRole('button', { name: 'Read text' });
     await readText.focus();
     await page.keyboard.press('Enter');
     const text = reader.getByRole('region', { name: 'Page text' });
@@ -183,7 +185,8 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     const phone = await browser.newPage({ locale: 'en-US', viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true });
     await phone.goto(authenticatedUrl);
     await phone.goto(origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
-    await phone.getByRole('button', { name: 'Read text' }).tap();
+    await phone.locator('#more').tap();
+    await phone.locator('#menu').getByRole('button', { name: 'Read text' }).tap();
     const phoneText = phone.getByRole('region', { name: 'Page text' });
     const phoneBlock = phoneText.locator('[data-passage-id="block-tables"]');
     const phoneCard = phone.locator('#card');
@@ -218,6 +221,7 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     assert.ok(imported.ok());
     const { doc } = await imported.json() as { doc: { id: string } };
     await page.goto(origin + '/api/paper-reader/app/index.html?doc=' + encodeURIComponent(doc.id));
+    await reader.locator('#more').click();
     await readText.click();
     const pendingBlock = text.locator('.reading-passage').first();
     const passageId = await pendingBlock.getAttribute('data-passage-id');
