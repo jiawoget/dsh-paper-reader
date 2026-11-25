@@ -153,6 +153,7 @@ test('importPdf enriches missing metadata on duplicate bytes and updateMeta vali
   await assert.rejects(library.updateMeta({ id: 'pagedattention', paperTitle: 'No' }), { status: 400 });
   await assert.rejects(library.updateMeta({ id: first.id, year: '99' }), { status: 400 });
   await assert.rejects(library.updateMeta({ id: first.id, doi: 'bad-doi' }), { status: 400 });
+  for (const badDoi of ['10.1145/foo/../bar', '10.1145/foo%2f..%2fbar', '10.1145/a\\b']) await assert.rejects(library.updateMeta({ id: first.id, doi: badDoi }), { status: 400 });
   await assert.rejects(library.updateMeta({ id: 'pdf-' + '0'.repeat(64), paperTitle: 'Missing' }), { status: 404 });
   await Promise.all([library.rename(first.id, 'Concurrent.pdf'), library.updateMeta({ id: first.id, authors: 'Concurrent Author' }), library.updateMeta({ id: first.id, venue: 'OSDI' })]);
   const finalDoc = await library.get(first.id);

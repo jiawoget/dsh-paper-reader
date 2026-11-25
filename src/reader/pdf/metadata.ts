@@ -9,7 +9,7 @@ const DOI_LABELED_RE = /(?:https?:\/\/(?:dx\.)?doi\.org\/|doi\s*:\s*)(10\.\d{4,9
 const DOI_BARE_RE = /\b(10\.\d{4,9}\/[^\s<>()[\]"']+)/i;
 const ARXIV_TEXT_RE = /\barXiv:\s*(\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?\b/i;
 const ARXIV_LINK_RE = /https?:\/\/(?:[\w-]+\.)?arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?/i;
-const ARXIV_STAMP_YEAR_RE = /\[\w+(?:\.\w+)?\]\s*\d{1,2}\s+[A-Za-z]{3}\s+(1[5-9]\d{2}|20\d{2}|21\d{2})/;
+const ARXIV_STAMP_YEAR_RE = /\[[\w-]+(?:\.[\w-]+)?\]\s*\d{1,2}\s+[A-Za-z]{3}\s+(1[5-9]\d{2}|20\d{2}|21\d{2})/;
 const ARXIV_ID_TAG_RE = /^(?:arXiv:\s*\S+|doi:\s*\S+|10\.\d{4,9}\/\S+)$/i;
 
 function cleanText(value: unknown, max: number): string | undefined {
@@ -26,7 +26,7 @@ export function parsePdfMetadata(info: unknown, xmp: { get(name: string): unknow
   const paperTitle = pickTitle(rec?.Title) ?? pickTitle(xmpGet('dc:title'));
   const authors = cleanText(rec?.Author, 1000) ?? cleanText(xmpGet('dc:creator'), 1000);
   const subject = cleanText(rec?.Subject, 300);
-  const text = page1Text.replace(/-\s*\n\s*/g, '-').replace(/(doi(?:\.org\/|:\s*)|arXiv:\s*)\s*\n\s*/gi, '$1').replace(/\s+/g, ' ');
+  const text = page1Text.replace(/-\s*\n\s*/g, '-').replace(/(doi(?:\.org\/|:\s*)|arXiv:\s*(?:\d{4}\.)?|10\.\d{4,9}\/)\s*\n\s*/gi, '$1').replace(/\s+/g, ' ');
   const sources = [subject, cleanText(rec?.Keywords, 500), cleanText(xmpGet('prism:doi'), 256), cleanText(xmpGet('pdfx:doi'), 256), cleanText(xmpGet('dc:identifier'), 256), text].filter((s): s is string => Boolean(s));
   let doi: string | undefined;
   for (const s of sources) { const m = DOI_LABELED_RE.exec(s) ?? DOI_BARE_RE.exec(s); if (m) { doi = m[1].replace(/[.,;:)\]]+$/, ''); break; } }

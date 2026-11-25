@@ -66,7 +66,7 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
   parent.append(trail, head, bylineEl, ...(metaForm ? [metaForm] : []));
   const web = safeWeb(doc.url);
   if (web) {
-    const link = el('a', 'external', doc.doi ? label('Original paper ↗', '原始论文 ↗') : label('Original article ↗', '原始文章 ↗'));
+    const link = el('a', 'external', (doc.doi || doc.kind === 'pdf') ? label('Original paper ↗', '原始论文 ↗') : label('Original article ↗', '原始文章 ↗'));
     link.href = web; link.target = '_blank'; link.rel = 'noopener'; parent.append(link);
   }
   const desktop = app.state.settings.zoteroMode === 'desktop';

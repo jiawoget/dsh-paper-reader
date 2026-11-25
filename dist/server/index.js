@@ -546,7 +546,7 @@ function readQuestionModel(value) {
 // src/server/library-meta.ts
 var YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
 var STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/;
-var DOI_RE = /^10\.\d{4,9}\/\S+$/i;
+var DOI_RE = /^10\.\d{4,9}\/[^\s<>"]+$/i;
 var META_KEYS = ["paperTitle", "authors", "venue", "year", "doi", "publisher", "abstract"];
 function bad(msg) {
   throw new ServiceError(400, msg);
@@ -558,7 +558,13 @@ function optionalText(value, max, multiline = false) {
 }
 function optionalDoi(value) {
   const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
-  return raw && DOI_RE.test(raw) ? raw : void 0;
+  if (!raw) return void 0;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+  }
+  return DOI_RE.test(decoded) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? decoded : void 0;
 }
 function sanitizeDocMeta(input) {
   const out = {};
@@ -3579,7 +3585,7 @@ function doiTarget(raw) {
     decoded = decodeURIComponent(raw);
   } catch {
   }
-  const doi = raw.replace(/[.,;]+$/, "").trim();
+  const doi = decoded.replace(/[.,;]+$/, "").trim();
   return DOI_RE2.test(doi) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? { kind: "doi", doi, url: "https://doi.org/" + encodeURI(doi) } : null;
 }
 function parseAcademicInput(raw) {
@@ -3663,13 +3669,19 @@ function parseCrossref(bytes) {
     return { meta: {} };
   }
 }
-function readHtmlMeta(parseArticle, html, url) {
+function safeHtmlMeta(parseArticle, res) {
+  let html;
   try {
-    const parsed = parseArticle(html, url);
+    html = decodeHtml(res.bytes, res.type, res.charset);
+  } catch {
+    return { meta: {} };
+  }
+  try {
+    const parsed = parseArticle(html, res.url.href);
     return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
   } catch {
     try {
-      const stub = parseArticle(html + "<p>.</p>", url);
+      const stub = parseArticle(html + "<p>.</p>", res.url.href);
       return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
     } catch {
       return { meta: {} };
@@ -3679,7 +3691,7 @@ function readHtmlMeta(parseArticle, html, url) {
 async function resolveAcademicIntake(library, target, readResource, parseArticle) {
   if (target.kind === "arxiv") {
     const [absRes, pdfRes] = await Promise.allSettled([readResource(target.absUrl, "document"), readResource(target.pdfUrl, "document")]);
-    const absInfo = absRes.status === "fulfilled" && !isPdfBytes(absRes.value.bytes) ? readHtmlMeta(parseArticle, decodeHtml(absRes.value.bytes, absRes.value.type, absRes.value.charset), absRes.value.url.href) : void 0;
+    const absInfo = absRes.status === "fulfilled" && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
     if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
       const meta = absInfo?.meta ?? {};
       return { doc: await library.importPdf(meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf", pdfRes.value.bytes, target.absUrl, meta) };
@@ -3699,13 +3711,14 @@ async function resolveAcademicIntake(library, target, readResource, parseArticle
       const meta = mergeMeta({}, cr.meta, target.doi);
       return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
     }
-    const landInfo = readHtmlMeta(parseArticle, decodeHtml(land.bytes, land.type, land.charset), land.url.href);
-    const merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
-    const pdfDoc = await tryPdf(redirected?.kind === "arxiv" ? redirected.pdfUrl : landInfo.pdfUrl ?? cr.pdfUrl, redirected?.kind === "arxiv" ? redirected.absUrl : land.url.href, merged);
+    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
+    const primary = redirected?.kind === "arxiv" ? redirected.pdfUrl : landInfo.pdfUrl, sourceUrl2 = redirected?.kind === "arxiv" ? redirected.absUrl : land.url.href;
+    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
     if (pdfDoc) return pdfDoc;
     if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
+    fail("This link did not return a readable HTML article or PDF.", 415);
   }
-  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? (landRes.status === "rejected" ? Promise.reject(landRes.reason) : fail("This link did not return a readable HTML article or PDF.", 415));
+  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
 }
 
 // src/server/web-article.ts

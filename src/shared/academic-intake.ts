@@ -13,7 +13,7 @@ const arxiv = (id: string, versionedId: string): AcademicTarget =>
 function doiTarget(raw: string): AcademicTarget | null {
   let decoded = raw;
   try { decoded = decodeURIComponent(raw); } catch {}
-  const doi = raw.replace(/[.,;]+$/, '').trim();
+  const doi = decoded.replace(/[.,;]+$/, '').trim();
   return DOI_RE.test(doi) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? { kind: 'doi', doi, url: 'https://doi.org/' + encodeURI(doi) } : null;
 }
 

@@ -1,7 +1,7 @@
 import type { DocMetadata } from '../shared/types.js';
 import { ServiceError } from './service-types.js';
 
-const YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/, STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/, DOI_RE = /^10\.\d{4,9}\/\S+$/i;
+const YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/, STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/, DOI_RE = /^10\.\d{4,9}\/[^\s<>"]+$/i;
 const META_KEYS = ['paperTitle', 'authors', 'venue', 'year', 'doi', 'publisher', 'abstract'] as const;
 function bad(msg: string): never { throw new ServiceError(400, msg); }
 function optionalText(value: unknown, max: number, multiline = false): string | undefined {
@@ -11,7 +11,9 @@ function optionalText(value: unknown, max: number, multiline = false): string | 
 }
 function optionalDoi(value: unknown): string | undefined {
   const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').trim();
-  return raw && DOI_RE.test(raw) ? raw : undefined;
+  if (!raw) return undefined;
+  let decoded = raw; try { decoded = decodeURIComponent(raw); } catch {}
+  return DOI_RE.test(decoded) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? decoded : undefined;
 }
 export function sanitizeDocMeta(input: Record<string, unknown>): DocMetadata {
   const out: DocMetadata = {};

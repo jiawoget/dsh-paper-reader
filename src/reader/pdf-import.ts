@@ -1,7 +1,7 @@
 import type { DocumentInfo } from '../shared/types.js';
 import type { PdfMetadata } from './pdf/metadata.js';
 import { openPdf } from './pdf-view.js';
-import { el, icon, message, readerLabel as label, responseJson } from './ui.js';
+import { api, el, icon, message, readerLabel as label, responseJson } from './ui.js';
 
 let importing = false;
 
@@ -12,9 +12,16 @@ async function importSinglePdf(file: File): Promise<DocumentInfo> {
   let meta: PdfMetadata = {};
   try { meta = await check.metadata(); } finally { await check.destroy(); }
   const params = new URLSearchParams({ title: file.name });
-  for (const [k, v] of Object.entries(meta)) if (typeof v === 'string' && v) params.set(k, v);
+  const overflow: Partial<Record<'paperTitle' | 'authors' | 'venue' | 'year' | 'doi', string>> = {};
+  for (const k of ['url', 'doi', 'year', 'venue', 'paperTitle', 'authors'] as const) {
+    const v = meta[k];
+    if (v) { params.set(k, v); if (params.toString().length > 4096) { params.delete(k); if (k !== 'url') overflow[k] = v; } }
+  }
   const response = await fetch('../import-pdf?' + params.toString(), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/pdf' }, body: file });
-  return (await responseJson<{ doc: DocumentInfo }>(response)).doc;
+  const { doc } = await responseJson<{ doc: DocumentInfo }>(response);
+  const patch: Partial<Record<'paperTitle' | 'authors' | 'venue' | 'year' | 'doi', string>> = {};
+  for (const k of ['paperTitle', 'authors', 'venue', 'year', 'doi'] as const) if (overflow[k] && !doc[k]) patch[k] = overflow[k];
+  return Object.keys(patch).length ? (await api('library.updateMeta', { id: doc.id, ...patch }).catch(() => undefined))?.doc ?? doc : doc;
 }
 
 export async function importPdfFiles(files: readonly File[], onProgress?: (text: string) => void): Promise<{ imported: DocumentInfo[]; failed: { name: string; error: string }[]; summary: string }> {
@@ -38,16 +45,15 @@ export async function importPdfFiles(files: readonly File[], onProgress?: (text:
 
 export function bindPdfDropTarget(target: HTMLElement, onFiles: (files: File[]) => void, opts?: { isBlocked?: () => boolean; signal?: AbortSignal }): void {
   const overlay = el('div', 'pdf-drop-overlay');
-  overlay.setAttribute('aria-hidden', 'true');
-  overlay.append(icon('import', 26), el('span', '', label('Drop PDF files to import', '松开以导入 PDF 文件')));
+  overlay.setAttribute('aria-hidden', 'true'); overlay.append(icon('import', 26), el('span', '', label('Drop PDF files to import', '松开以导入 PDF 文件')));
   target.append(overlay);
   let depth = 0;
   const hasFiles = (e: DragEvent) => Boolean(e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files'));
   const clear = () => { depth = 0; delete target.dataset.pdfDrop; };
   const ev = opts?.signal ? { signal: opts.signal } : undefined;
   target.addEventListener('dragenter', e => { if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); depth++; target.dataset.pdfDrop = 'active'; }, ev);
-  target.addEventListener('dragover', e => { if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; target.dataset.pdfDrop = 'active'; }, ev);
-  target.addEventListener('dragleave', () => { if (depth > 0 && --depth === 0) delete target.dataset.pdfDrop; }, ev);
+  target.addEventListener('dragover', e => { if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; if (depth === 0) depth = 1; target.dataset.pdfDrop = 'active'; }, ev);
+  target.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (depth === 0) delete target.dataset.pdfDrop; }, ev);
   target.addEventListener('drop', e => { clear(); if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); const list = Array.from(e.dataTransfer?.files ?? []); if (list.length) onFiles(list); }, ev);
   window.addEventListener('dragend', clear, ev); window.addEventListener('drop', clear, ev);
   opts?.signal?.addEventListener('abort', () => { clear(); overlay.remove(); }, { once: true });

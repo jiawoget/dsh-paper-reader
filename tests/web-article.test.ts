@@ -202,6 +202,7 @@ test('parseAcademicInput classifies arXiv, DOI, URL, and rejects unsafe schemes 
   assert.equal(parseAcademicInput('10.48550/arXiv.2309.06180')?.kind, 'arxiv');
   assert.equal(parseAcademicInput('https://arxiv.org/html/2309.06180')?.kind, 'url');
   assert.deepEqual(parseAcademicInput('doi:10.1145/3600006.3613165.'), { kind: 'doi', doi: '10.1145/3600006.3613165', url: 'https://doi.org/10.1145/3600006.3613165' });
+  assert.deepEqual(parseAcademicInput('https://doi.org/10.1002/%28SICI%291097-4571'), { kind: 'doi', doi: '10.1002/(SICI)1097-4571', url: 'https://doi.org/10.1002/(SICI)1097-4571' });
   for (const bad of ['', 'javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x', 'ftp://example.org/a', '10.1000/../secret', '10.1000/a\\b', 'plain words']) assert.equal(parseAcademicInput(bad), null);
 });
 
@@ -217,7 +218,15 @@ test('openWebArticle resolves arXiv and DOI targets through local readResource w
     ['/works/10.1000%2Fpdf-land', { type: 'application/json', body: JSON.stringify({ message: { title: ['Crossref Title'], author: [{ family: 'Ada', given: 'Lovelace' }], 'container-title': ['Proc. Test'], published: { 'date-parts': [[2024]] }, publisher: 'ACM', abstract: '<jats:p>Clean summary.</jats:p>' } }) }],
     ['/10.1000/paywall', { status: 403, type: 'text/html', body: 'Forbidden' }],
     ['/works/10.1000%2Fpaywall', { type: 'application/json', body: JSON.stringify({ message: { title: ['Open Crossref PDF'], link: [{ 'content-type': 'application/pdf', URL: 'https://pub.example/cr.pdf' }] } }) }],
-    ['/cr.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\ncr-pdf-bytes') }]
+    ['/cr.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\ncr-pdf-bytes') }],
+    ['/abs/2309.06182', { type: 'application/octet-stream', body: 'MAINTENANCE' }],
+    ['/pdf/2309.06182.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\narxiv-rescue') }],
+    ['/10.1000/non-html', { type: 'application/octet-stream', body: 'NON-HTML' }],
+    ['/works/10.1000%2Fnon-html', { type: 'application/json', body: JSON.stringify({ message: { title: ['Rescued DOI'], link: [{ 'content-type': 'application/pdf', URL: 'https://pub.example/cr.pdf' }] } }) }],
+    ['/10.1000/gated', { type: 'text/html', body: '<meta name="citation_pdf_url" content="https://pub.example/gated.pdf"><article><p>Teaser.</p></article>' }],
+    ['/gated.pdf', { status: 403, type: 'text/html', body: 'Paywall' }],
+    ['/works/10.1000%2Fgated', { type: 'application/json', body: JSON.stringify({ message: { title: ['OA Fallback'], link: [{ 'content-type': 'application/pdf', URL: 'https://pub.example/oa.pdf' }] } }) }],
+    ['/oa.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\noa-pdf-bytes') }]
   ]);
   const server = createServer((req, res) => {
     const entry = routes.get(new URL(req.url ?? '/', 'http://127.0.0.1').pathname);
@@ -239,4 +248,6 @@ test('openWebArticle resolves arXiv and DOI targets through local readResource w
   const doiPdf = (await openWebArticle(library, '10.1000/pdf-land', readLocal)).doc, crFallback = (await openWebArticle(library, '10.1000/paywall', readLocal)).doc;
   assert.equal(doiPdf.kind, 'pdf'); assert.equal(doiPdf.paperTitle, 'Landing Title'); assert.equal(doiPdf.authors, 'Ada, Lovelace'); assert.equal(doiPdf.doi, '10.1000/pdf-land'); assert.equal(doiPdf.year, '2024');
   assert.equal(crFallback.kind, 'pdf'); assert.equal(crFallback.paperTitle, 'Open Crossref PDF');
+  assert.equal((await openWebArticle(library, '2309.06182', readLocal)).doc.kind, 'pdf'); assert.equal((await openWebArticle(library, '10.1000/non-html', readLocal)).doc.kind, 'pdf');
+  const oaDoc = (await openWebArticle(library, '10.1000/gated', readLocal)).doc; assert.equal(oaDoc.kind, 'pdf'); assert.equal(oaDoc.paperTitle, 'OA Fallback');
 });

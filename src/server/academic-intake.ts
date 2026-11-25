@@ -40,26 +40,22 @@ function parseCrossref(bytes: Buffer): { meta: DocMetadata; pdfUrl?: string } {
     }
     const abstract = typeof m.abstract === 'string' ? m.abstract.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : undefined;
     const pdfLink = Array.isArray(m.link) ? m.link.find(l => isRecord(l) && typeof l['content-type'] === 'string' && l['content-type'].toLowerCase().includes('application/pdf') && typeof l.URL === 'string') : undefined;
-    return {
-      meta: { paperTitle: first(m.title), authors: authors || undefined, venue: first(m['container-title']), year, publisher: typeof m.publisher === 'string' ? m.publisher : undefined, abstract: abstract || undefined },
-      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === 'string' ? articleUrl(pdfLink.URL)?.href : undefined
-    };
+    return { meta: { paperTitle: first(m.title), authors: authors || undefined, venue: first(m['container-title']), year, publisher: typeof m.publisher === 'string' ? m.publisher : undefined, abstract: abstract || undefined },
+      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === 'string' ? articleUrl(pdfLink.URL)?.href : undefined };
   } catch { return { meta: {} }; }
 }
 
-function readHtmlMeta(parseArticle: (html: string, url: string) => WebArticle, html: string, url: string): { parsed?: WebArticle; meta: DocMetadata; pdfUrl?: string } {
-  try { const parsed = parseArticle(html, url); return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl }; }
-  catch { try { const stub = parseArticle(html + '<p>.</p>', url); return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl }; } catch { return { meta: {} }; } }
+function safeHtmlMeta(parseArticle: (html: string, url: string) => WebArticle, res: { bytes: Buffer; type: string; charset?: string; url: URL }): { parsed?: WebArticle; meta: DocMetadata; pdfUrl?: string } {
+  let html: string; try { html = decodeHtml(res.bytes, res.type, res.charset); } catch { return { meta: {} }; }
+  try { const parsed = parseArticle(html, res.url.href); return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl }; }
+  catch { try { const stub = parseArticle(html + '<p>.</p>', res.url.href); return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl }; } catch { return { meta: {} }; } }
 }
 
-export async function resolveAcademicIntake(
-  library: Library, target: Extract<AcademicTarget, { kind: 'arxiv' | 'doi' }>,
-  readResource: ResourceReader, parseArticle: (html: string, url: string) => WebArticle
-): Promise<OpenDocument> {
+export async function resolveAcademicIntake(library: Library, target: Extract<AcademicTarget, { kind: 'arxiv' | 'doi' }>,
+  readResource: ResourceReader, parseArticle: (html: string, url: string) => WebArticle): Promise<OpenDocument> {
   if (target.kind === 'arxiv') {
     const [absRes, pdfRes] = await Promise.allSettled([readResource(target.absUrl, 'document'), readResource(target.pdfUrl, 'document')]);
-    const absInfo = absRes.status === 'fulfilled' && !isPdfBytes(absRes.value.bytes)
-      ? readHtmlMeta(parseArticle, decodeHtml(absRes.value.bytes, absRes.value.type, absRes.value.charset), absRes.value.url.href) : undefined;
+    const absInfo = absRes.status === 'fulfilled' && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : undefined;
     if (pdfRes.status === 'fulfilled' && isPdfBytes(pdfRes.value.bytes)) {
       const meta = absInfo?.meta ?? {};
       return { doc: await library.importPdf(meta.paperTitle || target.versionedId.replace(/\//g, '_') + '.pdf', pdfRes.value.bytes, target.absUrl, meta) };
@@ -76,12 +72,12 @@ export async function resolveAcademicIntake(
   if (landRes.status === 'fulfilled') {
     const land = landRes.value;
     if (isPdfBytes(land.bytes)) { const meta = mergeMeta({}, cr.meta, target.doi); return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) }; }
-    const landInfo = readHtmlMeta(parseArticle, decodeHtml(land.bytes, land.type, land.charset), land.url.href);
-    const merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
-    const pdfDoc = await tryPdf(redirected?.kind === 'arxiv' ? redirected.pdfUrl : (landInfo.pdfUrl ?? cr.pdfUrl), redirected?.kind === 'arxiv' ? redirected.absUrl : land.url.href, merged);
+    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
+    const primary = redirected?.kind === 'arxiv' ? redirected.pdfUrl : landInfo.pdfUrl, sourceUrl = redirected?.kind === 'arxiv' ? redirected.absUrl : land.url.href;
+    const pdfDoc = await tryPdf(primary, sourceUrl, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl, merged) : null);
     if (pdfDoc) return pdfDoc;
     if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
+    fail('This link did not return a readable HTML article or PDF.', 415);
   }
-  return (await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)))
-    ?? (landRes.status === 'rejected' ? Promise.reject(landRes.reason) : fail('This link did not return a readable HTML article or PDF.', 415));
+  return (await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi))) ?? Promise.reject(landRes.reason);
 }

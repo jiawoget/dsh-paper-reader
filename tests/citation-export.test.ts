@@ -439,4 +439,6 @@ test('parsePdfMetadata extracts PDF Info, XMP, D:YYYY dates, page-1 arXiv/DOI, a
   assert.deepEqual(parsePdfMetadata({ Title: 'Untitled', Subject: 'arXiv:2501.00001' }, { get: k => xmp.get(k) }, ''), { paperTitle: 'XMP Paper', authors: 'Ada Lovelace; Charles Babbage', venue: 'Nature', year: '2025', url: 'https://arxiv.org/abs/2501.00001' });
   const ph = parsePdfMetadata({ Title: 'Slide 1' }, null, 'Preprint arXiv:2403.09999v1 [cs.LG] 15 Mar 2024');
   assert.equal(ph.paperTitle, undefined); assert.equal(ph.year, '2024'); assert.equal(ph.url, 'https://arxiv.org/abs/2403.09999');
+  assert.deepEqual(parsePdfMetadata(null, null, 'doi:10.1145/\n3600006.3613165 arXiv:2309.\n06180'), { doi: '10.1145/3600006.3613165', url: 'https://arxiv.org/abs/2309.06180', year: '2023' });
+  assert.equal(parsePdfMetadata(null, null, 'arXiv:hep-th/9901001v1 [hep-th] 1 Jan 1999').year, '1999');
 });

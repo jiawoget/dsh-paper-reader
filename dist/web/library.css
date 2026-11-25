@@ -102,3 +102,4 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
   font: 600 15px/1.4 system-ui, sans-serif; pointer-events: none; box-shadow: var(--shadow-card);
 }
 [data-pdf-drop="active"] > .pdf-drop-overlay { display: flex; }
+.reader-library > .pdf-drop-overlay { inset: 0; }
