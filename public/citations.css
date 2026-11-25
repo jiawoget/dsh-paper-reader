@@ -19,7 +19,7 @@
 .pdf-citation-focus:hover::after, .pdf-citation-focus:focus-visible::after, .pdf-citation-focus.citation-active::after {
   border-bottom-style: solid; border-bottom-color: var(--purple); background: rgb(156 117 211 / 16%);
 }
-.pdf-citation-focus:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.pdf-citation-focus:focus-visible { outline: 2px solid var(--accent-solid); outline-offset: 1px; }
 .citation-preview {
   position: fixed;
   z-index: 50;

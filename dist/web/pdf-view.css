@@ -68,7 +68,7 @@
   border-radius: 2px; background: transparent; pointer-events: auto; cursor: pointer;
 }
 .pdf-link:hover { background: rgb(89 53 142 / 12%); outline: 1px solid rgb(89 53 142 / 35%); }
-.pdf-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; background: rgb(89 53 142 / 14%); }
+.pdf-link:focus-visible { outline: 2px solid var(--accent-solid); outline-offset: 1px; background: rgb(89 53 142 / 14%); }
 .pdf-anchor { pointer-events: none; z-index: 4; }
 .pdf-anchor.is-active, .pdf-figure.is-active {
   border-radius: 2px;
