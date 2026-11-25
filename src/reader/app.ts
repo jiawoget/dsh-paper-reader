@@ -836,6 +836,7 @@ class Reader implements ReaderPort {
       const mode=(event.currentTarget as HTMLSelectElement).value as TranslationFocus;
       this.desk.setFocus(mode);
       this.pdfView?.setFocusMode(mode);
+      this.search.paintPage();
     };
     click('originalMode',()=>this.setReadingMode('source'));
     click('parallel',()=>this.setReadingMode('bilingual'));

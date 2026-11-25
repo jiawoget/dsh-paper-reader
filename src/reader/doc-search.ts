@@ -44,7 +44,7 @@ export class DocSearch {
   private readonly translations = new Map<string, Map<number, SearchBlock[]>>();
   private doc: DocumentInfo; private pdf?: PdfDocument; private result: SearchResult = EMPTY;
   private active = -1; private searching = false; private listOpen = false; private autoExpanded = false; private userToggledList = false; private pendingReveal = false;
-  private searchEpoch = 0; private jumpEpoch = 0; private debounceTimer?: number; private returnFocus?: HTMLElement; private fallbackLayer?: HTMLElement;
+  private searchEpoch = 0; private jumpEpoch = 0; private debounceTimer?: number; private repaintFrame = 0; private returnFocus?: HTMLElement; private fallbackLayer?: HTMLElement;
 
   constructor(private readonly host: DocSearchHost) {
     this.doc = host.doc();
@@ -63,7 +63,7 @@ export class DocSearch {
     bar.append(this.input, this.countEl, this.listBtn, this.prevBtn, this.nextBtn, closeBtn);
     this.root.append(bar, this.resultsEl); this.workspace.append(this.root);
     this.input.addEventListener('input', () => {
-      clearTimeout(this.debounceTimer); this.debounceTimer = undefined; this.userToggledList = false;
+      clearTimeout(this.debounceTimer); this.debounceTimer = undefined; this.userToggledList = false; this.searchEpoch++;
       if (!this.input.value.trim()) { this.clearState(); return; }
       this.debounceTimer = window.setTimeout(() => { this.debounceTimer = undefined; void this.runSearch(true); }, 120);
     });
@@ -158,7 +158,7 @@ export class DocSearch {
     if (!query) return;
     if (this.debounceTimer || this.result.query !== query || this.searching) {
       clearTimeout(this.debounceTimer); this.debounceTimer = undefined; await this.runSearch(false);
-      if (this.root.hidden || this.result.query !== query) return;
+      if (this.root.hidden || this.input.value.trim() !== query || this.result.query !== query) return;
     }
     const total = this.result.matches.length;
     if (!total) return;
@@ -192,7 +192,7 @@ export class DocSearch {
     else this.active = -1;
     this.renderState();
     const active = this.pendingReveal && this.active >= 0 ? this.result.matches[this.active] : undefined;
-    if (active?.side === 'translation' && active.blockId) this.host.focusBlock(active.blockId);
+    if (active?.page === this.host.page() && active.side === 'translation' && active.blockId) this.host.focusBlock(active.blockId);
     const current = this.paintPage();
     if ((autoSelect || this.pendingReveal) && current) { this.pendingReveal = false; this.revealRange(current); }
   }
@@ -234,6 +234,7 @@ export class DocSearch {
     pages.append(layer); this.fallbackLayer = layer;
   }
   private clearHighlights(): void {
+    if (this.repaintFrame) { cancelAnimationFrame(this.repaintFrame); this.repaintFrame = 0; }
     this.fallbackLayer?.remove(); this.fallbackLayer = undefined;
     if ('highlights' in CSS) { CSS.highlights?.delete('paper-find-matches'); CSS.highlights?.delete('paper-find-current'); }
   }
@@ -282,6 +283,6 @@ export class DocSearch {
     this.root.style.setProperty('--search-top', Math.max(8, Math.round(paper.top - ws.top + 8)) + 'px');
     this.root.style.setProperty('--search-end', Math.max(8, Math.round(ws.right - paper.right + 16)) + 'px');
     this.root.style.setProperty('--search-max-h', Math.max(120, Math.round(paper.height - 24)) + 'px');
-    if (this.fallbackLayer) this.paintPage();
+    if (this.fallbackLayer && !this.repaintFrame) this.repaintFrame = requestAnimationFrame(() => { this.repaintFrame = 0; if (!this.root.hidden && this.fallbackLayer) this.paintPage(); });
   }
 }
