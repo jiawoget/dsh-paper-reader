@@ -1,4 +1,5 @@
 import type { TranslationFocus } from './pdf/focus.js';
+import { parseZoom, type ZoomSetting } from './pdf-controls.js';
 import { byId, el, readerLabel as label } from './ui.js';
 
 export type ReadingMode = 'source' | 'bilingual';
@@ -17,7 +18,7 @@ interface DeskSettings {
   drawerOpen?: boolean;
   focus?: TranslationFocus;
   mode?: ReadingMode;
-  zoom?: number;
+  zoom?: ZoomSetting;
 }
 const preference = 'reader.desk.layout';
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -48,11 +49,12 @@ export class ReadingDesk {
   private pdf = false;
   private book = false;
   private contents = false;
+  private effectiveFocus?: TranslationFocus;
   get focus(): TranslationFocus {
     return this.settings.focus === 'column' || this.settings.focus === 'passage' || this.settings.focus === 'page' ? this.settings.focus
       : this.readingWidth.matches ? 'column' : 'page';
   }
-  get zoom(): number { return [1, 1.25, 1.5, 2].includes(this.settings.zoom ?? 0) ? this.settings.zoom! : 1; }
+  get zoom(): ZoomSetting { return parseZoom(this.settings.zoom); }
   get mode(): ReadingMode { return this.settings.mode === 'bilingual' ? 'bilingual' : 'source'; }
   get isNarrow(): boolean { return this.narrow.matches; } get isMobileBar(): boolean { return this.mobileBar.matches; }
   get visibleLanguage(): 'original' | 'translation' { return this.isNarrow && this.mode === 'bilingual' ? 'translation' : 'original'; }
@@ -68,14 +70,11 @@ export class ReadingDesk {
   }
   private get pose(): SidebarPosition | 'sheet' { return this.isNarrow ? 'sheet' : this.position; }
   private save(): void { localStorage.setItem(preference, JSON.stringify(this.settings)); }
-  setZoom(value: number): void { this.settings.zoom = value; this.save(); }
-  setMode(mode: ReadingMode): void {
-    this.settings.mode = mode;
-    this.apply();
-    this.save();
-  }
-  setFocus(value: TranslationFocus): void { this.settings.focus = value; this.apply(); this.save(); }
-  setDocument(pdf: boolean, book = false): void { this.pdf = pdf; this.book = book; this.apply(); }
+  setZoom(value: ZoomSetting): void { this.settings.zoom = value; this.save(); }
+  setMode(mode: ReadingMode): void { this.settings.mode = mode; this.apply(); this.save(); }
+  setFocus(value: TranslationFocus): void { this.settings.focus = value; this.effectiveFocus = undefined; this.apply(); this.save(); }
+  setEffectiveFocus(value: TranslationFocus): void { this.effectiveFocus = value; this.root.dataset.translationView = this.pdf ? value : 'page'; }
+  setDocument(pdf: boolean, book = false): void { this.pdf = pdf; this.book = book; this.effectiveFocus = undefined; this.apply(); }
   setContents(active: boolean): void {
     this.contents = active;
     this.updateSidebarButtons();
@@ -99,6 +98,7 @@ export class ReadingDesk {
   }
   reset(): void {
     this.settings = { highlightDisplay: this.highlightDisplay };
+    this.effectiveFocus = undefined;
     this.apply();
     this.save();
   }
@@ -124,14 +124,14 @@ export class ReadingDesk {
     const mobile = this.mobileBar.matches, bar = byId('mobileBar');
     if (mobile === !bar.hidden) return;
     bar.hidden = !mobile;
-    const toolbar = this.root.querySelector('.toolbar')!, capture = byId('captureRegion'), zoom = byId('zoomControl'), chat = this.root.querySelector('.paper-chat');
-    if (mobile) { bar.append(toolbar, capture, ...(chat ? [chat] : [])); byId('menu').append(zoom); }
-    else { byId('mobileRail').before(toolbar, capture); toolbar.querySelector('.reader-mode-switch')!.before(zoom); if (chat) byId('selectionDock').after(chat); }
+    const toolbar = this.root.querySelector('.toolbar')!, capture = byId('captureRegion'), zoom = byId('zoomControl'), theme = byId('pdfThemeControl'), chat = this.root.querySelector('.paper-chat');
+    if (mobile) { bar.append(toolbar, capture, ...(chat ? [chat] : [])); byId('menu').append(zoom, theme); }
+    else { byId('mobileRail').before(toolbar, capture); toolbar.querySelector('.reader-mode-switch')!.before(zoom, theme); if (chat) byId('selectionDock').after(chat); }
   }
   private apply(): void {
     this.syncMobileBar();
-    const focus = this.pdf ? this.focus : 'page', bilingual = this.mode === 'bilingual';
-    this.root.dataset.translationView = focus;
+    const preferred = this.pdf ? this.focus : 'page', bilingual = this.mode === 'bilingual';
+    this.root.dataset.translationView = this.pdf ? (this.effectiveFocus ?? preferred) : 'page';
     this.root.dataset.readingMode = this.mode;
     this.root.dataset.compactLanguage = this.visibleLanguage;
     this.root.querySelector('.workspace')?.classList.toggle('single', !bilingual);
@@ -142,15 +142,16 @@ export class ReadingDesk {
     if (typeof previewHeight === 'number' && Number.isFinite(previewHeight)) {
       this.root.style.setProperty('--preview-height', previewHeight + 'px');
     } else this.root.style.removeProperty('--preview-height');
-    const proportion = clamp(this.settings.proportion ?? (focus === 'page' ? .5 : .62), .25, .76);
+    const proportion = clamp(this.settings.proportion ?? (preferred === 'page' ? .5 : .62), .25, .76);
     this.root.style.setProperty('--source-track', proportion + 'fr');
     this.root.style.setProperty('--target-track', (1 - proportion) + 'fr');
     const pageSplit = byId('pageSplit');
     pageSplit.setAttribute('aria-valuemin', '25'); pageSplit.setAttribute('aria-valuemax', '76');
     pageSplit.setAttribute('aria-valuenow', String(Math.round(proportion * 100)));
     pageSplit.setAttribute('aria-valuetext', label(Math.round(proportion * 100) + '% original', '原文占 ' + Math.round(proportion * 100) + '%'));
-    byId<HTMLSelectElement>('translationMode').hidden = !this.pdf;
-    byId<HTMLSelectElement>('translationMode').value = this.focus;
+    const scope = byId<HTMLSelectElement>('translationMode');
+    scope.hidden = !this.pdf;
+    scope.value = this.effectiveFocus === 'column' && this.focus === 'page' ? 'column' : this.focus;
   }
   private applyNotebook(): void {
     this.root.dataset.notebookOpen = String(this.notebookOpen);

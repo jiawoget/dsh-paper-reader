@@ -55,6 +55,15 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
   langSelect.onchange = switchLanguage;
   switchLanguage();
 
+  const glossaryRow = el('label', 'field'), glossaryInput = el('textarea');
+  glossaryInput.id = 'settingsGlossary';
+  glossaryInput.rows = 3;
+  glossaryInput.maxLength = 8000;
+  glossaryInput.value = data.glossary ?? '';
+  glossaryInput.placeholder = label('One entry per line: KV = 键值缓存 (term only to keep unchanged)', '每行一条：KV = 键值缓存（仅填术语则保留原文）');
+  glossaryRow.append(el('span', '', label('Translation glossary', '翻译术语表')), glossaryInput);
+  const glossaryHint = el('p', 'hint', label('Matched terms are locked during AI translation. Lines starting with # are ignored.', '翻译时会自动锁定匹配到的术语，以 # 开头的行会被忽略。'));
+
   const vault = inputField(label('Obsidian vault folder', 'Obsidian 笔记库文件夹'), data.vaultPath, 'text', label('Absolute path to your vault', '填写 Obsidian 笔记库的绝对路径'));
   const id = inputField(label('Zotero library ID', 'Zotero 资料库 ID'), data.zoteroLibraryId);
   id.input.inputMode = 'numeric'; id.input.pattern = '[1-9][0-9]*'; id.input.maxLength = 24;
@@ -131,7 +140,7 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
       advanced.append(el('summary', '', label('Override with custom API', '使用自定义 API 覆盖')), base.row, model.row, key.row, clearModelRow);
       aiPanel.append(advanced);
     } else aiPanel.append(base.row, model.row, key.row, clearModelRow);
-    aiPanel.append(langRow, customLang.row);
+    aiPanel.append(langRow, customLang.row, glossaryRow, glossaryHint);
 
     const obsidianBtn = el('button', 'btn', 'Obsidian'); obsidianBtn.id = 'settings-tab-obsidian';
     const obsidianPanel = tabPanel('settings-panel-obsidian');
@@ -171,7 +180,7 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
     save.disabled = true;
     try {
       await api('settings.save', {
-        ...(!returnToLibrary && { baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, vaultPath: vault.input.value, clearApiKey: clearModel.checked }),
+        ...(!returnToLibrary && { baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, glossary: glossaryInput.value, vaultPath: vault.input.value, clearApiKey: clearModel.checked }),
         ...zoteroSettings()
       });
       await app.refresh();

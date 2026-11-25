@@ -168,10 +168,11 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     for (const sheet of [original, translated]) sectionFooter(sheet, doc, page, onBookSection);
   }
 
-  function setTranslations(values: Record<string, string>): void {
+  function setTranslations(values: Record<string, string>, overwrite = false): void {
     for (const [id, { block, translation }] of pairs) {
       if (unchangedArticleBlock(doc.articleLayout?.[id]?.kind)) { block.translation = block.text; continue; }
-      block.translation = values[id]?.trim() ? values[id] : undefined;
+      const supplied = values[id]?.trim() || undefined;
+      block.translation = overwrite ? (supplied ?? block.translation) : (block.translation || supplied);
       translation.classList.toggle('is-untranslated', !block.translation);
       const rendered = block.translation || label('Awaiting translation', '待翻译');
       if (translation.firstElementChild!.textContent !== rendered) translation.firstElementChild!.textContent = rendered;

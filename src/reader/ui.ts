@@ -26,6 +26,7 @@ export interface ReaderPort {
   saveHighlight?(source: SourceRecord, quote: string, color?: AnnotationColor): Promise<void>;
   paperSelection?(source?: ChatSource): void;
   showReadingSide?(side: 'source' | 'translation'): void;
+  retranslateBlocks?(blockIds?: string[]): Promise<void>;
   discussionChanged?(docId: string): void;
   exchangeDeleted?(thread: string, requestId: string): void;
   regionDiscussionClosed?(explicit: boolean): void;
@@ -79,7 +80,13 @@ const localizedErrors: Record<string, string> = {
   'Enter a target language.': '请输入翻译目标语言。',
   'Target language must be a non-empty string.': '请输入有效的翻译目标语言。',
   'Target language must be at most 64 characters.': '翻译目标语言最多 64 个字符。',
-  'Target language contains invalid control characters.': '翻译目标语言包含无效控制字符。'
+  'Target language contains invalid control characters.': '翻译目标语言包含无效控制字符。',
+  'Glossary contains invalid control characters.': '术语表包含无效控制字符。',
+  'The translation did not cover every passage on this page. Retry to continue.': '本页译文未覆盖全部段落，请点击重试继续。',
+  'Some passages on this page were missing from the translation. Try again.': '本页部分段落缺少译文，请重试。',
+  'The model omitted a paragraph. Retry to resume the translation.': '模型漏译了部分段落，请点击重试继续翻译。',
+  'The model returned repeated text. Retry the page translation.': '模型返回了重复文本，请重试本页翻译。',
+  'The model returned the original English passage. Retry the page translation.': '模型返回了英文原文而非译文，请重试本页翻译。'
 };
 export const message = (error: unknown) => {
   if (!(error instanceof Error)) return readerLabel('The request failed.', '请求失败。');

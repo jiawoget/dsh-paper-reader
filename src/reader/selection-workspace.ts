@@ -13,6 +13,7 @@ interface CardActionsOptions {
   includeNotes: boolean;
   onHighlight?: (color: AnnotationColor) => unknown;
   onSaveWord?: () => unknown;
+  onRetranslate?: () => unknown;
   onInsertLink: () => unknown;
   onLocate: () => unknown;
   onToggleLanguage: () => unknown;
@@ -130,6 +131,7 @@ export function buildCardActions(opts: CardActionsOptions): CardActionsHandle {
     button(text, () => { closeMenu(false); return run(); }, 'selection-more-item' + (extra ? ' ' + extra : ''), glyph);
 
   if (opts.onSaveWord) menu.append(item(label('Save word', '收藏词语'), opts.onSaveWord, 'star'));
+  if (opts.onRetranslate) menu.append(item(label('Re-translate passage', '重译此段'), opts.onRetranslate, 'refresh'));
   const link = item(label('Insert passage link', '引用到笔记'), opts.onInsertLink, 'arrow');
   link.title = label('Insert this passage at the cursor in Notes', '在笔记光标处插入原文出处');
   menu.append(link, item(label('Locate', '定位选段'), opts.onLocate, 'pin'));

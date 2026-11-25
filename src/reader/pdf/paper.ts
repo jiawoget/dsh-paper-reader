@@ -29,12 +29,17 @@ export function makeSheet(side: ReadingSide, page: number, window: Box, width: n
   outer.ariaLabel = side === 'source'
     ? label('Original, page ' + page, '原文，第 ' + page + ' 页')
     : label(targetLanguageLabel(targetLanguage, false) + ', page ' + page, targetLanguageLabel(targetLanguage, true) + '，第 ' + page + ' 页');
+  const stage = element('div', 'pdf-stage');
   const scale = element('div', 'pdf-scale-plane');
   const plane = element('div', 'pdf-coordinate-plane');
   place(plane, { x: -window.x, y: -window.y, width, height });
   scale.append(plane);
-  outer.append(scale);
+  stage.append(scale);
+  outer.append(stage);
   let ratio = 1;
+  const syncAspect = () => {
+    stage.style.aspectRatio = side === 'translation' && outer.dataset.focus === 'passage' ? 'auto' : window.width + ' / ' + window.height;
+  };
   return { outer, plane,
     get scale() { return ratio; },
     attach(host, zoom) {
@@ -44,19 +49,32 @@ export function makeSheet(side: ReadingSide, page: number, window: Box, width: n
     },
     setWindow(bounds) {
       window = bounds;
-      outer.style.aspectRatio = bounds.width + ' / ' + bounds.height;
+      syncAspect();
       place(plane, { x: -bounds.x, y: -bounds.y, width, height });
       this.resize();
     },
     resize() {
-      outer.style.aspectRatio = window.width + ' / ' + window.height;
-      const pixels = outer.getBoundingClientRect().width;
+      syncAspect();
+      const pixels = stage.getBoundingClientRect().width || outer.getBoundingClientRect().width;
       if (pixels) {
         ratio = pixels / window.width;
         scale.style.transform = 'scale(' + ratio + ')';
       }
     }
   };
+}
+
+export function fitPageScale(paperScroll: HTMLElement | null, sheetOuter: HTMLElement, win: Box, currentFactor: number): number {
+  if (!paperScroll || currentFactor <= 0) return 1;
+  const stage = sheetOuter.querySelector<HTMLElement>('.pdf-stage') ?? sheetOuter;
+  const rect = stage.getBoundingClientRect();
+  if (!rect.width) return 1;
+  const cs = getComputedStyle(paperScroll);
+  const availH = paperScroll.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  if (availH <= 0) return 1;
+  const baseHeight = rect.height > 0 ? rect.height / currentFactor : (rect.width / currentFactor) * (win.height / win.width);
+  if (baseHeight <= 0) return 1;
+  return Math.max(0.35, Math.min(1, availH / baseHeight));
 }
 
 export function newAnchor(passage: Passage, figure = false): HTMLElement {
@@ -96,7 +114,7 @@ export function fitText(node: HTMLElement, passage: Passage, sheetScale = 1, min
   // native box-fit sizing before wide desktop sheets (scale >= 1.13) where zero-clipping applies.
   if (minVisualPx > 0 && sheetScale > 0 && sheetScale < 1.125) {
     const isSmallNote = passage.role === 'caption' || passage.fontSize < 8.5 || passage.id.startsWith('ref-');
-    const targetVisualPx = isSmallNote ? Math.min(minVisualPx, 10) : minVisualPx;
+    const targetVisualPx = isSmallNote ? Math.min(minVisualPx, 11.5) : minVisualPx;
     const scaledFloor = Math.min(24, targetVisualPx / sheetScale);
     const weight = sheetScale <= 1.11 ? 1 : (1.125 - sheetScale) / 0.015;
     const base = scaledFloor > baseMax ? baseMax : floor;

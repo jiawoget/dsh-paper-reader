@@ -297,3 +297,41 @@ test('ReaderModel propagates settings.targetLanguage into passage and block prom
   assert.equal(blockResult.translations.p1, '日本語訳: ブロック');
   assert.match(prompts.at(-1)!, /Translate each passage in full into Japanese\./);
 });
+
+test('Settings.glossary persists, validates, injects matched terms into prompts, and hides batch jargon on 502', async t => {
+  const root = await temporary(t);
+  const prompts: string[] = [];
+  let incomplete = false;
+  const act = createServices({
+    root,
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] };
+      const system = payload.messages.find(m => m.role === 'system')?.content ?? '';
+      prompts.push(system);
+      const isBlocks = system.includes('Return only JSON shaped as');
+      const content = isBlocks
+        ? JSON.stringify({ translations: incomplete ? {} : { p1: '分页注意力使用键值缓存。' } })
+        : '译文结果';
+      return Response.json({ choices: [{ message: { content }, finish_reason: 'stop' }] });
+    }
+  });
+  await act('settings.save', { baseUrl: 'http://127.0.0.1:8125/v1', model: 'fixture', glossary: 'KV cache = 键值缓存\r\nPagedAttention\r\nUnused = 不出现' });
+  assert.equal((await act('state')).settings.glossary, 'KV cache = 键值缓存\nPagedAttention\nUnused = 不出现');
+  await assert.rejects(act('settings.save', { glossary: 'a'.repeat(8001) }), { status: 400 });
+  await assert.rejects(act('settings.save', { glossary: 'bad\u0007term' }), { status: 400 });
+
+  await act('ai.blocks', { blocks: [{ id: 'p1', text: 'PagedAttention optimizes KV cache.' }], documentKind: 'pdf' });
+  assert.ok(prompts.at(-1)!.includes('KV cache => 键值缓存') && prompts.at(-1)!.includes('PagedAttention (keep unchanged)'));
+  assert.ok(!prompts.at(-1)!.includes('Unused'));
+
+  await act('ai', { mode: 'translate', text: 'No glossary hits here.', context: '' });
+  assert.ok(!prompts.at(-1)!.includes('Follow this glossary'));
+  await act('ai', { mode: 'translate', text: 'KV cache efficiency', context: '' });
+  assert.ok(prompts.at(-1)!.includes('KV cache => 键值缓存'));
+
+  incomplete = true;
+  await assert.rejects(
+    act('ai.blocks', { blocks: [{ id: 'p1', text: 'PagedAttention optimizes KV cache.' }], documentKind: 'pdf' }),
+    (error: unknown) => error instanceof Error && (error as Error & { status?: number }).status === 502 && !/incomplete batch|invalid ID/i.test(error.message)
+  );
+});

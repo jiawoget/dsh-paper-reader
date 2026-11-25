@@ -60,7 +60,7 @@ export async function authContext(ctx: BrowserContext, host: HostFixture): Promi
 export async function resetSettings(request: APIRequestContext, origin: string, overrides: Record<string, unknown> = {}): Promise<void> {
   const res = await rpc(request, origin, 'settings.save', {
     baseUrl: '', model: 'deepseek-flash', clearApiKey: overrides.apiKey === undefined,
-    targetLanguage: 'Simplified Chinese', vaultPath: '', zoteroMode: 'desktop',
+    targetLanguage: 'Simplified Chinese', glossary: '', vaultPath: '', zoteroMode: 'desktop',
     zoteroLibraryId: '', clearZoteroKey: overrides.zoteroApiKey === undefined, ...overrides
   });
   assert.equal(res.status, 200, 'resetSettings failed: HTTP ' + res.status);

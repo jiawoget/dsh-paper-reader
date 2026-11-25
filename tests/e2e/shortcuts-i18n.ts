@@ -87,7 +87,7 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
     await page.keyboard.press('-');
     assert.equal(await zoom.inputValue(), '1');
     await page.keyboard.press('-');
-    assert.equal(await zoom.inputValue(), '1', 'Zoom must clamp at Fit width.');
+    assert.equal(await zoom.inputValue(), '0.75'); await page.keyboard.press('-'); assert.equal(await zoom.inputValue(), '0.75', 'Zoom must clamp at 75%.'); await page.keyboard.press('=');
 
     // T1-F6-04: b, n, c toggle bilingual, Notes (twice to prove repeat toggle works after focus moves to #notesTab!), Contents
     const reader = page.locator('#reader');
