@@ -49,7 +49,7 @@ export interface PdfRenderOptions {
   onFocus?: (id: string, label: string) => void;
 }
 
-export type PdfTranslationState = 'pending' | 'loading' | 'unavailable' | 'error' | 'scanned';
+type PdfTranslationState = 'pending' | 'loading' | 'unavailable' | 'error' | 'scanned';
 interface TranslationStatus {
   state: PdfTranslationState;
   message: string;

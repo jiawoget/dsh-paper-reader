@@ -3,7 +3,7 @@ import type { ChatSource } from '../shared/types.js';
 export interface AnswerQuote { turn: number; text: string }
 export interface MessageDraft { text: string; quote?: AnswerQuote }
 export interface DiscussionRef { source: ChatSource; thread: string }
-export interface SavedQuestions extends DiscussionRef {
+interface SavedQuestions extends DiscussionRef {
   active: string;
   drafts: [string, MessageDraft][];
   updated: number;

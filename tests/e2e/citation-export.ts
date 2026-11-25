@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { chromium, type Download, type Page } from 'playwright-core';
+import { chromium, type Page } from 'playwright-core';
 import type { DocumentInfo } from '../../src/shared/types.js';
+import { closeServer, startRichZoteroFixture } from './helpers/fixtures.js';
+import { makePdf, readDownload } from './helpers/reader.js';
 import { withHost } from './host.js';
-import { startJsonFixture } from './integration-fixtures.js';
 
 const zoteroPreload = new URL('./integration-zotero-preload.ts', import.meta.url).href;
 const publisherPreload = new URL('./book-reading-preload.ts', import.meta.url).href;
@@ -88,84 +89,10 @@ function startAcademicPublisherFixture() {
       }
       resolve({
         origin: 'http://127.0.0.1:' + address.port,
-        close: () => new Promise<void>((done, fail) => {
-          server.closeAllConnections();
-          server.close(err => err ? fail(err) : done());
-        })
+        close: () => closeServer(server)
       });
     });
   });
-}
-
-async function startCitationZoteroFixture() {
-  const credential = randomUUID();
-  const libraryId = '884421';
-  const richKey = 'RICHZT22';
-  const partialKey = 'PARTZT33';
-  const collectionKey = 'CITECL22';
-
-  const richItem = {
-    key: richKey,
-    version: 3,
-    links: { alternate: { href: `https://www.zotero.org/groups/${libraryId}/items/${richKey}` } },
-    meta: { creatorSummary: 'Ada Lovelace and Charles Babbage' },
-    data: {
-      itemType: 'journalArticle',
-      title: 'Analytical Engine Memory Tables',
-      date: '2024-05-10',
-      DOI: '10.1000/zotero.2024.42',
-      url: 'https://journal.example.org/analytical-engine',
-      collections: [collectionKey]
-    }
-  };
-
-  const partialItem = {
-    key: partialKey,
-    version: 4,
-    links: { alternate: { href: `https://www.zotero.org/groups/${libraryId}/items/${partialKey}` } },
-    meta: { creatorSummary: 'Grace Hopper' },
-    data: {
-      itemType: 'journalArticle',
-      title: 'Zotero Refined Title Without DOI',
-      date: '2025',
-      DOI: '',
-      url: '',
-      collections: [collectionKey]
-    }
-  };
-
-  const itemsByKey = new Map<string, Record<string, unknown>>([
-    [richKey, richItem],
-    [partialKey, partialItem]
-  ]);
-
-  const server = await startJsonFixture((req, url) => {
-    if (req.headers['zotero-api-key'] !== credential || req.headers['zotero-api-version'] !== '3') {
-      return { status: 403 };
-    }
-    const base = '/groups/' + libraryId;
-    if (url.pathname === base + '/collections') {
-      return {
-        status: 200,
-        headers: { 'Total-Results': '1' },
-        value: [{ key: collectionKey, data: { name: 'Citation Export Tests', parentCollection: false } }]
-      };
-    }
-    if (url.pathname === base + '/items/top') {
-      const q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
-      const all = [richItem, partialItem];
-      const matched = q ? all.filter(item => item.data.title.toLowerCase().includes(q)) : all;
-      return { status: 200, value: matched.length ? matched : all };
-    }
-    const itemMatch = new RegExp(`^${base}/items/([A-Z0-9]+)$`).exec(url.pathname);
-    if (itemMatch) {
-      const found = itemsByKey.get(itemMatch[1]);
-      if (found) return { status: 200, value: found };
-    }
-    return { status: 404 };
-  });
-
-  return { ...server, credential, libraryId, richItem, partialItem };
 }
 
 async function openReferenceTab(page: Page) {
@@ -175,14 +102,6 @@ async function openReferenceTab(page: Page) {
   }
   await page.locator('#refsTab').click();
   await page.locator('.citation-export').waitFor({ state: 'visible' });
-}
-
-async function readDownload(download: Download): Promise<{ filename: string; text: string }> {
-  const filename = download.suggestedFilename();
-  const filePath = await download.path();
-  assert.ok(filePath, `Expected download path for ${filename}`);
-  const text = await readFile(filePath, 'utf8');
-  return { filename, text };
 }
 
 async function openWebArticleViaLibrary(page: Page, url: string) {
@@ -199,17 +118,12 @@ async function openWebArticleViaLibrary(page: Page, url: string) {
   await page.locator('.web-reading-sheet[data-side="source"]').waitFor({ state: 'visible' });
 }
 
-async function createMinimalPdfBytes(browserPage: Page): Promise<Buffer> {
-  await browserPage.setContent('<html><body><h1>Scratch Notes</h1><p>Undated local draft PDF for citation export testing.</p></body></html>');
-  return Buffer.from(await browserPage.pdf({ format: 'A4' }));
-}
-
 const publisherLog = path.join(os.tmpdir(), 'paper-reader-citation-pub-' + randomUUID() + '.ndjson');
 await writeFile(publisherLog, '', { flag: 'wx' });
 
 try {
   const publisher = await startAcademicPublisherFixture();
-  const zotero = await startCitationZoteroFixture();
+  const zotero = await startRichZoteroFixture({ libraryId: '884421', collectionName: 'Citation Export Tests', includePartial: true });
   try {
     await withHost(async host => {
       const browser = await chromium.launch({
@@ -312,54 +226,44 @@ try {
         assert.equal(downloadedRis.text, copiedRis);
         console.log('PASS T1-F3-04: Download .ris on pagedattention.');
 
-        // T2-F3-07: Clipboard NotAllowedError fallback + full blocked recovery while Download still succeeds.
-        await page.evaluate(`(() => {
-          window.__origWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-          window.__origExecCommand = document.execCommand.bind(document);
-          window.__fallbackCopied = '';
-          Object.defineProperty(navigator.clipboard, 'writeText', {
-            configurable: true,
-            value: function () { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); }
-          });
-          document.execCommand = function (command) {
-            if (command === 'copy') {
-              const active = document.activeElement;
-              window.__fallbackCopied = active && 'value' in active ? String(active.value) : '';
+        type ClipWin = Window & { __origWrite?: typeof navigator.clipboard.writeText; __origExec?: typeof document.execCommand; __copied?: string };
+        await page.evaluate(() => {
+          const w = window as ClipWin;
+          w.__origWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
+          w.__origExec = document.execCommand.bind(document);
+          w.__copied = '';
+          const stubs = {
+            writeText() { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); },
+            execCommand(cmd: string) {
+              if (cmd !== 'copy') return false;
+              const a = document.activeElement;
+              w.__copied = a && 'value' in a ? String(a.value) : '';
               return true;
             }
-            return false;
           };
-        })()`);
+          Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: stubs.writeText });
+          document.execCommand = stubs.execCommand;
+        });
         await page.getByRole('button', { name: 'Copy BibTeX', exact: true }).click();
         await page.locator('.citation-export-status').filter({ hasText: 'BibTeX copied to clipboard.' }).waitFor({ state: 'visible' });
-        const fallbackText = await page.evaluate(() => (window as unknown as { __fallbackCopied: string }).__fallbackCopied);
-        assert.equal(fallbackText, copiedBib);
-
-        // Now force execCommand('copy') to fail too -> actionable status, no crash, Download .ris still works.
-        await page.evaluate(`(() => { document.execCommand = function () { return false; }; })()`);
+        assert.equal(await page.evaluate(() => (window as ClipWin).__copied ?? ''), copiedBib);
+        await page.evaluate(() => { const s = { execCommand() { return false; } }; document.execCommand = s.execCommand; });
         await page.getByRole('button', { name: 'Copy RIS', exact: true }).click();
         await page.locator('.citation-export-status').filter({ hasText: 'Clipboard access was blocked. Use Download instead.' }).waitFor({ state: 'visible' });
         const [recoveryDownload] = await Promise.all([
           page.waitForEvent('download'),
           page.getByRole('button', { name: 'Download .ris', exact: true }).click()
         ]);
-        const recoveryRis = await readDownload(recoveryDownload);
-        assert.equal(recoveryRis.text, copiedRis);
-
-        // Restore clipboard APIs.
-        await page.evaluate(`(() => {
-          Object.defineProperty(navigator.clipboard, 'writeText', {
-            configurable: true,
-            value: window.__origWriteText
-          });
-          document.execCommand = window.__origExecCommand;
-        })()`);
+        assert.equal((await readDownload(recoveryDownload)).text, copiedRis);
+        await page.evaluate(() => {
+          const w = window as ClipWin;
+          if (w.__origWrite) Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: w.__origWrite });
+          if (w.__origExec) document.execCommand = w.__origExec;
+        });
         console.log('PASS T2-F3-07: Clipboard NotAllowedError fallback and blocked-clipboard download recovery.');
 
         // T2-F3-01: Sparse bare-filename PDF notes.pdf (with Zotero still unconfigured).
-        const pdfGenPage = await context.newPage();
-        const pdfBytes = await createMinimalPdfBytes(pdfGenPage);
-        await pdfGenPage.close();
+        const pdfBytes = await makePdf(context, 'Scratch Notes', ['Undated local draft PDF for citation export testing.']);
         const importRes = await context.request.post(host.origin + '/api/paper-reader/import-pdf?title=notes.pdf', {
           headers: { 'content-type': 'application/pdf' },
           data: pdfBytes

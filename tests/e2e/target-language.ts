@@ -1,96 +1,13 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { chromium, type APIRequestContext, type FrameLocator, type Page } from 'playwright-core';
+import { chromium, type FrameLocator, type Page } from 'playwright-core';
 import type { DocumentInfo, ReaderState } from '../../src/shared/types.js';
+import { startVersatileLlmFixture } from './helpers/fixtures.js';
+import { attachErrorGuards, makePdf, rpc, saveTargetLanguage, selectFirstPdfRun } from './helpers/reader.js';
 import { openReader, withHost } from './host.js';
-import { startJsonFixture } from './integration-fixtures.js';
 
 type Reader = Page | FrameLocator;
-
-interface RecordedCall {
-  target: string;
-  mode: 'blocks' | 'passage';
-  system: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-async function action<T = Record<string, unknown>>(
-  request: APIRequestContext,
-  origin: string,
-  op: string,
-  payload: Record<string, unknown> = {}
-): Promise<{ status: number; body: T }> {
-  const response = await request.post(origin + '/api/paper-reader/action', {
-    headers: { 'content-type': 'application/json' },
-    data: { op, payload }
-  });
-  const body = await response.json() as T;
-  return { status: response.status(), body };
-}
-
-async function multilingualModelFixture() {
-  const key = randomUUID();
-  const model = 'multilingual-fixture-v1';
-  const calls: RecordedCall[] = [];
-  const prefixByTarget: Record<string, string> = {
-    'Japanese': '日本語訳: ',
-    'French': 'Traduction française : ',
-    'German': 'Deutsche Übersetzung: ',
-    'Portuguese': 'Tradução em português: ',
-    'Esperanto': 'Esperanta traduko: '
-  };
-
-  const server = await startJsonFixture((req, url, body) => {
-    if (url.pathname !== '/v1/chat/completions' || req.method !== 'POST') return { status: 404 };
-    if (req.headers.authorization !== 'Bearer ' + key) return { status: 403 };
-    if (!isRecord(body) || body.model !== model || !Array.isArray(body.messages)) return { status: 400 };
-    const messages = body.messages.filter(isRecord);
-    const system = String(messages.find(m => m.role === 'system')?.content ?? '');
-    const userContent = String(messages.find(m => m.role === 'user')?.content ?? '');
-
-    const blockMatch = /Translate each passage in full into ([^.]+)\./.exec(system);
-    if (blockMatch) {
-      const target = blockMatch[1].trim();
-      calls.push({ target, mode: 'blocks', system });
-      const parsed = JSON.parse(userContent) as { blocks: { id: string; text: string }[] };
-      const translations = Object.fromEntries(parsed.blocks.map(block => {
-        if (target === 'Simplified Chinese') return [block.id, '简体中文译文：系统可以高效分配内存块。'];
-        if (target === 'English') return [block.id, block.text];
-        const prefix = prefixByTarget[target] ?? `[${target}] `;
-        return [block.id, prefix + block.text];
-      }));
-      return {
-        status: 200,
-        value: { choices: [{ message: { role: 'assistant', content: JSON.stringify({ translations }) }, finish_reason: 'stop' }] }
-      };
-    }
-
-    const translateMatch = /Translate into ([^.]+)\./.exec(system);
-    const defaultMatch = /Use ([^.]+) by default/.exec(system);
-    const target = (translateMatch?.[1] ?? defaultMatch?.[1] ?? 'Unknown').trim();
-    calls.push({ target, mode: 'passage', system });
-    const answer = target === 'German'
-      ? 'Deutsche Übersetzung: Der Speicherblock wird dynamisch zugewiesen.'
-      : `[${target}] Passage answer.`;
-    return {
-      status: 200,
-      value: { choices: [{ message: { role: 'assistant', content: answer }, finish_reason: 'stop' }] }
-    };
-  });
-
-  return {
-    ...server,
-    baseUrl: server.origin + '/v1',
-    key,
-    model,
-    calls
-  };
-}
 
 async function openConnections(reader: Reader) {
   await reader.getByRole('button', { name: /^(More actions|更多操作)$/ }).click();
@@ -100,26 +17,8 @@ async function openConnections(reader: Reader) {
   return dialog;
 }
 
-async function saveTargetLanguage(reader: Reader, target: string, options?: { custom?: boolean; baseUrl?: string; model?: string; apiKey?: string }) {
-  const dialog = await openConnections(reader);
-  if (options?.baseUrl !== undefined) await dialog.getByLabel('API base URL').fill(options.baseUrl);
-  if (options?.model !== undefined) await dialog.getByLabel('Model', { exact: true }).fill(options.model);
-  if (options?.apiKey !== undefined) await dialog.getByLabel('API key', { exact: true }).fill(options.apiKey);
-  const select = dialog.getByRole('combobox', { name: 'Translation language', exact: true });
-  if (options?.custom) {
-    await select.selectOption('__custom__');
-    const customInput = dialog.getByLabel('Custom target language', { exact: true });
-    await customInput.waitFor({ state: 'visible' });
-    await customInput.fill(target);
-  } else {
-    await select.selectOption(target);
-  }
-  await dialog.getByRole('button', { name: 'Save connections', exact: true }).click();
-  await dialog.waitFor({ state: 'hidden' });
-}
-
 await withHost(async host => {
-  const fixture = await multilingualModelFixture();
+  const fixture = await startVersatileLlmFixture('multilingual-fixture-v1');
   const browser = await chromium.launch({
     executablePath: host.executable,
     headless: process.env.PAPER_READER_HEADED !== '1'
@@ -133,19 +32,11 @@ await withHost(async host => {
       locale: 'en-US'
     });
     const shellPage = await context.newPage();
-    shellPage.setDefaultTimeout(12_000);
-    const recordConsoleError = (tag: string, msg: { type(): string; text(): string; location(): { url: string } }) => {
-      if (msg.type() !== 'error') return;
-      const loc = msg.location().url;
-      if (loc.endsWith('/favicon.ico')) return;
-      consoleErrors.push(`${tag}: ${msg.text()} (${loc})`);
-    };
-    shellPage.on('pageerror', error => pageErrors.push('shell: ' + error.message));
-    shellPage.on('console', msg => recordConsoleError('shell', msg));
+    attachErrorGuards(shellPage, 'shell', {}, pageErrors, consoleErrors);
 
     // T1-F2-01: Default target language is Simplified Chinese; bundled pagedattention p. 6 paints with 0 LLM calls.
     const iframeReader = await openReader(shellPage, host.authenticatedUrl);
-    const initialState = await action<ReaderState>(context.request, host.origin, 'state');
+    const initialState = await rpc<ReaderState>(context.request, host.origin, 'state');
     assert.equal(initialState.status, 200);
     assert.equal(initialState.body.settings.targetLanguage, 'Simplified Chinese');
 
@@ -169,7 +60,7 @@ await withHost(async host => {
     assert.equal(await iframeReader.locator('#translated .pdf-translated-text:visible').count(), 0);
     assert.equal(await iframeReader.locator('#translationInfo').textContent(), 'Traditional Chinese');
 
-    const unconfiguredKorean = await action(context.request, host.origin, 'translation.page', {
+    const unconfiguredKorean = await rpc(context.request, host.origin, 'translation.page', {
       docId: 'pagedattention',
       page: 6,
       targetLanguage: 'Korean',
@@ -180,29 +71,27 @@ await withHost(async host => {
 
     // T2-F2-01: Empty / whitespace targetLanguage rejected (HTTP 400), prior value intact.
     for (const bad of ['', '   ', '   \t ']) {
-      const res = await action(context.request, host.origin, 'settings.save', { targetLanguage: bad });
+      const res = await rpc(context.request, host.origin, 'settings.save', { targetLanguage: bad });
       assert.equal(res.status, 400, 'Expected 400 for ' + JSON.stringify(bad));
     }
-    assert.equal((await action<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Traditional Chinese');
+    assert.equal((await rpc<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Traditional Chinese');
     console.log('PASS T2-F2-01: Empty and whitespace targetLanguage rejected with HTTP 400.');
 
     // T2-F2-02: 64-char accepted vs 65-char and control chars rejected (HTTP 400).
     const maxLen = 'L'.repeat(64);
-    assert.equal((await action(context.request, host.origin, 'settings.save', { targetLanguage: maxLen })).status, 200);
-    assert.equal((await action<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, maxLen);
+    assert.equal((await rpc(context.request, host.origin, 'settings.save', { targetLanguage: maxLen })).status, 200);
+    assert.equal((await rpc<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, maxLen);
     for (const bad of ['L'.repeat(65), 'French\nJapanese', 'French\0', 'French\r']) {
-      const res = await action(context.request, host.origin, 'settings.save', { targetLanguage: bad });
+      const res = await rpc(context.request, host.origin, 'settings.save', { targetLanguage: bad });
       assert.equal(res.status, 400, 'Expected 400 for ' + JSON.stringify(bad));
     }
-    assert.equal((await action<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, maxLen);
+    assert.equal((await rpc<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, maxLen);
     console.log('PASS T2-F2-02: 64-char accepted; 65-char and control chars rejected with HTTP 400.');
 
     // Open direct standalone reader page in same authenticated context for fast deterministic reload & selection checks.
     const readerUrl = await iframeReader.locator('body').evaluate(body => body.ownerDocument.location.href);
     const page = await context.newPage();
-    page.setDefaultTimeout(12_000);
-    page.on('pageerror', error => pageErrors.push('reader: ' + error.message));
-    page.on('console', msg => recordConsoleError('reader', msg));
+    attachErrorGuards(page, 'reader', {}, pageErrors, consoleErrors);
     await page.goto(readerUrl);
     await page.locator('#loading').waitFor({ state: 'hidden' });
 
@@ -210,7 +99,7 @@ await withHost(async host => {
     await saveTargetLanguage(page, 'Japanese', { baseUrl: fixture.baseUrl, model: fixture.model, apiKey: fixture.key });
     await page.reload();
     await page.locator('#loading').waitFor({ state: 'hidden' });
-    assert.equal((await action<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Japanese');
+    assert.equal((await rpc<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Japanese');
     assert.equal(await page.locator('#translationInfo').textContent(), 'Japanese');
     const reopenedDialog = await openConnections(page);
     assert.equal(await reopenedDialog.getByRole('combobox', { name: 'Translation language', exact: true }).inputValue(), 'Japanese');
@@ -220,14 +109,10 @@ await withHost(async host => {
     console.log('PASS T1-F2-02: Preset Japanese persists across reload and updates #translationInfo.');
 
     // Create & import synthetic 1-page English PDF.
-    const pdfBuilder = await context.newPage();
-    await pdfBuilder.setContent(
-      '<style>@page{size:letter;margin:1in}body{font:16pt Georgia;line-height:1.5}</style>' +
-      '<p>The memory allocator assigns physical blocks dynamically as sequence length grows.</p>' +
-      '<p>Paged attention eliminates internal fragmentation across concurrent requests.</p>'
-    );
-    const pdfBytes = await pdfBuilder.pdf({ preferCSSPageSize: true });
-    await pdfBuilder.close();
+    const pdfBytes = await makePdf(context, 'Target Language Test', [
+      'The memory allocator assigns physical blocks dynamically as sequence length grows.',
+      'Paged attention eliminates internal fragmentation across concurrent requests.'
+    ]);
     const importResp = await context.request.post(host.origin + '/api/paper-reader/import-pdf?title=TargetLangTest.pdf', {
       headers: { 'content-type': 'application/pdf' },
       data: pdfBytes
@@ -317,7 +202,7 @@ await withHost(async host => {
 
     await page.reload();
     await page.locator('#loading').waitFor({ state: 'hidden' });
-    assert.equal((await action<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Esperanto');
+    assert.equal((await rpc<ReaderState>(context.request, host.origin, 'state')).body.settings.targetLanguage, 'Esperanto');
     const eoDialog = await openConnections(page);
     assert.equal(await eoDialog.getByRole('combobox', { name: 'Translation language', exact: true }).inputValue(), '__custom__');
     assert.equal(await eoDialog.getByLabel('Custom target language', { exact: true }).inputValue(), 'Esperanto');
@@ -327,7 +212,7 @@ await withHost(async host => {
 
     // T1-F2-05: Web article translation respects targetLanguage (French) & caches across reload.
     await saveTargetLanguage(page, 'French');
-    const importedWeb = await action<{ doc: DocumentInfo }>(context.request, host.origin, 'web.import', {
+    const importedWeb = await rpc<{ doc: DocumentInfo }>(context.request, host.origin, 'web.import', {
       url: 'https://example.org/multilingual-article',
       title: 'Multilingual Article Fixture',
       paragraphs: [
@@ -361,24 +246,7 @@ await withHost(async host => {
     await page.getByRole('group', { name: 'German, page 1', exact: true }).waitFor();
     await page.locator('#translated .pdf-translated-text[lang="de"]:visible').first().waitFor();
 
-    const firstRun = page.locator('#original .pdf-native-text [data-block-id]').first();
-    const blockId = await firstRun.getAttribute('data-block-id');
-    assert.ok(blockId);
-    await page.locator('#original .pdf-native-text [data-block-id="' + blockId + '"]').evaluateAll(elements => {
-      const start = elements[0]?.firstChild;
-      let end = start;
-      for (const node of elements) {
-        if (node.firstChild instanceof Text) end = node.firstChild;
-      }
-      if (!(start instanceof Text) || !(end instanceof Text)) throw new Error('Missing PDF source text runs.');
-      const range = document.createRange();
-      range.setStart(start, 0);
-      range.setEnd(end, end.length);
-      const sel = window.getSelection()!;
-      sel.removeAllRanges();
-      sel.addRange(range);
-      elements[0].dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
-    });
+    await selectFirstPdfRun(page);
 
     const card = page.locator('#card');
     await card.waitFor({ state: 'visible' });
@@ -395,15 +263,13 @@ await withHost(async host => {
     console.log('PASS T1-F2-06: Selection card quick-action starter and AI call follow German targetLanguage.');
 
     // ZH UI spot-check: localized targetLanguage labels and settings controls in zh-CN locale.
-    assert.equal((await action(context.request, host.origin, 'settings.save', { targetLanguage: 'Japanese' })).status, 200);
+    assert.equal((await rpc(context.request, host.origin, 'settings.save', { targetLanguage: 'Japanese' })).status, 200);
     const zhContext = await browser.newContext({
       viewport: { width: 1600, height: 960 },
       locale: 'zh-CN'
     });
     const zhPage = await zhContext.newPage();
-    zhPage.setDefaultTimeout(12_000);
-    zhPage.on('pageerror', error => pageErrors.push('zh: ' + error.message));
-    zhPage.on('console', msg => recordConsoleError('zh', msg));
+    attachErrorGuards(zhPage, 'zh', {}, pageErrors, consoleErrors);
     await zhPage.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
     await zhPage.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
     await zhPage.locator('#loading').waitFor({ state: 'hidden' });

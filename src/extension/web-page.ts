@@ -2,7 +2,7 @@ import type { Operations } from '../shared/types.js';
 import { extractArticle, type ArticleTree } from '../shared/web-article.js';
 import { extLabel } from './protocol.js';
 
-export type WebImport = Operations['web.import'][0];
+type WebImport = Operations['web.import'][0];
 export interface PickedText {
   range: Range;
   text: string;

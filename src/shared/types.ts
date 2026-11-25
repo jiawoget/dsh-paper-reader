@@ -88,7 +88,7 @@ export interface SourceRecord {
   docId: string; title: string; page: number; anchor: string; label: string; sourceUrl: string;
 }
 export interface JournalNote extends SourceRecord { id: string; text: string; quote: string; context?: string; createdAt: string; updatedAt: string }
-export interface NotebookRequest { docId: string; title: string; sourceUrl: string; page?: number }
+interface NotebookRequest { docId: string; title: string; sourceUrl: string; page?: number }
 export interface NotebookSnapshot {
   docId: string; markdown: string; revision: string; notes: JournalNote[];
   chapterId?: string; chapterTitle?: string; vaultPending?: boolean;
@@ -132,7 +132,7 @@ export interface ZoteroItem {
   url?: string; doi?: string; webUrl?: string;
 }
 export interface Collection { key: string; name: string; parentCollection: string | null; webUrl?: string }
-export type ZoteroOpenResult =
+type ZoteroOpenResult =
   | { kind: 'document'; doc: DocumentInfo }
   | { kind: 'article'; url: string }
   | { kind: 'unavailable'; zoteroUrl: string };

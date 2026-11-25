@@ -5,154 +5,27 @@ import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { chromium } from 'playwright-core';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
 import { cardElement, openToolbar, until } from './extension-controls.js';
+import { computeElementMetrics, inspectShadowCardMetrics, type RawElementSample } from './helpers/contrast.js';
+import { assertNoEnBannedTerms, assertNoZhEnglishLeaks, collectChromeStrings } from './helpers/i18n.js';
+import { openReaderPage, type ErrorScope } from './helpers/reader.js';
 import { withHost, type HostFixture } from './host.js';
 
 const extensionPath = fileURLToPath(new URL('../../dist/extension', import.meta.url));
 const preload = new URL('./book-reading-preload.ts', import.meta.url).href;
 const appPath = '/api/paper-reader/app/index.html';
-
-const CONTRAST_HELPER = `
-function parseCssColor(raw) {
-  if (!raw || raw === 'transparent') return [0, 0, 0, 0];
-  const srgb = /color\\(srgb\\s+([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)(?:\\s*\\/\\s*([\\d.]+))?\\)/.exec(raw);
-  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255, srgb[4] !== undefined ? Number(srgb[4]) : 1];
-  const rgba = /rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:[,/\\s]+([\\d.]+%?))?\\s*\\)/.exec(raw);
-  if (!rgba) return [0, 0, 0, 1];
-  let a = 1;
-  if (rgba[4] !== undefined) a = rgba[4].endsWith('%') ? parseFloat(rgba[4]) / 100 : Number(rgba[4]);
-  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), a];
-}
-function composite(top, bottom) {
-  const a = top[3], outA = a + bottom[3] * (1 - a);
-  if (outA <= 0) return [0, 0, 0, 0];
-  return [
-    (top[0] * a + bottom[0] * bottom[3] * (1 - a)) / outA,
-    (top[1] * a + bottom[1] * bottom[3] * (1 - a)) / outA,
-    (top[2] * a + bottom[2] * bottom[3] * (1 - a)) / outA,
-    outA
-  ];
-}
-function relLum(rgb) {
-  const c = v => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
-  return 0.2126 * c(rgb[0]) + 0.7152 * c(rgb[1]) + 0.0722 * c(rgb[2]);
-}
-function measureContrast(el) {
-  const layers = [];
-  for (let cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(parseCssColor(getComputedStyle(cur).backgroundColor));
-  const darkRoot = document.documentElement.dataset.theme === 'dark';
-  let bg = darkRoot ? [19, 22, 31, 1] : [255, 255, 255, 1];
-  for (let i = layers.length - 1; i >= 0; i--) if (layers[i][3] > 0) bg = composite(layers[i], bg);
-  const style = getComputedStyle(el);
-  const fgRaw = parseCssColor(style.color);
-  const fg = fgRaw[3] < 1 ? composite(fgRaw, bg) : fgRaw;
-  const l1 = Math.max(relLum(fg), relLum(bg)), l2 = Math.min(relLum(fg), relLum(bg));
-  return { ratio: (l1 + 0.05) / (l2 + 0.05), fontSize: parseFloat(style.fontSize) || 0 };
-}
-globalThis.measureContrast = measureContrast;
-`;
-
-// Proper nouns, standards, keycaps, and bundled sample paper identifiers allowed inside zh-CN chrome.
-const ZH_ENGLISH_ALLOWLIST = new Set([
-  'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown',
-  'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
-  'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
-  'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
-  'woosuk', 'et', 'al', 'key', 'value', 'kv'
-]);
-
-const BANNED_EN_RE = /\b(?:Annotations|Paper conversation|Paper discussion|Reading notebook|Notebook)\b/i;
-const BANNED_ZH_RE = /(?:阅读笔记本|笔记本|批注索引|批注|Obsidian\s*仓库|已存入仓库|存入仓库)/;
-
-function attachErrorGuards(page: Page): { pageErrors: string[]; consoleErrors: string[] } {
-  const pageErrors: string[] = [];
-  const consoleErrors: string[] = [];
-  page.on('pageerror', err => pageErrors.push(err.message));
-  page.on('console', msg => {
-    if (msg.type() !== 'error') return;
-    const text = msg.text();
-    // Isolated E2E host has no live Zotero desktop daemon or optional favicon, so ignore expected 404/503 network logs.
-    if (/Failed to load resource: the server responded with a status of (?:404|503)\b/.test(text)) return;
-    consoleErrors.push(text);
-  });
-  return { pageErrors, consoleErrors };
-}
-
-async function openReaderPage(context: BrowserContext, host: HostFixture, query = '?doc=pagedattention&page=6'): Promise<Page> {
-  const page = await context.newPage();
-  page.setDefaultTimeout(12_000);
-  await page.goto(host.authenticatedUrl, { waitUntil: 'domcontentloaded' });
-  await page.goto(host.origin + appPath + query, { waitUntil: 'domcontentloaded' });
-  await page.locator('#loading').waitFor({ state: 'hidden' });
-  return page;
-}
-
-async function collectChromeStrings(page: Page): Promise<{ text: string; source: string }[]> {
-  return page.evaluate(() => {
-    const excluded = '.pdf-sheet, .pdf-reading-text p, .pdf-reading-text h2, .meaning, #card blockquote, .web-reading-sheet, .cm-content, .quote, .selection-excerpt blockquote, .selection-heading h2, #docTitle, #docMeta, #railBody h1, .list-row strong, .toc-entry, .toc-fold, .paper-answer, .selection-answer, .library-row-text strong, .library-row-text small, .doc-row strong, .doc-row small, #sourceInfo';
-    const items: { text: string; source: string }[] = [];
-    const seen = new Set<string>();
-    const elements = document.querySelectorAll<HTMLElement>('body *');
-    for (const el of elements) {
-      if (el.closest(excluded)) continue;
-      if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'SVG' || el.closest('svg')) continue;
-      const hidden = el.closest('[hidden]') && !el.closest('dialog[open]');
-      // Always audit ARIA / title / placeholder even on hidden/icon-only controls!
-      const idTag = el.id ? '#' + el.id : el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : el.tagName.toLowerCase();
-      const candidates: [string | null | undefined, string][] = [
-        [el.getAttribute('aria-label'), `${idTag}[aria-label]`],
-        [el.getAttribute('title'), `${idTag}[title]`],
-        [el.getAttribute('placeholder'), `${idTag}[placeholder]`]
-      ];
-      if (!hidden) {
-        for (const child of el.childNodes) {
-          if (child.nodeType === Node.TEXT_NODE) candidates.push([child.textContent, `${idTag}:text`]);
-        }
-      }
-      for (const [raw, source] of candidates) {
-        const value = (raw ?? '').replace(/\s+/gu, ' ').trim();
-        if (!value) continue;
-        const key = source + '|' + value;
-        if (!seen.has(key)) { seen.add(key); items.push({ text: value, source }); }
-      }
-    }
-    return items;
-  });
-}
-
-function assertNoZhEnglishLeaks(items: { text: string; source: string }[], contextLabel: string): void {
-  const leaks: string[] = [];
-  for (const item of items) {
-    const banned = item.text.match(BANNED_ZH_RE);
-    assert.equal(banned, null, `[${contextLabel}] Banned ZH drift term in ${item.source}: ${JSON.stringify(item.text)}`);
-    const words = item.text.match(/[A-Za-z]{3,}/g) ?? [];
-    const bad = words.filter(word => !ZH_ENGLISH_ALLOWLIST.has(word.toLowerCase()));
-    if (bad.length) leaks.push(`${item.source}: "${item.text}" -> [${bad.join(', ')}]`);
-  }
-  assert.deepEqual(leaks, [], `[${contextLabel}] Untranslated English leaks in zh-CN:\n${leaks.join('\n')}`);
-}
-
-function assertNoEnBannedTerms(items: { text: string; source: string }[], contextLabel: string): void {
-  const violations: string[] = [];
-  for (const item of items) {
-    if (BANNED_EN_RE.test(item.text)) {
-      violations.push(`${item.source}: "${item.text}"`);
-    }
-  }
-  assert.deepEqual(violations, [], `[${contextLabel}] Banned EN drift terms:\n${violations.join('\n')}`);
-}
+const defaultScope: ErrorScope = { allowZotero503: true, allowExpected404: true };
 
 async function testF6Shortcuts(host: HostFixture): Promise<void> {
   const browser = await chromium.launch({ executablePath: host.executable });
   try {
     // 1. Desktop en-US shortcuts on PDF, OpenStax book, and web article
     const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
-    const page = await openReaderPage(context, host);
-    const { pageErrors, consoleErrors } = attachErrorGuards(page);
+    const pageErrors: string[] = [], consoleErrors: string[] = [];
+    const page = await openReaderPage(context, host, '?doc=pagedattention&page=6', { tag: 'F6', scope: defaultScope, pageErrors, consoleErrors });
 
-    // T1-F6-01 & T2-F6-07: Shift+? opens #shortcutsDialog, repeated Shift+? is safe no-op, Esc restores focus
     const paperScroll = page.locator('#paperScroll');
     await paperScroll.focus();
     await page.keyboard.press('Shift+?');
@@ -162,17 +35,19 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
     await dialog.getByRole('heading', { name: 'Keyboard shortcuts', exact: true }).waitFor();
     assert.ok(await dialog.locator('table.shortcuts-table').count() >= 4, 'Shortcuts dialog should render grouped semantic tables.');
 
-    // Verify light-mode contrast >= 4.5:1 and fontSize >= 12px
-    const lightMetrics = await dialog.evaluate((_el, helper) => {
-      // eslint-disable-next-line no-eval
-      eval(helper);
-      const measure = (globalThis as unknown as { measureContrast: (el: Element) => { ratio: number; fontSize: number } }).measureContrast;
-      const samples = [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')];
-      return samples.map(el => ({ tag: el.tagName, ...measure(el) }));
-    }, CONTRAST_HELPER);
-    for (const m of lightMetrics) {
-      assert.ok(m.ratio >= 4.5, `Light shortcuts contrast too low on ${m.tag}: ${m.ratio.toFixed(2)}`);
-      assert.ok(m.fontSize >= 12, `Light shortcuts font size < 12px on ${m.tag}: ${m.fontSize}`);
+    const lightSamples = await dialog.evaluate((): (RawElementSample & { tag: string })[] => {
+      const darkRoot = document.documentElement.dataset.theme === 'dark';
+      return [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')].map(el => {
+        const layers: string[] = [];
+        for (let cur: Element | null = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
+        const s = getComputedStyle(el);
+        return { tag: el.tagName, fg: s.color, layers, darkRoot, fontSize: parseFloat(s.fontSize) || 0, colorScheme: s.colorScheme };
+      });
+    });
+    for (const s of lightSamples) {
+      const m = computeElementMetrics(s);
+      assert.ok(m.ratio >= 4.5, `Light shortcuts contrast too low on ${s.tag}: ${m.ratio.toFixed(2)}`);
+      assert.ok(m.fontSize >= 12, `Light shortcuts font size < 12px on ${s.tag}: ${m.fontSize}`);
     }
 
     // Repeated Shift+? while open causes no duplicate/error
@@ -381,36 +256,40 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
       isMobile: true,
       hasTouch: true
     });
-    const mPage = await openReaderPage(mobileDark, host);
-    const mGuards = attachErrorGuards(mPage);
+    const mPageErrors: string[] = [], mConsoleErrors: string[] = [];
+    const mPage = await openReaderPage(mobileDark, host, '?doc=pagedattention&page=6', { tag: 'F6-mobile', scope: defaultScope, pageErrors: mPageErrors, consoleErrors: mConsoleErrors });
     assert.equal(await mPage.evaluate(() => document.documentElement.dataset.theme), 'dark');
     await mPage.locator('#more').click();
     await mPage.locator('#menu').getByRole('button', { name: '快捷键', exact: true }).click();
     const mDialog = mPage.locator('#shortcutsDialog');
     await mDialog.waitFor({ state: 'visible' });
-    const mobileAudit = await mDialog.evaluate((_el, helper) => {
-      // eslint-disable-next-line no-eval
-      eval(helper);
-      const measure = (globalThis as unknown as { measureContrast: (el: Element) => { ratio: number; fontSize: number } }).measureContrast;
+    const mobileAudit = await mDialog.evaluate(() => {
+      const darkRoot = document.documentElement.dataset.theme === 'dark';
       const closeRect = document.getElementById('closeShortcuts')!.getBoundingClientRect();
-      const samples = [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')];
+      const samples: (RawElementSample & { tag: string })[] = [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')].map(el => {
+        const layers: string[] = [];
+        for (let cur: Element | null = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
+        const s = getComputedStyle(el);
+        return { tag: el.tagName, fg: s.color, layers, darkRoot, fontSize: parseFloat(s.fontSize) || 0, colorScheme: s.colorScheme };
+      });
       return {
         overflow: document.documentElement.scrollWidth - innerWidth,
         dialogOverflow: document.getElementById('shortcutsDialog')!.scrollWidth - document.getElementById('shortcutsDialog')!.clientWidth,
         closeWidth: closeRect.width,
         closeHeight: closeRect.height,
-        samples: samples.map(el => ({ tag: el.tagName, ...measure(el) }))
+        samples
       };
-    }, CONTRAST_HELPER);
+    });
     assert.ok(mobileAudit.overflow <= 1, `Mobile page horizontal overflow: ${mobileAudit.overflow}`);
     assert.ok(mobileAudit.dialogOverflow <= 1, `Shortcuts dialog horizontal overflow at 390x844: ${mobileAudit.dialogOverflow}`);
     assert.ok(mobileAudit.closeWidth >= 44 && mobileAudit.closeHeight >= 44, `Mobile closeShortcuts target < 44px: ${mobileAudit.closeWidth}x${mobileAudit.closeHeight}`);
-    for (const m of mobileAudit.samples) {
-      assert.ok(m.ratio >= 4.5, `Dark shortcuts contrast < 4.5 on ${m.tag}: ${m.ratio.toFixed(2)}`);
-      assert.ok(m.fontSize >= 12, `Dark shortcuts fontSize < 12px on ${m.tag}: ${m.fontSize}`);
+    for (const s of mobileAudit.samples) {
+      const m = computeElementMetrics(s);
+      assert.ok(m.ratio >= 4.5, `Dark shortcuts contrast < 4.5 on ${s.tag}: ${m.ratio.toFixed(2)}`);
+      assert.ok(m.fontSize >= 12, `Dark shortcuts fontSize < 12px on ${s.tag}: ${m.fontSize}`);
     }
-    assert.deepEqual(mGuards.pageErrors, []);
-    assert.deepEqual(mGuards.consoleErrors, []);
+    assert.deepEqual(mPageErrors, []);
+    assert.deepEqual(mConsoleErrors, []);
     await mobileDark.close();
     console.log('PASS F6: shortcuts modal (light/dark/390x844), Shift+?/?/Shift++/=/-, b/n/c repeat toggles, PDF & OpenStax Arrow nav, web no-op, suppression guards.');
   } finally { await browser.close(); }
@@ -420,8 +299,8 @@ async function testImeEscapeGuards(host: HostFixture): Promise<void> {
   const browser = await chromium.launch({ executablePath: host.executable });
   try {
     const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
-    const page = await openReaderPage(context, host);
-    const { pageErrors, consoleErrors } = attachErrorGuards(page);
+    const pageErrors: string[] = [], consoleErrors: string[] = [];
+    const page = await openReaderPage(context, host, '?doc=pagedattention&page=6', { tag: 'IME', scope: defaultScope, pageErrors, consoleErrors });
     const reader = page.locator('#reader');
 
     const dispatchImeEscapes = async (selector: string): Promise<void> => {
@@ -494,8 +373,8 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
   try {
     // 1. zh-CN full sweep across topbar, all 4 sidebar tabs, all 4 modals, selection card/notes/chat, Paper chat, empty & error states
     const zhCtx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
-    const zhPage = await openReaderPage(zhCtx, host);
-    const zhGuards = attachErrorGuards(zhPage);
+    const zhPageErrors: string[] = [], zhConsoleErrors: string[] = [];
+    const zhPage = await openReaderPage(zhCtx, host, '?doc=pagedattention&page=6', { tag: 'F7-zh', scope: defaultScope, pageErrors: zhPageErrors, consoleErrors: zhConsoleErrors });
 
     assert.equal(await zhPage.evaluate(() => document.documentElement.lang), 'zh-CN');
     assert.equal(await zhPage.locator('#mobileRail').getAttribute('aria-label'), '打开笔记');
@@ -614,6 +493,9 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     const modal = zhPage.locator('#dialog');
     await modal.waitFor({ state: 'visible' });
     await modal.getByRole('tab', { name: '本机文档', exact: true }).click();
+    const sampleRow = modal.locator('.doc-row').filter({ hasText: 'PagedAttention.pdf' });
+    await sampleRow.waitFor({ state: 'visible' });
+    assert.ok((await sampleRow.innerText()).includes('16 页'), 'Expected 16 页 in zh-CN Library row');
     await modal.getByRole('button', { name: '打开网页', exact: true }).click();
     await modal.getByLabel('网页地址', { exact: true }).fill('ftp://invalid.example');
     await modal.locator('#library-url-form').evaluate(form => (form as HTMLFormElement).dispatchEvent(new Event('submit', { cancelable: true })));
@@ -660,8 +542,8 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Shortcuts modal');
     await zhPage.locator('#closeShortcuts').click();
 
-    assert.deepEqual(zhGuards.pageErrors, []);
-    assert.deepEqual(zhGuards.consoleErrors, []);
+    assert.deepEqual(zhPageErrors, []);
+    assert.deepEqual(zhConsoleErrors, []);
     await zhCtx.close();
 
     // 2. T2-F7-02: Bare 'zh' activates Chinese UI (including localized sampleAreas labels)
@@ -687,8 +569,8 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
 
     // 4. en-US full terminology sweep (T1-F8-01, T1-F8-03, T2-F8-01..05)
     const enCtx = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
-    const enPage = await openReaderPage(enCtx, host);
-    const enGuards = attachErrorGuards(enPage);
+    const enPageErrors: string[] = [], enConsoleErrors: string[] = [];
+    const enPage = await openReaderPage(enCtx, host, '?doc=pagedattention&page=6', { tag: 'F8-en', scope: defaultScope, pageErrors: enPageErrors, consoleErrors: enConsoleErrors });
     assert.equal(await enPage.evaluate(() => document.documentElement.lang), 'en');
     assert.equal(await enPage.locator('#mobileRail').getAttribute('aria-label'), 'Show notes');
     assert.equal(await enPage.locator('#rail').getAttribute('aria-label'), 'Reading notes');
@@ -732,8 +614,8 @@ async function testF7AndF8I18nAndTerminology(host: HostFixture): Promise<void> {
     assertNoEnBannedTerms(await collectChromeStrings(enPage), 'en-US Shortcuts modal');
     await enPage.locator('#closeShortcuts').click();
 
-    assert.deepEqual(enGuards.pageErrors, []);
-    assert.deepEqual(enGuards.consoleErrors, []);
+    assert.deepEqual(enPageErrors, []);
+    assert.deepEqual(enConsoleErrors, []);
     await enCtx.close();
 
     console.log('PASS F7 & F8: complete EN/ZH/bare-zh/ja-JP i18n and strict Marks/Paper chat/Notes terminology unification verified with 0 leaks.');
@@ -780,36 +662,9 @@ async function testExtensionLocale(host: HostFixture, locale: 'zh-CN' | 'en-US')
     await popup.click('#toggle');
     await popup.detach();
 
-    // Double-click term on article to open shadow-DOM selection card
     await page.locator('#term').dblclick();
     await until(async () => Boolean(await cardElement(page, '.card')), 'Extension selection card did not open.');
-    const cdpCard = await page.context().newCDPSession(page);
-    let cardInfo: { lang: string | null; ariaLabel: string | null; closeAria: string | null; translate: string | null; note: string | null; hint: string | null } | null = null;
-    try {
-      const { root } = await cdpCard.send('DOM.getDocument');
-      const { nodeId } = await cdpCard.send('DOM.querySelector', { nodeId: root.nodeId, selector: '[data-dsh-paper-reader]' });
-      const { node } = await cdpCard.send('DOM.describeNode', { nodeId, pierce: true });
-      const shadow = node.shadowRoots?.[0];
-      assert.ok(shadow, 'Extension card shadow root missing.');
-      const { object } = await cdpCard.send('DOM.resolveNode', { backendNodeId: shadow.backendNodeId });
-      const { result } = await cdpCard.send('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        returnByValue: true,
-        functionDeclaration: function(this: ShadowRoot) {
-          const el = this.querySelector<HTMLElement>('.card');
-          if (!el) return null;
-          return {
-            lang: el.getAttribute('lang'),
-            ariaLabel: el.getAttribute('aria-label'),
-            closeAria: el.querySelector('[data-do="close"]')?.getAttribute('aria-label') ?? null,
-            translate: el.querySelector('[data-do="translate"]')?.textContent ?? null,
-            note: el.querySelector('[data-do="note"]')?.textContent ?? null,
-            hint: el.querySelector('.answer')?.textContent ?? null
-          };
-        }.toString()
-      });
-      cardInfo = result.value;
-    } finally { await cdpCard.detach(); }
+    const cardInfo = await inspectShadowCardMetrics(page, '.card');
     assert.ok(cardInfo, 'Extension selection card DOM info missing.');
 
     if (locale === 'zh-CN') {

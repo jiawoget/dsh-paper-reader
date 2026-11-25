@@ -1,7 +1,7 @@
 export const DEFAULT_TARGET_LANGUAGE = 'Simplified Chinese';
 export const TARGET_LANGUAGE_MAX_LENGTH = 64;
 
-export interface TargetLanguagePreset {
+interface TargetLanguagePreset {
   readonly id: string;
   readonly labelEn: string;
   readonly labelZh: string;

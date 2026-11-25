@@ -1,7 +1,7 @@
 import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api.js';
 
 interface ReferencePaper { pages: number; textContent(page: number): Promise<TextContent> }
-export interface BibliographyEntry { entry: string; title?: string }
+interface BibliographyEntry { entry: string; title?: string }
 export interface CitationGroup { text: string; numbers: number[]; from: number; to: number }
 const indices = new WeakMap<ReferencePaper, Promise<ReadonlyMap<number, BibliographyEntry>>>();
 const heading = /^(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+)?(?:references|bibliography|works cited|literature cited|参考文献)\s*[:.]?$/iu;
