@@ -40,6 +40,7 @@ function read(): DeskSettings {
 export class ReadingDesk {
   private settings = read();
   private narrow = matchMedia(compactReader);
+  private mobileBar = matchMedia('(max-width: 520px)');
   private readingWidth = matchMedia('(max-width: 1280px)');
   private root = byId('reader');
   private returnTo?: HTMLElement;
@@ -53,7 +54,7 @@ export class ReadingDesk {
   }
   get zoom(): number { return [1, 1.25, 1.5, 2].includes(this.settings.zoom ?? 0) ? this.settings.zoom! : 1; }
   get mode(): ReadingMode { return this.settings.mode === 'bilingual' ? 'bilingual' : 'source'; }
-  get isNarrow(): boolean { return this.narrow.matches; }
+  get isNarrow(): boolean { return this.narrow.matches; } get isMobileBar(): boolean { return this.mobileBar.matches; }
   get visibleLanguage(): 'original' | 'translation' { return this.isNarrow && this.mode === 'bilingual' ? 'translation' : 'original'; }
   get notebookOpen(): boolean {
     if (this.isNarrow) return this.settings.drawerOpen ?? this.settings.notebookOpen ?? false;
@@ -119,9 +120,17 @@ export class ReadingDesk {
     paper.scrollTop = offset * page.offsetHeight;
     if (translationOffset) translation.scrollTop = translationOffset * translation.scrollHeight;
   }
+  private syncMobileBar(): void {
+    const mobile = this.mobileBar.matches, bar = byId('mobileBar');
+    if (mobile === !bar.hidden) return;
+    bar.hidden = !mobile;
+    const toolbar = this.root.querySelector('.toolbar')!, capture = byId('captureRegion'), zoom = byId('zoomControl'), chat = this.root.querySelector('.paper-chat');
+    if (mobile) { bar.append(toolbar, capture, ...(chat ? [chat] : [])); byId('menu').append(zoom); }
+    else { byId('mobileRail').before(toolbar, capture); toolbar.querySelector('.reader-mode-switch')!.before(zoom); if (chat) byId('selectionDock').after(chat); }
+  }
   private apply(): void {
-    const focus = this.pdf ? this.focus : 'page';
-    const bilingual = this.mode === 'bilingual';
+    this.syncMobileBar();
+    const focus = this.pdf ? this.focus : 'page', bilingual = this.mode === 'bilingual';
     this.root.dataset.translationView = focus;
     this.root.dataset.readingMode = this.mode;
     this.root.dataset.compactLanguage = this.visibleLanguage;
@@ -231,7 +240,7 @@ export class ReadingDesk {
     this.split(previewGrip, (change, reset) => {
       this.settings.previewHeight = reset ? undefined : clamp(dock.offsetHeight - change, 64, maxPreviewHeight());
     });
-    window.addEventListener('resize', () => this.apply());
+    window.addEventListener('resize', () => this.apply()); this.mobileBar.addEventListener('change', () => this.apply());
     const viewport = window.visualViewport;
     if (viewport) {
       const fitSheet = () => {

@@ -234,7 +234,8 @@ const originalSentence = 'Each block table entry records the corresponding physi
 
 async function readTranslation(page: Page, mobile: boolean) {
   if (mobile) {
-    await activate(page.getByRole('button', { name: '读正文', exact: true }), mobile);
+    await activate(page.locator('#more'), mobile);
+    await activate(page.locator('#menu').getByRole('button', { name: '读正文', exact: true }), mobile);
     const paragraph = page.getByRole('region', { name: '本页正文' }).getByText(originalSentence, { exact: false }).first();
     await mouseSelect(page, paragraph, originalSentence);
   } else {
@@ -391,8 +392,10 @@ for (const mobile of mode) await withHost(async host => {
       await discussion(page).getByText(followupAnswer, { exact: true }).waitFor();
       assert.equal(model.calls.length, 2);
 
-      if (await page.getByRole('button', { name: '读正文', exact: true }).isVisible())
-        await activate(page.getByRole('button', { name: '读正文', exact: true }), mobile);
+      if (await page.getByRole('region', { name: '本页正文' }).isHidden()) {
+        if (mobile) await activate(page.locator('#more'), mobile);
+        await activate(page.locator(mobile ? '#menu' : '#pageFormat').getByRole('button', { name: '读正文', exact: true }), mobile);
+      }
       const text = page.getByRole('region', { name: '本页正文' }).getByRole('button', { name: /选中此段.*并行采样/ });
       await activate(text, mobile);
       const card = page.locator('#card');

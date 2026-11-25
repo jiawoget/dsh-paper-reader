@@ -92,7 +92,7 @@ class Reader implements ReaderPort {
   private readonly markLayer = new AnnotationLayer(
     (id, trigger) => {this.card.inspectMark();this.marks.open(id,trigger);},
     point => {this.placingPin=false;this.updatePageFormat();this.marks.addPin(this.doc,this.page,point);},
-    () => {this.placingPin=false;this.updatePageFormat();byId('placePin').focus({preventScroll:true});}
+    () => {this.placingPin=false;this.updatePageFormat();(byId('placePin').offsetParent?byId('placePin'):byId('more')).focus({preventScroll:true});}
   );
   private placingPin=false;
   private capturing=false;
@@ -116,6 +116,7 @@ class Reader implements ReaderPort {
     return this.view && 'setTextView' in this.view ? this.view as PdfPageView : undefined;
   }
   private readonly translate=byId<HTMLButtonElement>('translate');
+  private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
 
   async start():Promise<void>{
     installCitationPreviews(() => this.pdf);
@@ -610,7 +611,7 @@ class Reader implements ReaderPort {
     const view=this.pdfView;
     const available=Boolean(view?.canReadText && !this.parallel);
     const reading=available && this.readingText;
-    byId('reader').dataset.pageFormat=reading?'text':'pdf';
+    byId('reader').dataset.pageFormat=reading?'text':'pdf'; byId('reader').dataset.placingPin=String(this.placingPin);
     const pinAvailable=Boolean(view);
     const inlinePin=this.parallel && !this.placingPin;
     const pin=byId('placePin'), pinHost=byId(inlinePin?'pinHeading':'pageFormat');
@@ -631,7 +632,12 @@ class Reader implements ReaderPort {
     byId('readText').textContent=reading?label('View PDF page','查看 PDF 原页'):label('Read text','读正文');
     byId('pageTextHint').textContent=this.capturing?label('Drag over the area, then choose Explain or Ask.','拖框选中图或文字，再点「解释」或「提问」。'):this.placingPin?label('Click the PDF, or use arrow keys and Enter.','点击原页放置，或用方向键定位后按回车。'):reading?label('Figures and equations are in the PDF.','图表和公式可在 PDF 原页查看。'):this.parallel?'':label('Select a passage to translate or highlight.','划选原文可查看译文或高亮。');
     byId('zoomControl').hidden=reading;
-    view?.setTextView(reading);
+    view?.setTextView(reading); this.syncMenuActions();
+  }
+  private syncMenuActions(): void {
+    const narrow=this.desk.isMobileBar, pin=byId('placePin'), read=byId('readText');
+    this.menuPin.hidden=!narrow || pin.hidden; this.menuPin.lastChild!.textContent=pin.textContent;
+    this.menuRead.hidden=!narrow || read.hidden; this.menuRead.lastChild!.textContent=read.textContent;
   }
   private setReadingMode(mode: ReadingMode):void {
     if(mode===this.desk.mode)return;
@@ -755,9 +761,9 @@ class Reader implements ReaderPort {
     byId('mobileRail').append(el('span','',label('Notes','笔记')));
     byId('captureRegion').append(icon('capture'),el('span','capture-label'),el('span','capture-short'));
     click('captureRegion',()=>this.beginCapture());
-    byId('originalMode').textContent=label('Original','原文');
+    byId('originalMode').querySelector('.mode-full')!.textContent=label('Original','原文');byId('originalMode').querySelector('.mode-compact')!.textContent=label('Orig','原文');
     byId('parallel').querySelector('.mode-wide')!.textContent=label('Bilingual','双语对照');
-    byId('parallel').querySelector('.mode-narrow')!.textContent=label('Translation','译文');
+    byId('parallel').querySelector('.mode-narrow')!.textContent=label('Translation','译文');byId('parallel').querySelector('.mode-compact')!.textContent=label('Trans','译文');
     byId('notebookHandle').textContent=label('Notes','笔记');
     byId('closeRail').ariaLabel=byId('closeRail').title=label('Close notes','关闭笔记');
     byId('annotationsTab').textContent=label('Marks','标记');
@@ -774,11 +780,9 @@ class Reader implements ReaderPort {
     scope.options[1].text=label('Active column','当前栏');
     scope.options[2].text=label('Active passage','当前段');
     byId('parallel').prepend(icon('columns',14));
-    this.desk.connect(mode=>{
-      if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setFocusMode(mode);
-    }, () => refreshNotebookHighlights(this));
     const zoomSelect=byId<HTMLSelectElement>('zoom');
     zoomSelect.ariaLabel=label('Zoom','缩放');
+    byId('zoomControl').querySelector('label')!.textContent=zoomSelect.ariaLabel;
     zoomSelect.options[0].text=label('Fit width','适合宽度');
     zoomSelect.value=String(this.zoom);
     byId('prev').ariaLabel=label('Previous page','上一页');
@@ -797,7 +801,8 @@ class Reader implements ReaderPort {
     jump.addEventListener('toggle',()=>{
       if(!jump.matches(':popover-open'))return;
       const anchor=byId('pageCount').getBoundingClientRect();
-      jump.style.top=anchor.bottom+6+'px';
+      const below=anchor.bottom+6+jump.offsetHeight<=innerHeight-8;
+      jump.style.top=Math.max(8,Math.min(innerHeight-jump.offsetHeight-8,below?anchor.bottom+6:anchor.top-jump.offsetHeight-6))+'px';
       jump.style.left=Math.max(8,Math.min(anchor.left,innerWidth-jump.offsetWidth-8))+'px';
       input.select();
     });
@@ -806,22 +811,23 @@ class Reader implements ReaderPort {
       jump.hidePopover();
       void this.navigate(this.doc.id,input.valueAsNumber).catch(error=>toast(message(error)));
     });
-    window.addEventListener('resize',()=>{if(jump.matches(':popover-open'))jump.hidePopover();});
-    click('readText',()=>{
+    window.addEventListener('resize',()=>{if(jump.matches(':popover-open'))jump.hidePopover();if(!byId('menu').hidden)this.closeMenu();});
+    const toggleReadText=()=>{
       this.cancelCapture(false);
       this.cancelPin();this.marks.closePageEditor();
       this.readingText=!this.readingText;
       this.updatePageFormat();
       this.card.revealIn(byId('original'));
-    });
-    click('placePin',()=>{
+    };
+    const togglePlacePin=()=>{
       this.cancelCapture(false);
       if(this.placingPin){this.cancelPin();return;}
       if(!this.pdfView)return;
       this.card.close();this.marks.closePageEditor();this.desk.dismissDrawer();
       if(this.desk.visibleLanguage==='translation')this.setReadingMode('source');
       this.readingText=false;this.placingPin=true;this.updatePageFormat();this.markLayer.place(true);
-    });
+    };
+    click('readText',toggleReadText); click('placePin',togglePlacePin);
     click('translate',()=>this.translatePage());
     const resizePages=(value:number)=>{
       this.zoom=value; this.desk.setZoom(value);
@@ -831,7 +837,7 @@ class Reader implements ReaderPort {
         for(const sheet of document.querySelectorAll<HTMLElement>('.web-reading-sheet'))sheet.style.setProperty('--article-zoom',String(value));
       }
     };
-    byId<HTMLSelectElement>('zoom').onchange=event=>resizePages(Number((event.currentTarget as HTMLSelectElement).value));
+    byId<HTMLSelectElement>('zoom').onchange=event=>{resizePages(Number((event.currentTarget as HTMLSelectElement).value));if(byId('menu').contains(byId('zoom')))this.closeMenu(true);};
     byId<HTMLSelectElement>('translationMode').onchange=event=>{
       const mode=(event.currentTarget as HTMLSelectElement).value as TranslationFocus;
       this.desk.setFocus(mode);
@@ -858,10 +864,10 @@ class Reader implements ReaderPort {
       this.shortcutsReturn=undefined;
       if(target?.isConnected)target.focus({preventScroll:true});
     });
-    click('more',()=>{const menu=byId('menu');if(!menu.hidden){this.closeMenu(true);return;}menu.hidden=false;
+    click('more',()=>{const menu=byId('menu');if(!menu.hidden){this.closeMenu(true);return;}this.syncMenuActions();menu.hidden=false;
       menu.style.right=Math.max(6,innerWidth-byId('more').getBoundingClientRect().right)+'px';
       menu.style.top=byId('more').getBoundingClientRect().bottom+4+'px';
-      byId('more').setAttribute('aria-expanded','true');menu.querySelector('button')?.focus();});
+      byId('more').setAttribute('aria-expanded','true');menu.querySelector<HTMLElement>('button:not([hidden])')?.focus();});
     const items:[string,Glyph,()=>unknown][]=[
       [label('Library','资料库'),'library',()=>libraryDialog(this)],[label('Vocabulary and history','生词与历史'),'clock',async()=>{await this.refresh();collectionsDialog(this);}],
       [label('Keyboard shortcuts','快捷键'),'keyboard',()=>this.openShortcuts()],
@@ -874,14 +880,18 @@ class Reader implements ReaderPort {
       }],
       [label('Connections','连接设置'),'settings',()=>settingsDialog(this)],[label('Open in new tab','在新标签页打开'),'popout',()=>window.open(sourceUrl(this.doc.id,this.page),'_blank','noopener')]
     ];
+    this.menuPin=button('',()=>{this.closeMenu(false);togglePlacePin();},'','pin'); this.menuPin.hidden=true;
+    this.menuRead=button('',()=>{this.closeMenu(true);toggleReadText();},'','note'); this.menuRead.hidden=true;
+    byId('menu').append(this.menuPin,this.menuRead);
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
+    this.desk.connect(mode=>{if(this.view && 'setFocusMode' in this.view)(this.view as PdfPageView).setFocusMode(mode);}, () => refreshNotebookHighlights(this));
     byId('menu').addEventListener('focusout',event=>{
       if(event.relatedTarget instanceof HTMLElement && !event.relatedTarget.closest('#menu,#more'))this.closeMenu();
     });
     document.addEventListener('pointerdown',e=>{
       if(!(e.target instanceof Element))return;
       if(!e.target.closest('#menu,#more'))this.closeMenu();
-      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,dialog'))this.card.dismiss();
+      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,dialog'))this.card.dismiss();
     });
     document.addEventListener('keydown',e=>{
       if(document.querySelector(':popover-open'))return;

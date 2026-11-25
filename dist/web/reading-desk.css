@@ -168,7 +168,7 @@ input::placeholder, textarea::placeholder {
 #reader[data-notebook-open="false"] { grid-template-columns: minmax(0, 1fr); }
 #reader[data-notebook-open="false"] :is(#rail, #notesSplit) { display: none; }
 
-.workspace { container: reading-area / inline-size; background: var(--desk-shell); }
+.workspace { position: relative; container: reading-area / inline-size; background: var(--desk-shell); }
 .topbar {
   min-height: 64px;
   height: auto;
@@ -198,6 +198,7 @@ input::placeholder, textarea::placeholder {
 .page-navigation { display: flex; align-items: center; gap: 2px; }
 #articleNavigation { display: flex; align-items: center; min-width: 0; gap: 2px; }
 #zoomControl { margin-inline: 6px; }
+.toolbar .menu-zoom-label { display: none; }
 .toolbar .icon-btn { min-width: 32px; height: 34px; }
 .toolbar #zoom {
   min-height: 34px;
@@ -307,7 +308,7 @@ input::placeholder, textarea::placeholder {
   background: var(--paper);
   box-shadow: var(--shadow-subtle);
 }
-.mode-narrow { display: none; }
+.mode-narrow, .mode-compact { display: none; }
 
 #pageFormat {
   display: flex;
@@ -515,7 +516,6 @@ input::placeholder, textarea::placeholder {
   font-size: 12px;
 }
 #rail:has(.notebook-source-mode[aria-pressed="true"]) .highlight-preference { display: none; }
-@media (max-width: 700px) { #highlightDisplay { min-height: 36px; } }
 #notebookPose:hover, #closeRail:hover { background: var(--lavender); color: var(--purple); border-color: var(--purple); }
 .rail-head {
   height: 37px;
@@ -609,7 +609,9 @@ input::placeholder, textarea::placeholder {
   box-shadow: var(--shadow-dialog);
 }
 #reader[data-notebook-pose="sheet"] #railBody:has(> .reader-notebook) { padding: 0; }
-#reader[data-notebook-pose="sheet"] #closeRail { min-width: 44px; min-height: 40px; }
+#reader[data-notebook-pose="sheet"] #closeRail { min-width: 44px; min-height: 44px; }
+#reader[data-notebook-pose="sheet"] .rail-head { height: auto; min-height: 44px; }
+#reader[data-notebook-pose="sheet"] .rail-head [role="tab"] { min-width: 44px; min-height: 44px; }
 
 #card[data-selection]:not([data-docked="true"]) {
   --card-width: 286px;
@@ -864,70 +866,16 @@ input::placeholder, textarea::placeholder {
   .reader-mode-switch { margin-inline-start: auto; }
 }
 @container reading-area (max-width: 700px) {
-  .topbar:has(#captureRegion:not([hidden])) #captureRegion { min-height: 42px; padding-inline: 7px; }
+  .topbar:has(#captureRegion:not([hidden])) #captureRegion { min-height: 44px; padding-inline: 7px; }
   .toolbar .icon-btn { min-width: 44px; height: 44px; }
-  .toolbar :is(#zoom, #pageCount) { min-height: 44px; }
-  .reader-mode-switch :is(#originalMode, #parallel) { min-height: 44px; padding-inline: 7px; }
+  .toolbar :is(#zoom, #pageCount) { min-width: 44px; min-height: 44px; }
+  .reader-mode-switch :is(#originalMode, #parallel) { min-width: 44px; min-height: 44px; padding-inline: 7px; }
   .reader-mode-switch svg { display: none; }
-  .topbar :is(#library, #contentsToggle, #mobileRail, #more) { min-height: 40px; padding-inline: 6px; }
+  .topbar :is(#library, #contentsToggle, #mobileRail, #more) { min-width: 44px; min-height: 44px; padding-inline: 6px; }
 }
 @container reading-area (max-width: 520px) {
   .topbar { column-gap: 4px; }
-  .topbar :is(#library, #contentsToggle, #mobileRail) { min-width: 38px; }
   .topbar :is(#library, #contentsToggle, #mobileRail) > span { display: none; }
-}
-@media (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
-  .toc-entry, .toc-chapter > summary, .toc-fold { min-height: 44px; }
-  .toc-fold { width: 36px; }
-  .toc-nav:has(.toc-fold) .toc-line:not(:has(.toc-fold)) { padding-inline-start: 36px; }
-  #reader { --desk-edge: 12px; }
-  .mode-wide { display: none; }
-  .mode-narrow { display: inline; }
-  #reader[data-reading-mode="bilingual"] #pageSplit,
-  #reader[data-reading-mode="bilingual"] :is(.lane:not(.translated), .headings > span:not(.target-heading)) { display: none; }
-  #reader[data-reading-mode="bilingual"] :is(.pages, .headings) { grid-template-columns: minmax(0, 1fr); }
-  #reader[data-reading-mode="bilingual"] .lane.translated {
-    display: block;
-    position: static;
-  }
-  #reader[data-reading-mode="bilingual"] #translated {
-    max-height: none;
-    overflow: visible;
-  }
-  #reader[data-reading-mode="bilingual"] .target-heading {
-    display: flex;
-    grid-column: 1;
-  }
-  .headings { min-height: 36px; }
-  #translationMode { max-width: 119px; min-height: 29px; }
-  #pinHeading > #placePin { min-height: 36px; }
-  #reader[data-reading-mode="source"] #paperScroll { padding: 8px 0 16px; scrollbar-gutter: auto; }
-  #pageFormat { min-height: 51px; gap: 6px; }
-  #readText, #placePin, .passage-pick { min-height: 44px; }
-  #pageJump :is(input, .btn) { min-height: 44px; }
-  .pdf-reading-text { padding-block: 12px 24px; }
-  #menu { top: 51px; }
-
-  #card .card-actions .btn,
-  #card :is(.card-actions button, .selection-language, .selection-note-footer button, .chat-input-row button) { min-height: 44px; }
-  #selectionDock { --dock-height: min(50dvh, 430px); }
-  #card[data-docked="true"] {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  #card[data-docked="true"] > .selection-main { max-height: min(24dvh, 172px); }
-  #card[data-docked="true"]:not([data-workspace]) > .selection-main { max-height: min(35dvh, 280px); }
-  #selectionDock > #card:not([data-workspace]) {
-    max-height: var(--preview-height, min(35dvh, 280px));
-  }
-  #card[data-preview="translation"]:not([data-workspace]) .passage-counterpart :is(.meaning, .selection-context) {
-    max-height: var(--preview-height, min(13dvh, 104px));
-    overflow: auto;
-    overscroll-behavior: contain;
-    font-size: 14px;
-  }
-  #card[data-docked="true"] > :is(.selection-notes, .selection-chat) { border-inline-start: 0; border-top: 1px solid var(--line); }
-  #card[data-docked="true"] .selection-excerpt blockquote { min-height: 24px; }
 }
 
 #reader:not([data-notebook-pose="sheet"])[data-notebook-open="false"] .workspace:has(#card[data-workspace="chat"]:not([hidden])) {
@@ -1098,30 +1046,85 @@ input::placeholder, textarea::placeholder {
   line-height: 1.5;
 }
 
-@media (pointer: coarse) {
-  #closeDialog, #closeShortcuts { min-width: 44px; min-height: 44px; }
-}
+@media (pointer: coarse) { #closeDialog, #closeShortcuts { min-width: 44px; min-height: 44px; } }
 @media (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
-  #closeDialog, #closeShortcuts { min-width: 44px; min-height: 44px; }
+  #reader { --desk-edge: 12px; }
+  .mode-narrow { display: inline; }
+  .mode-wide, #reader[data-reading-mode="bilingual"] :is(#pageSplit, .lane:not(.translated), .headings > span:not(.target-heading)),
+  .workspace:has(#card[data-workspace="chat"]:not([hidden])) > .paper-chat[data-open="false"], #card[data-workspace="chat"] > .selection-main { display: none; }
+  .toc-entry, .toc-chapter > summary, .toc-fold, .headings, #translationMode, #pinHeading > #placePin, .target-heading #translate,
+  #highlightDisplay, #returnDiscussion, #readText, #placePin, .passage-pick, #pageJump :is(input, .btn), .citation-export .btn,
+  #reader #menu :is(button, #zoom), #card .card-actions .btn,
+  #card :is(.card-actions button, .selection-language, .selection-note-footer button, .chat-input-row button, .answer-notebook .text-btn, .selection-recovery button) { min-height: 44px; }
+  .toc-fold { width: 44px; }
+  .toc-nav:has(.toc-fold) .toc-line:not(:has(.toc-fold)) { padding-inline-start: 44px; }
+  #reader[data-reading-mode="bilingual"] :is(.pages, .headings) { grid-template-columns: minmax(0, 1fr); }
+  #reader[data-reading-mode="bilingual"] .lane.translated { display: block; position: static; }
+  #reader[data-reading-mode="bilingual"] #translated { max-height: none; overflow: visible; }
+  #reader[data-reading-mode="bilingual"] .target-heading { display: flex; grid-column: 1; }
+  #translationMode { max-width: 119px; }
+  #reader[data-reading-mode="source"] #paperScroll { padding: 8px 0 16px; scrollbar-gutter: auto; }
+  #pageFormat { min-height: 51px; gap: 6px; }
+  .pdf-reading-text { padding-block: 12px 24px; }
+  #menu { top: 51px; }
+  #closeDialog, #closeShortcuts, #pageJump .btn, #card[data-selection] :is(.word-head, .chat-heading) .icon-btn { min-width: 44px; min-height: 44px; height: 44px; }
   #shortcutsBody { padding: 12px 14px 18px; gap: 12px; }
   .shortcuts-table td:first-child { width: 44%; }
-  #selectionDock:has(#card[data-workspace="chat"]) {
-    --dock-height: min(66dvh, 600px);
-    display: flex;
-    flex: 0 1 var(--dock-height);
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-  }
+  #selectionDock { --dock-height: min(50dvh, 430px); }
+  #card[data-docked="true"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  #card[data-docked="true"] > .selection-main { max-height: min(24dvh, 172px); }
+  #card[data-docked="true"]:not([data-workspace]) > .selection-main { max-height: min(35dvh, 280px); }
+  #selectionDock > #card:not([data-workspace]) { max-height: var(--preview-height, min(35dvh, 280px)); }
+  #card[data-preview="translation"]:not([data-workspace]) .passage-counterpart :is(.meaning, .selection-context) { max-height: var(--preview-height, min(13dvh, 104px)); overflow: auto; overscroll-behavior: contain; font-size: 14px; }
+  #card[data-docked="true"] > :is(.selection-notes, .selection-chat) { border-inline-start: 0; border-top: 1px solid var(--line); }
+  #card[data-docked="true"] .selection-excerpt blockquote { min-height: 24px; }
+  #selectionDock:has(#card[data-workspace="chat"]) { --dock-height: min(66dvh, 600px); display: flex; flex: 0 1 var(--dock-height); flex-direction: column; min-height: 0; overflow: hidden; }
   #card[data-workspace="chat"] { display: flex; min-height: 0; flex: 1; }
-  .workspace:has(#card[data-workspace="chat"]:not([hidden])) > .paper-chat[data-open="false"] { display: none; }
-  #card[data-workspace="chat"] > .selection-main { display: none; }
   #card[data-workspace="chat"] > .selection-chat { flex: 1; border: 0; }
   #card[data-workspace="chat"] .chat-heading { padding: 8px 14px; }
   #card[data-workspace="chat"] .chat-heading h3 { font-size: 17px; }
   #card[data-workspace="chat"] .selection-chat-log { max-height: none; }
   #card[data-workspace="chat"] .selection-chat-log:empty { display: block; }
-  #card .answer-notebook .text-btn { min-height: 44px; }
   #card .discussion-source summary { padding-block: 4px; }
-  .citation-export .btn { min-height: 44px; }
+}
+@media (max-width: 520px) {
+  .topbar { display: flex; flex-wrap: nowrap; align-items: center; min-height: 48px; padding: 2px 4px; gap: 2px; }
+  .topbar :is(#library, #contentsToggle, #mobileRail, #more) { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .topbar #library { border-color: transparent; }
+  .doc-heading { min-width: 0; flex: 1 1 auto; }
+  .doc-heading span, #pageTextHint, #pageFormat #readText, #reader:not([data-placing-pin="true"]) #pageFormat, #mobileBar #captureRegion :is(.capture-label, .capture-short),
+  #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle :is(.paper-chat-summary, svg:last-child) { display: none; }
+  #pageFormat { width: 100%; min-height: 48px; padding: 2px 8px; justify-content: flex-end; }
+  #menu { max-height: calc(100dvh - 64px); overflow-y: auto; }
+  #reader #menu #zoomControl { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 0; padding: 6px 8px 2px; border-top: 1px solid var(--line); font-size: 13px; }
+  #reader #menu .menu-zoom-label { display: inline; color: var(--muted); }
+  #reader #menu #zoom { padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--paper); color: var(--desk-ink); }
+  #mobileBar { display: flex; align-items: center; gap: 2px; flex: none; padding: 1px 2px calc(1px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--paper); }
+  #mobileBar .toolbar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 2px; padding: 0; }
+  #mobileBar .page-navigation { gap: 0; }
+  #mobileBar #pageCount { padding: 0 2px; font-variant-numeric: tabular-nums; }
+  #mobileBar .reader-mode-switch { padding: 0; gap: 0; border-radius: 7px; overflow: hidden; }
+  #mobileBar .reader-mode-switch :is(#originalMode, #parallel) { position: relative; padding: 0 4px; font-size: 12px; border-radius: 0; }
+  #mobileBar #captureRegion { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 44px; min-height: 44px; padding: 0; border-color: transparent; color: var(--purple); }
+  #mobileBar #captureRegion[aria-pressed="true"] { background: var(--lavender); border-color: var(--purple); }
+  #mobileBar .paper-chat[data-open="false"] { flex: none; border-top: 0; background: transparent; }
+  #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle { position: relative; min-width: 44px; min-height: 44px; padding: 0; justify-content: center; border-radius: 7px; background: transparent; }
+  #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle:hover { background: var(--lavender); }
+  #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle > strong { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #mobileBar .paper-chat[data-open="true"] {
+    position: absolute; inset: auto 0 0 0; z-index: 7; height: var(--chat-height, 50dvh); max-height: 76dvh;
+    border-top: 1px solid var(--line); background: var(--surface-sunken); box-shadow: var(--shadow-dialog); padding-bottom: env(safe-area-inset-bottom);
+  }
+  #mobileBar .paper-chat[data-open="true"] .paper-chat-toggle { width: 100%; min-height: 44px; padding: 4px 14px; justify-content: flex-start; }
+  #returnDiscussion, body > #toast { bottom: calc(58px + env(safe-area-inset-bottom)); }
+}
+@media (max-width: 420px) {
+  #mobileBar .reader-mode-switch :is(.mode-full, .mode-narrow) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #mobileBar .reader-mode-switch .mode-compact { display: inline; }
+}
+@media (max-width: 359px) {
+  #mobileBar .toolbar .icon-btn { min-width: 26px; padding: 0; }
+  #mobileBar #pageCount { min-width: 34px; padding: 0 2px; }
+  #mobileBar #captureRegion, #mobileBar .paper-chat[data-open="false"] .paper-chat-toggle { min-width: 34px; }
+  #mobileBar .reader-mode-switch :is(#originalMode, #parallel) { min-width: 34px; padding: 0 2px; }
 }

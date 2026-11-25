@@ -252,7 +252,8 @@ await withHost(async host => {
 
     await reader.getByRole('button', { name: 'Original', exact: true }).click();
     await reader.goto(host.origin + '/api/paper-reader/app/index.html?doc=' + docId + '&page=7');
-    await reader.getByRole('button', { name: 'Read text' }).click();
+    await reader.locator('#more').click();
+    await reader.locator('#menu').getByRole('button', { name: 'Read text' }).click();
     await reader.locator('.reading-passage[data-passage-id="p7-b7"] p').evaluate(first => {
       const last = document.querySelector('.reading-passage[data-passage-id="p7-b10"] p')!;
       document.getSelection()!.setBaseAndExtent(first.firstChild!, 0, last.firstChild!, 32);

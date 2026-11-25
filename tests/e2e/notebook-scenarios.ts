@@ -572,7 +572,7 @@ await withHost(async host => {
       await page.keyboard.press('Escape');
       await placement.waitFor({ state: 'detached' });
       assert.equal(await page.locator('#placePin').getAttribute('aria-pressed'), 'false');
-      assert.ok(await focused(page.locator('#placePin')));
+      assert.ok(await focused(page.locator('#more')));
       assert.deepEqual(await annotations(), savedAnnotations, 'Canceling placement must preserve the saved annotations.');
       assert.equal(await page.locator('#original .annotation-pin').count(), 0, 'Canceling placement must not leave an empty pin on the PDF.');
     }, true);
