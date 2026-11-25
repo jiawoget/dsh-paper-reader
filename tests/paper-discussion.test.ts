@@ -126,3 +126,54 @@ test('a public web library needs only its ID to search and link, and cannot file
   assert.equal((await service('zotero.get', { docId: 'reading' })).item?.key, 'X42A7DEE');
   await assert.rejects(service('zotero.save', { title: 'New', collections: [] }), { status: 403 });
 });
+
+test('chat.delete removes single exchanges and threads across restarts and excludes them from 12-turn context, while aborted streams do not persist', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-chat-delete-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let seenHistory: unknown[] = [];
+  const ctx = { llm: {
+    listProviders: () => [{ id: 'p' }],
+    listModels: async () => [{ id: 'm', name: 'M' }],
+    async *stream(packet: { messages?: { content: { text?: string }[] }[]; signal?: AbortSignal }) {
+      const payload = JSON.parse(packet.messages?.[0]?.content?.[0]?.text || '{}');
+      if (Array.isArray(payload.history)) seenHistory = payload.history;
+      yield { type: 'text-delta', text: 'First chunk ' };
+      if (payload.question === 'abort-me') {
+        if (packet.signal?.aborted) throw new Error('aborted');
+        await new Promise((_, reject) => packet.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+      }
+      yield { type: 'text-delta', text: 'complete.' };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    }
+  } };
+  const service = createServices({ root, ctx });
+  const paper = { title: 'P', pageCount: 1, partial: false, excerpts: [{ page: 1, text: 'Body text.' }] };
+  const id1 = randomUUID(), id2 = randomUUID(), selId = randomUUID();
+  const selThread = 'selection-' + 'b'.repeat(64);
+  const source = { docId: 'doc1', title: 'P', page: 1, anchor: 'p1', label: 'P', sourceUrl: 'http://127.0.0.1:29812/app?doc=doc1', selected: 'Body', original: 'Body', context: 'Body text.', side: 'source' };
+  await service('chat.ask', { docId: 'doc1', requestId: id1, question: 'First question', paper });
+  await service('chat.ask', { docId: 'doc1', requestId: id2, question: 'Second question', paper });
+  await service('ai', { mode: 'followup', text: 'Body', context: 'Body text.', question: 'Selection question', record: { docId: 'doc1', thread: selThread, requestId: selId, question: 'Selection question', source } });
+  assert.deepEqual(await service('chat.delete', { docId: 'wrong-doc', requestId: id1 }), { deleted: 0 });
+  assert.deepEqual(await service('chat.delete', { docId: 'doc1', requestId: id1 }), { deleted: 1 });
+  const reopened = createServices({ root, ctx });
+  assert.deepEqual((await reopened('chat.history', { docId: 'doc1' })).exchanges.map(e => e.requestId), [id2, selId]);
+  await reopened('chat.ask', { docId: 'doc1', requestId: randomUUID(), question: 'Third question', paper });
+  assert.equal(seenHistory.some(h => JSON.stringify(h).includes('First question')), false);
+  assert.equal(seenHistory.some(h => JSON.stringify(h).includes('Second question')), true);
+  assert.deepEqual(await reopened('chat.delete', { docId: 'doc1', thread: 'paper' }), { deleted: 2 });
+  assert.deepEqual((await createServices({ root, ctx })('chat.history', { docId: 'doc1' })).exchanges.map(e => e.requestId), [selId]);
+  assert.deepEqual(await reopened('chat.delete', { docId: 'doc1', thread: selThread }), { deleted: 1 });
+  assert.deepEqual((await reopened('chat.history', { docId: 'doc1' })).exchanges, []);
+  const controller = new AbortController();
+  const deltas: string[] = [];
+  await assert.rejects(
+    reopened('chat.ask', { docId: 'doc1', requestId: randomUUID(), question: 'abort-me', paper }, {
+      signal: controller.signal,
+      onDelta: chunk => { deltas.push(chunk); controller.abort(); }
+    }),
+    { status: 499 }
+  );
+  assert.deepEqual(deltas, ['First chunk ']);
+  assert.deepEqual((await reopened('chat.history', { docId: 'doc1' })).exchanges, []);
+});

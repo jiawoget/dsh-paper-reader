@@ -299,3 +299,12 @@ test('a Zotero save only succeeds after its per-item response confirms the reque
   allow = true;
   assert.deepEqual(await act('zotero.save', paper), { created: true, key: objectKey, collections: [] });
 });
+
+test('chat.delete validates docId, requestId, and thread inputs', async t => {
+  const { act } = await setup(t);
+  await assert.rejects(act('chat.delete', { thread: 'paper' }), { status: 400 });
+  await assert.rejects(act('chat.delete', { docId: 'doc1' }), { status: 400 });
+  await assert.rejects(act('chat.delete', { docId: 'doc1', requestId: 'not-a-uuid' }), { status: 400 });
+  await assert.rejects(act('chat.delete', { docId: 'doc1', thread: 'invalid-thread' }), { status: 400 });
+  assert.deepEqual(await act('chat.delete', { docId: 'doc1', requestId: '11111111-1111-4111-8111-111111111111' }), { deleted: 0 });
+});

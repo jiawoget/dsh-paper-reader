@@ -393,6 +393,12 @@ export class ReaderStore {
       return JSON.parse(readColumn(row, 'exchange')) as ChatExchange;
     });
   }
+  deleteChat(docId: string, filter: { requestId?: string; thread?: string }): number {
+    return this.#transaction(true, db => Number((filter.requestId && filter.thread
+      ? db.prepare('DELETE FROM chat_exchanges WHERE docId=? AND requestId=? AND thread=?').run(docId, filter.requestId, filter.thread)
+      : filter.requestId ? db.prepare('DELETE FROM chat_exchanges WHERE docId=? AND requestId=?').run(docId, filter.requestId)
+      : db.prepare('DELETE FROM chat_exchanges WHERE docId=? AND thread=?').run(docId, filter.thread!)).changes));
+  }
   zoteroAuthorization(serverId: string, update?: string): string {
     return this.#transaction(update !== undefined, db => {
       if (update !== undefined) {

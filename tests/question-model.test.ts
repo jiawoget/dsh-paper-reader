@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { createServices } from '../src/server/services.js';
-import type { QuestionModel } from '../src/shared/types.js';
+import { formatQuestionModelCaption } from '../src/reader/question-model.js';
+import type { QuestionCatalog, QuestionModel } from '../src/shared/types.js';
 
 test('questions use the exact DSH provider, model and opaque effort across restarts and concurrent choices', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'reader-model-'));
@@ -85,4 +86,31 @@ test('questions use the exact DSH provider, model and opaque effort across resta
   const canceled = new AbortController();
   canceled.abort();
   await assert.rejects(reopen('ai', { ...passage, questionModel: first }, { signal: canceled.signal }), { status: 499 });
+});
+
+test('formatQuestionModelCaption resolves human model and effort names from the catalog and falls back cleanly', () => {
+  const catalog: QuestionCatalog = {
+    groups: [{
+      id: 'reader-test', name: 'Offline test models',
+      models: [
+        { id: 'plain', name: 'Plain model' },
+        { id: 'reasoner', name: 'Reasoning model', reasoning: { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' } }
+      ]
+    }],
+    failures: []
+  };
+  assert.deepEqual(
+    formatQuestionModelCaption({ aiMode: 'dsh', hostProvider: 'reader-test', hostModel: 'plain', model: '', questionModel: { provider: 'reader-test', model: 'reasoner', reasoningEffort: 'high' } }, catalog),
+    { caption: 'Reasoning model · High', providerName: 'Offline test models' }
+  );
+  assert.deepEqual(
+    formatQuestionModelCaption({ aiMode: 'dsh', hostProvider: 'reader-test', hostModel: 'plain', model: '' }, catalog),
+    { caption: 'Plain model', providerName: 'Offline test models' }
+  );
+  assert.deepEqual(
+    formatQuestionModelCaption({ aiMode: 'dsh', hostProvider: 'reader-test', hostModel: 'plain', model: '' }),
+    { caption: 'plain', providerName: 'reader-test' }
+  );
+  assert.deepEqual(formatQuestionModelCaption({ aiMode: 'api', model: 'custom-model' }), { caption: 'custom-model' });
+  assert.deepEqual(formatQuestionModelCaption({ aiMode: 'unconfigured', model: '' }), { caption: '' });
 });

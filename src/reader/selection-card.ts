@@ -94,6 +94,8 @@ export class SelectionCard {
     this.workspace.refresh();
   }
 
+  exchangeDeleted(thread: string, requestId: string): void { this.workspace.exchangeDeleted(thread, requestId); }
+
   revealIn(pane: HTMLElement): void {
     const hit = this.activeHit;
     if (!hit || hit.regionText !== undefined || !this.back.hidden) return;

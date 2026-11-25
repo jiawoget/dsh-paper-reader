@@ -438,21 +438,20 @@
   display: flex;
   align-items: center;
   flex: none;
-  gap: 8px;
-  padding: 11px 14px 7px;
+  gap: 4px;
+  padding: 10px 8px 7px;
   color: var(--desk-ink);
   background: var(--paper);
 }
 #card[data-selection] .chat-heading .icon-btn {
   align-self: center;
-  min-width: 29px;
-  height: 29px;
+  min-width: 28px;
+  height: 28px;
 }
 #card .selection-recovery { display: flex; gap: 10px; flex-wrap: wrap; }
 #card .selection-recovery button { min-height: 32px; padding-inline: 6px; }
 #card .selection-heading h2:focus-visible { width: fit-content; outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 #card .selection-counterpart .meaning { color: var(--desk-ink); font-size: 14px; }
-#card .chat-heading h3 { flex: 1; min-width: 0; }
 #card .chat-contents {
   display: flex;
   min-height: 0;
@@ -672,9 +671,8 @@
   & #card { display: flex; height: 100%; }
   & #card > .selection-main { display: none; }
   & #card > .selection-chat { flex: 1; border: 0; }
-  & #card .chat-heading { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  & #card .chat-heading h3 { font-size: 18px; }
-  & .discussion-position { display: block; min-height: 32px; }
+  & #card .chat-heading { padding: 10px 8px; gap: 4px; border-bottom: 1px solid var(--line); }
+  & .discussion-position { display: block; min-height: 28px; padding: 2px 3px; }
   & #card .chat-contents { padding: 14px 16px; gap: 14px; }
   & #card .selection-chat-log { max-height: none; padding-inline-end: 3px; }
   & #card .selection-chat-log:empty { display: block; }
@@ -878,7 +876,6 @@
   #card[data-workspace="chat"] { display: flex; min-height: 0; flex: 1; }
   #card[data-workspace="chat"] > .selection-chat { flex: 1; border: 0; }
   #card[data-workspace="chat"] .chat-heading { padding: 8px 14px; }
-  #card[data-workspace="chat"] .chat-heading h3 { font-size: 17px; }
   #card[data-workspace="chat"] .selection-chat-log { max-height: none; }
   #card[data-workspace="chat"] .selection-chat-log:empty { display: block; }
 }

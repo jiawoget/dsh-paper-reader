@@ -145,35 +145,81 @@ await withHost(async host => {
         await reader.goto(address);
         if (!await field.isVisible()) await toggle.click();
         const chooser = reader.getByRole('dialog', { name: 'Question model' });
-        const picker = chooser.getByRole('combobox', { name: 'Model', exact: true });
-        await chat.getByRole('button', { name: /^Question model/ }).click();
-        await picker.selectOption({ label: 'Reasoning model' });
-        await chooser.getByLabel('Reasoning effort').selectOption('high');
-        await chooser.getByRole('button', { name: 'Use model' }).click();
+        const picker = chat.getByRole('button', { name: /^Question model/ });
+        await picker.click();
+        await chooser.waitFor({ state: 'visible' });
+        assert.equal(await reader.locator('#dialog[open]').count(), 0);
+        await picker.click(); await chooser.waitFor({ state: 'hidden' });
+        await picker.click(); await chooser.waitFor({ state: 'visible' });
+        await reader.keyboard.press('Escape'); await chooser.waitFor({ state: 'hidden' });
+        await picker.click();
+        await chooser.getByRole('option', { name: 'Reasoning model' }).click();
+        await chooser.getByRole('button', { name: 'High', exact: true }).click();
         await chooser.waitFor({ state: 'hidden' });
-        await chat.getByRole('button', { name: /^Question model.*reasoner.*high/ }).waitFor();
+        const modelTrigger = chat.getByRole('button', { name: /^Question model.*Reasoning model.*High/ });
+        await modelTrigger.waitFor();
+        assert.doesNotMatch(await modelTrigger.innerText(), /\breasoner\b/i);
         await field.click();
         await field.fill('Which model answers this whole-paper question?');
         const response = reader.waitForResponse(response => response.url().endsWith('/action') &&
           response.request().postDataJSON()?.op === 'chat.ask', { timeout: 45_000 });
         await chat.getByRole('button', { name: 'Send', exact: true }).click();
+        assert.equal(await field.inputValue(), '');
         const reply = await response;
         assert.ok(reply.ok(), await reply.text());
         const finalFrame = (await reply.text()).trim().split('\n').at(-1)!;
         assert.equal(JSON.parse(finalFrame).text, 'reader-test / reasoner / high');
         await answers.filter({ hasText: 'reader-test / reasoner / high' }).waitFor();
+
+        await field.fill('slow-stream-markdown full render check');
+        await field.press('Enter');
+        const stopBtn = chat.getByRole('button', { name: 'Stop', exact: true });
+        await stopBtn.waitFor({ state: 'visible' });
+        const streamBody = chat.locator('.chat-stream-body');
+        await streamBody.locator('h3').waitFor({ state: 'visible' });
+        await streamBody.locator('strong').waitFor({ state: 'visible' });
+        assert.equal(await stopBtn.isVisible(), true);
+        assert.doesNotMatch(await streamBody.innerText(), /###|\*\*/);
+        await answers.filter({ hasText: 'Item two' }).waitFor({ timeout: 30_000 });
+
+        const beforeAbort = await answers.count();
+        await field.fill('slow-stream-markdown stop and retry check');
+        await field.press('Enter');
+        await stopBtn.waitFor({ state: 'visible' });
+        await streamBody.locator('h3').waitFor({ state: 'visible' });
+        await stopBtn.click();
+        await stopBtn.waitFor({ state: 'hidden' });
+        await chat.locator('.chat-stopped-body h3').waitFor({ state: 'visible' });
+        await chat.getByText('Generation stopped').waitFor({ state: 'visible' });
+        assert.equal(await answers.count(), beforeAbort);
+        const histAfterStop = await (await context.request.post(host.origin + '/api/paper-reader/action', {
+          data: { op: 'chat.history', payload: { docId } }
+        })).json();
+        assert.equal(histAfterStop.exchanges.some((e: { question: string }) => e.question.includes('stop and retry check')), false);
+        await chat.locator('.chat-stopped-bar').getByRole('button', { name: 'Retry', exact: true }).click();
+        await answers.nth(beforeAbort).waitFor({ timeout: 30_000 });
+
+        const countBeforeDelete = await answers.count();
+        await answers.last().locator('..').getByRole('button', { name: 'Delete', exact: true }).click();
+        await reader.waitForFunction(expected => document.querySelectorAll('.paper-chat .paper-answer').length === expected, countBeforeDelete - 1);
+        await chat.getByRole('button', { name: 'Clear chat', exact: true }).click();
+        await chat.getByRole('button', { name: 'Confirm clear', exact: true }).click();
         await reader.reload();
+        if (!await field.isVisible()) await toggle.click();
+        const postClearHistory = await (await context.request.post(host.origin + '/api/paper-reader/action', {
+          data: { op: 'chat.history', payload: { docId, thread: 'paper' } }
+        })).json();
+        assert.equal(postClearHistory.exchanges.length, 0);
+
         await selectedWord(reader);
         await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
-        await card.getByRole('button', { name: /^Question model.*reasoner.*high/ }).click();
-        await picker.selectOption({ label: 'Plain model' });
-        assert.ok(await chooser.getByLabel('Reasoning effort').isHidden());
-        await chooser.getByRole('button', { name: 'Use model' }).click();
+        await card.getByRole('button', { name: /^Question model.*Reasoning model.*High/ }).click();
+        await chooser.getByRole('option', { name: 'Plain model' }).click();
         await chooser.waitFor({ state: 'hidden' });
         await localInput.fill('Which model answers this passage question?');
         await localInput.press('Enter');
         await card.locator('.selection-answer').filter({ hasText: 'reader-test / plain / default' }).waitFor();
-        console.log('Verified DSH catalog selection, reasoning effort, reload, and switching to a model without reasoning controls.');
+        console.log('Verified inline model popover, mid-stream Markdown rendering, Stop retention + Retry, Delete/Clear persistence, and switching models.');
       }
       console.log('Verified page-12 table grounding from imported page 2, opt-in attachment, whole-paper follow-up, passage history, resize and per-paper restoration (' +
         (live ? 'live DSH model' : 'grounding-checked model fixture') + ').');
