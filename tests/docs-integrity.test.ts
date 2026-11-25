@@ -23,8 +23,13 @@ function stripFencedCode(md: string): string {
 }
 
 function githubHeadingSlug(rawHeading: string): string {
-  return rawHeading.replace(/!?\[([^\]]*)\]\([^)]+\)/g, '$1').replace(/`([^`]+)`/g, '$1')
-    .replace(/(\*\*|__)(.*?)\1/g, '$2').replace(/(\*|_)(.*?)\1/g, '$2').replace(/<[^>]+>/g, '')
+  return rawHeading
+    .replace(/!?\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(
+      /`([^`]+)`|(\*\*)(.*?)\2|(?<![\p{L}\p{N}_])(__)(.*?)\4(?![\p{L}\p{N}_])|(\*)(.*?)\6|(?<![\p{L}\p{N}_])(_)(.*?)\8(?![\p{L}\p{N}_])/gu,
+      (_, code, _b, bold, _ub, ubold, _i, ital, _ui, uital) => code ?? bold ?? ubold ?? ital ?? uital ?? ''
+    )
+    .replace(/<[^>]+>/g, '')
     .trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
 }
 
@@ -102,7 +107,7 @@ function findInvalidCliCommands(md: string, pkgJson: PackageJson, lockJson: Pack
 function findEnvironmentLeaks(md: string): string[] {
   return [
     ...[...md.matchAll(/(?::|port[\s=]+)3080\b/gi)].map(m => `hardcoded port 3080 ("${m[0]}")`),
-    ...[...md.matchAll(/(?:^|[\s(`"'])(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)/gi)].map(m => `private local path ("${m[0].trim()}")`)
+    ...[...md.matchAll(/(?:^|[\s(`"'=:]|file:\/\/)(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)/gi)].map(m => `private local path ("${m[0].trim()}")`)
   ];
 }
 
@@ -117,8 +122,8 @@ describe('documentation integrity (README.md and 交付说明.md)', () => {
       assert.deepEqual(findBrokenRelativeLinks(doc.content, doc.relPath, repoRoot, cache), [], `${doc.relPath} broken links`);
       assert.deepEqual(findInvalidCliCommands(doc.content, pkgJson, lockJson), [], `${doc.relPath} invalid CLI commands`);
     }
-    assert.ok(docs[0].content.includes('(交付说明.md)'), 'README.md should link to 交付说明.md');
-    assert.ok(docs[1].content.includes('(README.md)'), '交付说明.md should link to README.md');
+    assert.match(docs[0].content, /\((?:\.\/)?交付说明\.md(?:#[^)]+)?\)/, 'README.md should link to 交付说明.md');
+    assert.match(docs[1].content, /\((?:\.\/)?README\.md(?:#[^)]+)?\)/, '交付说明.md should link to README.md');
   });
   test('zero hardcoded conflicting ports or private local paths', () => {
     for (const doc of docs) assert.deepEqual(findEnvironmentLeaks(doc.content), [], `${doc.relPath} environment leaks`);

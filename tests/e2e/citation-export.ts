@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium, type Page } from 'playwright-core';
 import type { DocumentInfo } from '../../src/shared/types.js';
+import { failClipboardExecCommand, mockClipboardFallback, readClipboardFallback, restoreClipboard } from './helpers/dom-probes.js';
 import { closeServer, startRichZoteroFixture } from './helpers/fixtures.js';
 import { makePdf, readDownload } from './helpers/reader.js';
 import { withHost } from './host.js';
@@ -226,28 +227,11 @@ try {
         assert.equal(downloadedRis.text, copiedRis);
         console.log('PASS T1-F3-04: Download .ris on pagedattention.');
 
-        type ClipWin = Window & { __origWrite?: typeof navigator.clipboard.writeText; __origExec?: typeof document.execCommand; __copied?: string };
-        await page.evaluate(() => {
-          const w = window as ClipWin;
-          w.__origWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
-          w.__origExec = document.execCommand.bind(document);
-          w.__copied = '';
-          const stubs = {
-            writeText() { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); },
-            execCommand(cmd: string) {
-              if (cmd !== 'copy') return false;
-              const a = document.activeElement;
-              w.__copied = a && 'value' in a ? String(a.value) : '';
-              return true;
-            }
-          };
-          Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: stubs.writeText });
-          document.execCommand = stubs.execCommand;
-        });
+        await mockClipboardFallback(page);
         await page.getByRole('button', { name: 'Copy BibTeX', exact: true }).click();
         await page.locator('.citation-export-status').filter({ hasText: 'BibTeX copied to clipboard.' }).waitFor({ state: 'visible' });
-        assert.equal(await page.evaluate(() => (window as ClipWin).__copied ?? ''), copiedBib);
-        await page.evaluate(() => { const s = { execCommand() { return false; } }; document.execCommand = s.execCommand; });
+        assert.equal(await readClipboardFallback(page), copiedBib);
+        await failClipboardExecCommand(page);
         await page.getByRole('button', { name: 'Copy RIS', exact: true }).click();
         await page.locator('.citation-export-status').filter({ hasText: 'Clipboard access was blocked. Use Download instead.' }).waitFor({ state: 'visible' });
         const [recoveryDownload] = await Promise.all([
@@ -255,11 +239,7 @@ try {
           page.getByRole('button', { name: 'Download .ris', exact: true }).click()
         ]);
         assert.equal((await readDownload(recoveryDownload)).text, copiedRis);
-        await page.evaluate(() => {
-          const w = window as ClipWin;
-          if (w.__origWrite) Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: w.__origWrite });
-          if (w.__origExec) document.execCommand = w.__origExec;
-        });
+        await restoreClipboard(page);
         console.log('PASS T2-F3-07: Clipboard NotAllowedError fallback and blocked-clipboard download recovery.');
 
         // T2-F3-01: Sparse bare-filename PDF notes.pdf (with Zotero still unconfigured).

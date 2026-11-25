@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
 import { until } from './extension-controls.js';
 import { assertDarkAndContrast } from './helpers/contrast.js';
+import { inspectTranslatedBlocks } from './helpers/dom-probes.js';
 import { startVersatileLlmFixture } from './helpers/fixtures.js';
 import { authContext, openReaderPage, resetSettings, rpc, type ErrorScope } from './helpers/reader.js';
 import { withHost } from './host.js';
@@ -118,29 +119,11 @@ try {
           await assertDarkAndContrast(page.locator('.topbar #docTitle'), 'T3-10 dark topbar', 0.08, 4.5);
           await assertDarkAndContrast(page.locator('#rail #notesTab'), 'T3-10 dark rail', 0.08, 4.5);
 
-          const inspectTranslated = () => page.evaluate(() => {
-            const blocks = Array.from(document.querySelectorAll<HTMLElement>('#translated .pdf-translated-text')).filter(el => !el.hidden && el.offsetWidth > 0);
-            const bodySizes = blocks.filter(el => el.dataset.role === 'paragraph').map(el => {
-              const rect = el.getBoundingClientRect();
-              const cssFont = parseFloat(getComputedStyle(el).fontSize) || 0;
-              return cssFont * (rect.width / el.offsetWidth);
-            });
-            const rects = blocks.map(el => el.getBoundingClientRect());
-            let overlaps = 0;
-            for (let i = 0; i < rects.length; i++) {
-              for (let j = i + 1; j < rects.length; j++) {
-                const a = rects[i], b = rects[j];
-                if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 2) overlaps++;
-              }
-            }
-            return { bodySizes, overlaps, pageOverflow: document.documentElement.scrollWidth - window.innerWidth };
-          });
-
           await until(async () => {
-            const m = await inspectTranslated();
-            return m.bodySizes.length > 0 && m.bodySizes.every(s => s >= 11.5);
+            const m = await inspectTranslatedBlocks(page);
+            return m.bodySizes.length > 0 && m.bodySizes.every(b => b.visualFont >= 11.5);
           }, '1440px Japanese bilingual body blocks must meet >= 11.5px visual font floor');
-          const metrics = await inspectTranslated();
+          const metrics = await inspectTranslatedBlocks(page);
           assert.equal(metrics.overlaps, 0, 'Japanese translated blocks must not overlap');
           assert.ok(metrics.pageOverflow <= 1, 'Zero horizontal overflow at 1440px');
 

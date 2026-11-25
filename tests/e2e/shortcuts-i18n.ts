@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
+import { chromium, type Locator } from 'playwright-core';
 import { bookRoot, sections, startPublisherFixture } from './book-reading-fixture.js';
 import { cardElement, openToolbar, until } from './extension-controls.js';
 import { computeElementMetrics, inspectShadowCardMetrics, type RawElementSample } from './helpers/contrast.js';
@@ -17,6 +17,23 @@ const extensionPath = fileURLToPath(new URL('../../dist/extension', import.meta.
 const preload = new URL('./book-reading-preload.ts', import.meta.url).href;
 const appPath = '/api/paper-reader/app/index.html';
 const defaultScope: ErrorScope = { allowZotero503: true, allowExpected404: true };
+
+async function assertShortcutsDialogContrast(dialog: Locator, label: string): Promise<void> {
+  const samples = await dialog.evaluate((): (RawElementSample & { tag: string })[] => {
+    const darkRoot = document.documentElement.dataset.theme === 'dark';
+    return [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')].map(el => {
+      const layers: string[] = [];
+      for (let cur: Element | null = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
+      const s = getComputedStyle(el);
+      return { tag: el.tagName, fg: s.color, layers, darkRoot, fontSize: parseFloat(s.fontSize) || 0, colorScheme: s.colorScheme };
+    });
+  });
+  for (const s of samples) {
+    const m = computeElementMetrics(s);
+    assert.ok(m.ratio >= 4.5, `${label} shortcuts contrast < 4.5 on ${s.tag}: ${m.ratio.toFixed(2)}`);
+    assert.ok(m.fontSize >= 12, `${label} shortcuts fontSize < 12px on ${s.tag}: ${m.fontSize}`);
+  }
+}
 
 async function testF6Shortcuts(host: HostFixture): Promise<void> {
   const browser = await chromium.launch({ executablePath: host.executable });
@@ -35,20 +52,7 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
     await dialog.getByRole('heading', { name: 'Keyboard shortcuts', exact: true }).waitFor();
     assert.ok(await dialog.locator('table.shortcuts-table').count() >= 4, 'Shortcuts dialog should render grouped semantic tables.');
 
-    const lightSamples = await dialog.evaluate((): (RawElementSample & { tag: string })[] => {
-      const darkRoot = document.documentElement.dataset.theme === 'dark';
-      return [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')].map(el => {
-        const layers: string[] = [];
-        for (let cur: Element | null = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
-        const s = getComputedStyle(el);
-        return { tag: el.tagName, fg: s.color, layers, darkRoot, fontSize: parseFloat(s.fontSize) || 0, colorScheme: s.colorScheme };
-      });
-    });
-    for (const s of lightSamples) {
-      const m = computeElementMetrics(s);
-      assert.ok(m.ratio >= 4.5, `Light shortcuts contrast too low on ${s.tag}: ${m.ratio.toFixed(2)}`);
-      assert.ok(m.fontSize >= 12, `Light shortcuts font size < 12px on ${s.tag}: ${m.fontSize}`);
-    }
+    await assertShortcutsDialogContrast(dialog, 'Light');
 
     // Repeated Shift+? while open causes no duplicate/error
     await page.keyboard.press('Shift+?');
@@ -264,30 +268,18 @@ async function testF6Shortcuts(host: HostFixture): Promise<void> {
     const mDialog = mPage.locator('#shortcutsDialog');
     await mDialog.waitFor({ state: 'visible' });
     const mobileAudit = await mDialog.evaluate(() => {
-      const darkRoot = document.documentElement.dataset.theme === 'dark';
       const closeRect = document.getElementById('closeShortcuts')!.getBoundingClientRect();
-      const samples: (RawElementSample & { tag: string })[] = [...document.querySelectorAll('#shortcutsDialog h2, #shortcutsDialog h3, #shortcutsDialog th, #shortcutsDialog td, #shortcutsDialog kbd')].map(el => {
-        const layers: string[] = [];
-        for (let cur: Element | null = el; cur && cur.nodeType === 1; cur = cur.parentElement) layers.push(getComputedStyle(cur).backgroundColor);
-        const s = getComputedStyle(el);
-        return { tag: el.tagName, fg: s.color, layers, darkRoot, fontSize: parseFloat(s.fontSize) || 0, colorScheme: s.colorScheme };
-      });
       return {
         overflow: document.documentElement.scrollWidth - innerWidth,
         dialogOverflow: document.getElementById('shortcutsDialog')!.scrollWidth - document.getElementById('shortcutsDialog')!.clientWidth,
         closeWidth: closeRect.width,
-        closeHeight: closeRect.height,
-        samples
+        closeHeight: closeRect.height
       };
     });
     assert.ok(mobileAudit.overflow <= 1, `Mobile page horizontal overflow: ${mobileAudit.overflow}`);
     assert.ok(mobileAudit.dialogOverflow <= 1, `Shortcuts dialog horizontal overflow at 390x844: ${mobileAudit.dialogOverflow}`);
     assert.ok(mobileAudit.closeWidth >= 44 && mobileAudit.closeHeight >= 44, `Mobile closeShortcuts target < 44px: ${mobileAudit.closeWidth}x${mobileAudit.closeHeight}`);
-    for (const s of mobileAudit.samples) {
-      const m = computeElementMetrics(s);
-      assert.ok(m.ratio >= 4.5, `Dark shortcuts contrast < 4.5 on ${s.tag}: ${m.ratio.toFixed(2)}`);
-      assert.ok(m.fontSize >= 12, `Dark shortcuts fontSize < 12px on ${s.tag}: ${m.fontSize}`);
-    }
+    await assertShortcutsDialogContrast(mDialog, 'Dark');
     assert.deepEqual(mPageErrors, []);
     assert.deepEqual(mConsoleErrors, []);
     await mobileDark.close();

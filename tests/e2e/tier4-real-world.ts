@@ -12,6 +12,9 @@ import { bookRoot, sections, startPublisherFixture } from './book-reading-fixtur
 import { cardElement, clickCard, openToolbar, until } from './extension-controls.js';
 import { assertDarkAndContrast, computeElementMetrics, inspectShadowCardMetrics, type RawElementSample } from './helpers/contrast.js';
 import {
+  failClipboardExecCommand, inspectTranslatedBlocks, mockClipboardFallback, readClipboardFallback, restoreClipboard
+} from './helpers/dom-probes.js';
+import {
   assertZeroSqliteRows, closeServer, snapshotDocSqliteCounts,
   startCompositePublisher, startRichZoteroFixture, startVersatileLlmFixture
 } from './helpers/fixtures.js';
@@ -136,29 +139,13 @@ try {
                   await iframe.locator('#mobileRail').click();
                   await iframe.locator('#refsTab').click();
                   await iframe.locator('.citation-export').waitFor({ state: 'visible' });
-                  await iframe.locator('body').evaluate(() => {
-                    const win = window as Window & { __origWriteText?: typeof navigator.clipboard.writeText; __origExecCommand?: typeof document.execCommand; __fallbackCopied?: string };
-                    win.__origWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-                    win.__origExecCommand = document.execCommand.bind(document);
-                    win.__fallbackCopied = '';
-                    const mocks = {
-                      writeText() { return Promise.reject(new DOMException('Clipboard permission denied', 'NotAllowedError')); },
-                      execCommand(command: string) {
-                        if (command !== 'copy') return false;
-                        const active = document.activeElement;
-                        win.__fallbackCopied = active && 'value' in active ? String(active.value) : '';
-                        return true;
-                      }
-                    };
-                    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: mocks.writeText });
-                    document.execCommand = mocks.execCommand;
-                  });
+                  await mockClipboardFallback(iframe);
                   await iframe.getByRole('button', { name: '复制 BibTeX', exact: true }).click();
                   await iframe.locator('.citation-export-status').filter({ hasText: 'BibTeX 已复制到剪贴板。' }).waitFor();
-                  const fallbackBib = await iframe.locator('body').evaluate(() => (window as Window & { __fallbackCopied?: string }).__fallbackCopied ?? '');
+                  const fallbackBib = await readClipboardFallback(iframe);
                   assert.ok(fallbackBib.startsWith('@inproceedings{kwon2023efficient,\n'), fallbackBib);
 
-                  await iframe.locator('body').evaluate(() => { const m = { execCommand() { return false; } }; document.execCommand = m.execCommand; });
+                  await failClipboardExecCommand(iframe);
                   await iframe.getByRole('button', { name: '复制 RIS', exact: true }).click();
                   await iframe.locator('.citation-export-status').filter({ hasText: '剪贴板权限受限，请改用下载按钮。' }).waitFor();
                   const [risDl] = await Promise.all([
@@ -169,11 +156,7 @@ try {
                   assert.equal(risFile.filename, 'kwon2023efficient.ris');
                   assert.ok(risFile.text.startsWith('TY  - CONF\n') && risFile.text.trimEnd().endsWith('ER  -'));
 
-                  await iframe.locator('body').evaluate(() => {
-                    const win = window as Window & { __origWriteText?: typeof navigator.clipboard.writeText; __origExecCommand?: typeof document.execCommand };
-                    if (win.__origWriteText) Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: win.__origWriteText });
-                    if (win.__origExecCommand) document.execCommand = win.__origExecCommand;
-                  });
+                  await restoreClipboard(iframe);
 
                   // 4. Live parent body[data-ds-dark-theme] toggle with Paper chat & settingsDialog open inside iframe
                   await iframe.locator('.paper-chat-toggle').click();
@@ -256,12 +239,8 @@ try {
                   const saveFont = await page.locator('#saveState').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
                   assert.ok(saveFont >= 12, `Expected #saveState >= 12px, got ${saveFont}`);
                   await until(async () => {
-                    const sizes = await page.evaluate(() =>
-                      Array.from(document.querySelectorAll<HTMLElement>('#translated .pdf-translated-text'))
-                        .filter(el => !el.hidden && el.offsetWidth > 0 && el.dataset.role === 'paragraph')
-                        .map(el => (parseFloat(getComputedStyle(el).fontSize) || 0) * (el.getBoundingClientRect().width / el.offsetWidth))
-                    );
-                    return sizes.length > 0 && sizes.every(s => s >= 11.5);
+                    const m = await inspectTranslatedBlocks(page);
+                    return m.bodySizes.length > 0 && m.bodySizes.every(b => b.visualFont >= 11.5);
                   }, 'T4-01 1440px bilingual floor >= 11.5px');
                   await page.keyboard.press('-');
                   assert.equal(await page.locator('#zoom').inputValue(), '1');

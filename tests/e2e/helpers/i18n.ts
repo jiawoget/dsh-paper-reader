@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import type { Page } from 'playwright-core';
 
-export const ZH_ENGLISH_ALLOWLIST = new Set([
+const ZH_ENGLISH_ALLOWLIST = new Set([
   'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown',
   'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
   'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
@@ -9,8 +9,8 @@ export const ZH_ENGLISH_ALLOWLIST = new Set([
   'woosuk', 'et', 'al', 'key', 'value', 'kv'
 ]);
 
-export const BANNED_EN_RE = /\b(?:Annotations|Paper conversation|Paper discussion|Reading notebook|Notebook)\b/i;
-export const BANNED_ZH_RE = /(?:阅读笔记本|笔记本|批注索引|批注|Obsidian\s*仓库|已存入仓库|存入仓库)/;
+const BANNED_EN_RE = /\b(?:Annotations|Paper conversation|Paper discussion|Reading notebook|Notebook)\b/i;
+const BANNED_ZH_RE = /(?:阅读笔记本|笔记本|批注索引|批注|Obsidian\s*仓库|已存入仓库|存入仓库)/;
 
 const BASE_EXCLUDED = [
   '.pdf-sheet', '.pdf-reading-text p', '.pdf-reading-text h2', '.meaning', '#card blockquote',

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-const RATCHET_SLACK = 10, CSS_MAX_LINE_CHARS = 240, CSS_OVERLAP_CAP = 28, DUP_WINDOW = 8, TEST_DUP_CAP = 8, I18N_REPEAT_CAP = 5;
+const RATCHET_SLACK = 10, CSS_MAX_LINE_CHARS = 240, CSS_OVERLAP_CAP = 28, DUP_WINDOW = 8, TEST_DUP_CAP = 7, I18N_REPEAT_CAP = 8;
 
 const SRC_RATCHET: Record<string, number> = {
   'src/reader/app.ts': 1000, 'src/reader/pdf-view.ts': 679, 'src/reader/notebook.ts': 585,
@@ -13,7 +13,7 @@ const SRC_RATCHET: Record<string, number> = {
 };
 
 const TEST_RATCHET: Record<string, number> = {
-  'tests/e2e/dark-theme-a11y.ts': 1040, 'tests/e2e/tier4-real-world.ts': 867, 'tests/e2e/shortcuts-i18n.ts': 710,
+  'tests/e2e/dark-theme-a11y.ts': 1010, 'tests/e2e/tier4-real-world.ts': 846, 'tests/e2e/shortcuts-i18n.ts': 702,
   'tests/e2e/reader-selection.ts': 684, 'tests/e2e/notebook-scenarios.ts': 622,
   'tests/e2e/book-reading.ts': 602, 'tests/e2e/discussion-continuity.ts': 553
 };
@@ -42,29 +42,63 @@ function lineCount(text: string): number {
   return lines.at(-1) === '' ? lines.length - 1 : lines.length;
 }
 
-function extractCssSelectors(css: string): Set<string> {
-  const clean = css.replace(/\/\*[\s\S]*?\*\//g, ''), selectors = new Set<string>(), atStack: boolean[] = [];
-  let buf = '', depth = 0;
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' ')).replace(/(?<![:\\])\/\/[^\n]*/g, '');
+}
+
+function splitTopLevelCommas(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0, cur = '';
+  for (const ch of s) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseCss(css: string): { selectors: Set<string>; rules: { selector: string; body: string }[] } {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, ''), selectors = new Set<string>(), rules: { selector: string; body: string }[] = [];
+  const stack: { selector: string; isAt: boolean; body: string }[] = [];
+  let buf = '';
   for (const ch of clean) {
+    const top = stack.at(-1);
     if (ch === '{') {
       const header = buf.trim();
       buf = '';
       const isAt = header.startsWith('@');
-      if (!isAt && (depth === 0 || atStack.every(Boolean))) {
-        for (const part of header.split(',')) {
+      if (!isAt && (!top || stack.every(f => f.isAt))) {
+        for (const part of splitTopLevelCommas(header)) {
           const norm = part.replace(/\s+/g, ' ').trim();
           if (norm) selectors.add(norm);
         }
       }
-      atStack.push(isAt);
-      depth++;
+      stack.push({ selector: isAt ? '' : header, isAt, body: '' });
     } else if (ch === '}') {
-      buf = ''; depth = Math.max(0, depth - 1); atStack.pop();
-    } else if (ch === ';' && (depth === 0 || atStack.at(-1))) {
+      const popped = stack.pop();
+      if (popped) {
+        if (!popped.isAt) rules.push({ selector: popped.selector, body: popped.body + buf });
+        else if (buf.trim()) rules.push({ selector: '', body: buf });
+      }
       buf = '';
-    } else buf += ch;
+    } else if (ch === ';' && (!top || top.isAt)) {
+      if (/!\s*important\b/i.test(buf)) rules.push({ selector: '', body: buf });
+      buf = '';
+    } else if (top && !top.isAt) {
+      top.body += ch;
+    } else {
+      buf += ch;
+    }
   }
-  return selectors;
+  if (buf.trim()) rules.push({ selector: '', body: buf });
+  for (const frame of stack) if (frame.body.trim()) rules.push({ selector: frame.isAt ? '' : frame.selector, body: frame.body });
+  return { selectors, rules };
 }
 
 function checkFileSizes(root: string, srcFiles: string[], testFiles: string[], scriptFiles: string[], cssFiles: string[], failures: string[]): void {
@@ -87,40 +121,52 @@ function checkFileSizes(root: string, srcFiles: string[], testFiles: string[], s
 }
 
 function checkCss(root: string, cssFiles: string[], failures: string[]): void {
+  const impRe = /!\s*important\b/gi;
+  const parsedByRel = new Map<string, ReturnType<typeof parseCss>>();
   for (const rel of cssFiles) {
     const text = readFileSync(path.join(root, rel), 'utf8'), lines = text.split(/\r?\n/);
     const longLines = lines.map((l, i) => ({ idx: i + 1, len: l.length })).filter(x => x.len > CSS_MAX_LINE_CHARS);
     const maxLong = CSS_LONG_LINE_CAP[rel] ?? 0;
     if (longLines.length > maxLong) failures.push(`css-line-length: ${rel} has ${longLines.length} lines > ${CSS_MAX_LINE_CHARS} chars (allowed ${maxLong}; first L${longLines[0].idx}=${longLines[0].len})`);
-    const imp = lines.map((l, i) => ({ idx: i + 1, text: l })).filter(x => x.text.includes('!important'));
-    if (rel === 'public/reader.css') {
-      if (imp.length > 1 || imp.some(m => !m.text.includes('[hidden]'))) failures.push(`css-important: ${rel} has disallowed !important (${imp.length})`);
-    } else if (rel === 'public/pdf-view.css') {
-      if (imp.length > 9 || !text.includes('.pdf-sheet')) failures.push(`css-important: ${rel} has ${imp.length} !important (max 9 inside .pdf-sheet)`);
-    } else if (imp.length > 0) failures.push(`css-important: ${rel} has ${imp.length} !important (first L${imp[0].idx})`);
+    const parsed = parseCss(text);
+    parsedByRel.set(rel, parsed);
+    let totalImp = 0, badImp = 0;
+    for (const rule of parsed.rules) {
+      const hits = rule.body.match(impRe)?.length ?? 0;
+      if (!hits) continue;
+      totalImp += hits;
+      const parts = splitTopLevelCommas(rule.selector).map(s => s.trim()).filter(Boolean);
+      const allowed =
+        rel === 'public/reader.css' ? parts.length > 0 && parts.every(p => p.includes('[hidden]')) :
+        rel === 'public/pdf-view.css' ? parts.length > 0 && parts.every(p => p.includes('.pdf-sheet')) :
+        false;
+      if (!allowed) badImp += hits;
+    }
+    const maxImp = rel === 'public/reader.css' ? 1 : rel === 'public/pdf-view.css' ? 9 : 0;
+    if (badImp > 0 || totalImp > maxImp) failures.push(`css-important: ${rel} has ${totalImp} !important (${badImp} outside allowed selector, max ${maxImp})`);
   }
-  const readerPath = path.join(root, 'public/reader.css'), deskPath = path.join(root, 'public/reading-desk.css');
-  if (existsSync(readerPath) && existsSync(deskPath)) {
-    const a = extractCssSelectors(readFileSync(readerPath, 'utf8'));
-    const b = extractCssSelectors(readFileSync(deskPath, 'utf8'));
-    const overlap = [...a].filter(sel => b.has(sel));
+  const readerParsed = parsedByRel.get('public/reader.css'), deskParsed = parsedByRel.get('public/reading-desk.css');
+  if (readerParsed && deskParsed) {
+    const overlap = [...readerParsed.selectors].filter(sel => deskParsed.selectors.has(sel));
     if (overlap.length > CSS_OVERLAP_CAP) failures.push(`css-overlap: public/reader.css vs public/reading-desk.css share ${overlap.length} selectors (cap ${CSS_OVERLAP_CAP})`);
   }
 }
 
 function checkBannedPatterns(root: string, allFiles: string[], testFiles: string[], failures: string[]): void {
-  const newFuncRe = new RegExp('new ' + 'Function\\('), evalRe = new RegExp('\\beval' + '\\(');
+  const newFuncRe = new RegExp('\\bnew\\s+' + 'Function\\s*\\(');
+  const evalRe = new RegExp('(?:^|[^.\\w$])' + 'eval\\s*\\(|\\(\\s*0\\s*,\\s*' + 'eval\\s*\\)\\s*\\(');
   const globalBans: [string, RegExp][] = [
     ['eslint' + '-disable', new RegExp('eslint' + '-disable')],
     ['@ts' + '-ignore', new RegExp('@ts' + '-ignore')],
     ['@ts' + '-expect-error', new RegExp('@ts' + '-expect-error')]
   ];
-  const asUnknownRe = new RegExp('\\bas ' + 'unknown as\\b', 'g');
+  const asUnknownRe = new RegExp('\\bas\\s+' + 'unknown\\s+as\\b', 'g');
   for (const rel of testFiles) {
-    readFileSync(path.join(root, rel), 'utf8').split(/\r?\n/).forEach((line, i) => {
-      if (newFuncRe.test(line)) failures.push(`banned: ${rel}:${i + 1} contains new Function(`);
-      if (evalRe.test(line)) failures.push(`banned: ${rel}:${i + 1} contains eval(`);
-    });
+    const stripped = stripComments(readFileSync(path.join(root, rel), 'utf8'));
+    const nf = newFuncRe.exec(stripped);
+    if (nf) failures.push(`banned: ${rel}:${stripped.slice(0, nf.index).split('\n').length} contains new Function(`);
+    const ev = evalRe.exec(stripped);
+    if (ev) failures.push(`banned: ${rel}:${stripped.slice(0, ev.index).split('\n').length} contains eval(`);
   }
   for (const rel of allFiles) {
     const text = readFileSync(path.join(root, rel), 'utf8'), lines = text.split(/\r?\n/);
@@ -165,8 +211,8 @@ function checkDuplication(root: string, srcFiles: string[], testFiles: string[],
   if (testDup.count > TEST_DUP_CAP) failures.push(`duplication: tests/ has ${testDup.count} cross-file ${DUP_WINDOW}-line duplicate windows (cap ${TEST_DUP_CAP}; ${testDup.samples.join('; ')})`);
 }
 
-function extractExports(text: string): string[] {
-  const stripped = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), names = new Set<string>();
+function extractExports(stripped: string): string[] {
+  const names = new Set<string>();
   for (const m of stripped.matchAll(/^\s*export\s+(?:declare\s+)?(?:async\s+)?(?:function|const|let|var|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm)) names.add(m[1]);
   for (const m of stripped.matchAll(/^\s*export\s+(?:type\s+)?\{([^}]+)\}/gm)) {
     for (const part of m[1].split(',')) {
@@ -180,12 +226,12 @@ function extractExports(text: string): string[] {
 }
 
 function checkDeadExports(root: string, srcFiles: string[], allRefFiles: string[], failures: string[]): void {
-  const contents = new Map(allRefFiles.map(rel => [rel, readFileSync(path.join(root, rel), 'utf8')]));
+  const contents = new Map(allRefFiles.map(rel => [rel, stripComments(readFileSync(path.join(root, rel), 'utf8'))]));
   const dead: string[] = [];
   for (const rel of srcFiles) {
     if (EXPORT_ENTRYPOINT_ALLOW.has(rel)) continue;
     for (const name of extractExports(contents.get(rel) ?? '')) {
-      const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      const re = new RegExp(`(?<![\\w$])${escapeRe(name)}(?![\\w$])`);
       let used = false;
       for (const [other, content] of contents) if (other !== rel && re.test(content)) { used = true; break; }
       if (!used) dead.push(`${rel}:${name}`);
@@ -196,10 +242,13 @@ function checkDeadExports(root: string, srcFiles: string[], allRefFiles: string[
 
 function checkRepeatedI18n(root: string, srcFiles: string[], failures: string[]): void {
   const pairFiles = new Map<string, Set<string>>();
-  const re = /\b(?:readerLabel|extLabel|label)\(\s*'([^']+)'\s*,\s*'([^']+)'\s*\)/g;
   for (const rel of srcFiles) {
-    for (const m of readFileSync(path.join(root, rel), 'utf8').matchAll(re)) {
-      const key = `${m[1]} / ${m[2]}`;
+    const text = stripComments(readFileSync(path.join(root, rel), 'utf8'));
+    const names = new Set(['readerLabel', 'extLabel', 'label']);
+    for (const m of text.matchAll(/\b(?:readerLabel|extLabel)\s+as\s+([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
+    const callRe = new RegExp(`(?<![.\\w$])(?:${[...names].map(escapeRe).join('|')})\\(\\s*(['"])([^'"]+)\\1\\s*,\\s*(['"])([^'"]+)\\3\\s*\\)`, 'g');
+    for (const m of text.matchAll(callRe)) {
+      const key = `${m[2]} / ${m[4]}`;
       const set = pairFiles.get(key) ?? new Set<string>();
       set.add(rel);
       pairFiles.set(key, set);

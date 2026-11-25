@@ -13,6 +13,7 @@ import {
   inspectShadowCardMetrics, measureLocator, parseCssColor, relLum,
   type RawBorderSample, type RawElementSample
 } from './helpers/contrast.js';
+import { inspectTranslatedBlocks } from './helpers/dom-probes.js';
 import { closeServer } from './helpers/fixtures.js';
 import { action, attachErrorGuards, openReaderPage, type ErrorScope } from './helpers/reader.js';
 import { openReader, withHost, type HostFixture } from './host.js';
@@ -729,38 +730,7 @@ async function runBrowserPhases(host: HostFixture, publisherArticleUrl: string):
       // 1440x900 bilingual + open sidebar + page scope (T1-F5-03).
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.getByLabel('Translation scope').selectOption('page');
-      const inspectTranslated = () => page.evaluate(() => {
-        const blocks = Array.from(document.querySelectorAll<HTMLElement>('#translated .pdf-translated-text')).filter(el => !el.hidden && el.offsetWidth > 0);
-        const bodySizes = blocks.filter(el => el.dataset.role === 'paragraph').map(el => {
-          const rect = el.getBoundingClientRect();
-          const cssFont = parseFloat(getComputedStyle(el).fontSize) || 0;
-          const visualFont = cssFont * (rect.width / el.offsetWidth);
-          return {
-            id: el.dataset.blockId,
-            cssFont,
-            visualFont,
-            needsScroll: el.classList.contains('needs-scroll'),
-            overflowY: getComputedStyle(el).overflowY,
-            scrollOverflows: el.scrollHeight > el.clientHeight + 2
-          };
-        });
-        const rects = blocks.map(el => ({ id: el.dataset.blockId, r: el.getBoundingClientRect() }));
-        let overlaps = 0;
-        for (let i = 0; i < rects.length; i++) {
-          for (let j = i + 1; j < rects.length; j++) {
-            const a = rects[i].r, b = rects[j].r;
-            const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-            const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-            if (ox > 2 && oy > 2) overlaps++;
-          }
-        }
-        return {
-          bodySizes,
-          overlaps,
-          pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
-          railWidth: document.getElementById('rail')!.getBoundingClientRect().width
-        };
-      });
+      const inspectTranslated = () => inspectTranslatedBlocks(page);
 
       await until(async () => {
         const m = await inspectTranslated();
