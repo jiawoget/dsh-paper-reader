@@ -1303,6 +1303,313 @@ import {
 } from "node:fs";
 import path5 from "node:path";
 
+// src/shared/annotations.ts
+var ANNOTATION_COLOR_META = {
+  yellow: { en: "Yellow", zh: "\u9EC4\u8272", meaningEn: "Key point", meaningZh: "\u8981\u70B9" },
+  green: { en: "Green", zh: "\u7EFF\u8272", meaningEn: "Method", meaningZh: "\u65B9\u6CD5" },
+  purple: { en: "Purple", zh: "\u7D2B\u8272", meaningEn: "Question", meaningZh: "\u7591\u95EE" }
+};
+
+// src/shared/citation-export.ts
+var ARXIV_NEW = "\\d{4}\\.\\d{4,5}";
+var ARXIV_OLD = "[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}";
+var ARXIV_ID_SOURCE = `(?:${ARXIV_NEW}|${ARXIV_OLD})`;
+var ARXIV_PATH_RE = new RegExp(`^\\/(?:abs|pdf|html|e-print|format)\\/(${ARXIV_ID_SOURCE})(?:v\\d+)?(?:\\.pdf)?\\/?$`, "i");
+var ARXIV_DOI_RE = new RegExp(`^(?:https?:\\/\\/(?:dx\\.)?doi\\.org\\/|doi:\\s*)?10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, "i");
+var ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`, "i");
+var YEAR_RE2 = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
+var NAME_SUFFIX_RE = /^(?:jr\.?|sr\.?|ii|iii|iv|v|ph\.?d\.?|m\.?d\.?)$/i;
+var NOBILIARY_PARTICLE_RE = /^(?:van|von|de|del|della|di|da|du|la|le|der|den|ter|ten|dos|das)\b/i;
+var TITLE_STOPWORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "the",
+  "of",
+  "on",
+  "in",
+  "for",
+  "to",
+  "and",
+  "or",
+  "with",
+  "by",
+  "from",
+  "at",
+  "as",
+  "into",
+  "about",
+  "via",
+  "using",
+  "towards",
+  "toward"
+]);
+var LATIN_FOLD = {
+  "\xDF": "ss",
+  "\xF8": "o",
+  "\xD8": "o",
+  "\u0142": "l",
+  "\u0141": "l",
+  "\xE6": "ae",
+  "\xC6": "ae",
+  "\u0153": "oe",
+  "\u0152": "oe",
+  "\xF0": "d",
+  "\xD0": "d",
+  "\xFE": "th",
+  "\xDE": "th",
+  "\u0111": "d",
+  "\u0110": "d"
+};
+function nonEmpty(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed && normalizeInline(trimmed) ? trimmed : void 0;
+}
+function cleanDoi(value) {
+  const raw = nonEmpty(value);
+  if (!raw) return void 0;
+  const stripped = raw.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+  return stripped || void 0;
+}
+function stripPdfExtension(value) {
+  const raw = nonEmpty(value);
+  if (!raw) return void 0;
+  const stripped = raw.replace(/\.pdf$/i, "").trim();
+  return stripped || raw;
+}
+function foldAscii(value) {
+  return value.replace(/[ßøØłŁæÆœŒðÐþÞđĐ]/g, (ch) => LATIN_FOLD[ch] ?? ch).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function fnv1aHex(seed) {
+  let hash3 = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    hash3 ^= seed.charCodeAt(i);
+    hash3 = Math.imul(hash3, 16777619) >>> 0;
+  }
+  return hash3.toString(16).padStart(8, "0");
+}
+function normalizeInline(value) {
+  return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function splitCommaAuthors(segment) {
+  if (!segment.includes(",")) return [segment];
+  const parts = segment.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return parts;
+  if (parts.some((part) => NAME_SUFFIX_RE.test(part))) return [segment];
+  if (NOBILIARY_PARTICLE_RE.test(parts[0])) return [segment];
+  const allMultiWord = parts.every((part) => part.split(/\s+/).length >= 2);
+  return allMultiWord ? parts : [segment];
+}
+function parseAuthors(raw) {
+  const cleaned = nonEmpty(raw)?.replace(/\s+/g, " ");
+  if (!cleaned) return [];
+  let source2 = cleaned;
+  let trailingEtAl = false;
+  if (/,\s*et\s+al\.?$/i.test(source2)) {
+    source2 = source2.replace(/,\s*et\s+al\.?$/i, "").trim();
+    trailingEtAl = true;
+  }
+  let segments;
+  if (source2.includes(";")) {
+    segments = source2.split(/\s*;\s*/);
+  } else if (source2.includes("\u3001")) {
+    segments = source2.split(/\s*、\s*/);
+  } else {
+    segments = source2.split(/\s*,\s+and\s+|\s+and\s+|\s*,\s*&\s+|\s+&\s+/i).flatMap((segment) => splitCommaAuthors(segment.trim()));
+  }
+  const authors = [];
+  for (const part of segments) {
+    const trimmed = part.trim().replace(/^,+|,+$/g, "").trim();
+    if (!trimmed) continue;
+    if (/^et\s+al\.?$/i.test(trimmed)) {
+      if (authors.length && !/\bet\s+al\.?$/i.test(authors[authors.length - 1])) {
+        authors[authors.length - 1] += " et al.";
+      }
+      continue;
+    }
+    authors.push(trimmed);
+  }
+  if (trailingEtAl && authors.length && !/\bet\s+al\.?$/i.test(authors[authors.length - 1])) {
+    authors[authors.length - 1] += " et al.";
+  }
+  return authors;
+}
+function extractArxivId(url, doi) {
+  const rawUrl = nonEmpty(url);
+  if (rawUrl) {
+    const parsed = URL.parse(rawUrl);
+    if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+      if (/(?:^|\.)arxiv\.org$/i.test(parsed.hostname)) {
+        const match = ARXIV_PATH_RE.exec(parsed.pathname);
+        if (match) return match[1].toLowerCase();
+      }
+      if (/^(?:dx\.)?doi\.org$/i.test(parsed.hostname)) {
+        const doiPath = parsed.pathname.slice(1);
+        if (doiPath.startsWith("10.")) {
+          const match = ARXIV_DOI_RE.exec(doiPath);
+          if (match) return match[1].toLowerCase();
+        }
+      }
+    } else if (!parsed || parsed.protocol === "arxiv:" || parsed.protocol === "doi:") {
+      const bare = ARXIV_BARE_RE.exec(rawUrl);
+      if (bare) return bare[1].toLowerCase();
+      const doiInUrl = ARXIV_DOI_RE.exec(rawUrl);
+      if (doiInUrl) return doiInUrl[1].toLowerCase();
+    }
+  }
+  const rawDoi = nonEmpty(doi);
+  if (rawDoi) {
+    const match = ARXIV_DOI_RE.exec(rawDoi);
+    if (match) return match[1].toLowerCase();
+  }
+  return void 0;
+}
+function extractYear(date, venue, createdAt) {
+  for (const candidate of [date, venue, createdAt]) {
+    const text2 = nonEmpty(candidate);
+    if (!text2) continue;
+    const match = YEAR_RE2.exec(text2);
+    if (match) return match[1];
+  }
+  return void 0;
+}
+function buildCitationMetadata(doc, zotero) {
+  const isBook = Boolean(doc.book);
+  const title = nonEmpty(zotero?.title) ?? nonEmpty(doc.paperTitle) ?? stripPdfExtension(doc.title) ?? "Untitled";
+  const zoteroAuthors = parseAuthors(zotero?.creator);
+  const authors = zoteroAuthors.length ? zoteroAuthors : parseAuthors(doc.authors);
+  const venue = isBook ? void 0 : nonEmpty(doc.venue);
+  const publisher = nonEmpty(doc.publisher) ?? (isBook ? nonEmpty(doc.venue) : void 0);
+  const year = extractYear(zotero?.date) ?? extractYear(doc.year, doc.venue);
+  const doi = cleanDoi(zotero?.doi) ?? cleanDoi(doc.doi);
+  const url = nonEmpty(zotero?.url) ?? nonEmpty(doc.url);
+  const arxivId = extractArxivId(url, doi) ?? extractArxivId(doc.url, doc.doi);
+  const abstract = nonEmpty(doc.abstract);
+  const zoteroType = nonEmpty(zotero?.type);
+  const id = nonEmpty(doc.id);
+  return {
+    title,
+    ...authors.length ? { authors } : {},
+    ...venue ? { venue } : {},
+    ...year ? { year } : {},
+    ...doi ? { doi } : {},
+    ...url ? { url } : {},
+    ...arxivId ? { arxivId } : {},
+    ...publisher ? { publisher } : {},
+    ...abstract ? { abstract } : {},
+    kind: isBook ? "book" : doc.kind,
+    ...zoteroType ? { zoteroType } : {},
+    ...id ? { id } : {}
+  };
+}
+function buildCiteKey(meta) {
+  const firstAuthor = nonEmpty(meta.authors?.[0]);
+  let authorPart = "";
+  if (firstAuthor) {
+    const withoutEtAl = firstAuthor.replace(/\s+et\s+al\.?$/i, "").trim();
+    const surname = withoutEtAl.includes(",") ? withoutEtAl.split(",")[0].trim() : withoutEtAl.split(/\s+/).at(-1) ?? "";
+    authorPart = foldAscii(surname).replace(/[^a-z0-9]+/g, "").slice(0, 24);
+  }
+  const yearPart = extractYear(meta.year) ?? "";
+  const foldedTitle = foldAscii(stripPdfExtension(meta.title) ?? "");
+  const titleTokens = foldedTitle.match(/[a-z0-9]+/g) ?? [];
+  const titleWord = titleTokens.find((token) => !TITLE_STOPWORDS.has(token)) ?? titleTokens[0] ?? "";
+  const titlePart = titleWord.slice(0, 24);
+  if (authorPart || titlePart) {
+    return `${authorPart}${yearPart}${titlePart}`;
+  }
+  const seed = [meta.id ?? "", meta.title ?? "", (meta.authors ?? []).join(";"), yearPart].join("|");
+  return `ref${yearPart}${fnv1aHex(seed)}`;
+}
+
+// src/shared/reading-pack.ts
+var READER_ROUTE = /^\/api\/paper-reader\/app\/(?:index\.html)?$/;
+function isLoopbackHost(host) {
+  const lower = host.toLowerCase();
+  return lower === "localhost" || lower.endsWith(".localhost") || lower === "[::1]" || lower === "::1" || lower === "0.0.0.0" || lower === "[::]" || /^127(?:\.\d{1,3}){3}$/.test(lower);
+}
+function safePublicUrl(raw) {
+  const url = raw?.trim() ? URL.parse(raw.trim()) : null;
+  if (!url || url.protocol !== "http:" && url.protocol !== "https:") return void 0;
+  if (url.username || url.password || isLoopbackHost(url.hostname) || READER_ROUTE.test(url.pathname)) return void 0;
+  return url.href;
+}
+function safeZoteroUrl(raw) {
+  const url = raw?.trim() ? URL.parse(raw.trim()) : null;
+  if (!url || !["http:", "https:", "zotero:"].includes(url.protocol) || url.username || url.password) return void 0;
+  if (url.protocol !== "zotero:" && (isLoopbackHost(url.hostname) || READER_ROUTE.test(url.pathname))) return void 0;
+  return url.href;
+}
+function toZoteroItem(zotero) {
+  if (!zotero) return null;
+  const url = safePublicUrl(zotero.url) ?? safePublicUrl(zotero.original);
+  return {
+    key: zotero.key ?? "",
+    title: zotero.title ?? "",
+    type: zotero.type ?? "",
+    creator: zotero.creator ?? "",
+    date: zotero.date ?? "",
+    collections: [],
+    ...url ? { url } : {},
+    ...zotero.doi ? { doi: zotero.doi } : {},
+    ...zotero.webUrl ? { webUrl: zotero.webUrl } : {}
+  };
+}
+var yamlInline = (text2) => text2.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").trim();
+var yamlQuoted = (text2) => '"' + yamlInline(text2).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+var blockquote = (text2) => escapedComments(text2.replace(/\r\n?/g, "\n").trim()).split("\n").map((line) => line ? "> " + line : ">").join("\n");
+function isLiveAnnotation(item) {
+  if (!item || typeof item !== "object") return false;
+  if ("content" in item && item.content === null) return false;
+  if (item.kind !== "highlight" && item.kind !== "pin") return false;
+  if (typeof item.page !== "number" || !Number.isFinite(item.page) || item.page < 1) return false;
+  if (typeof item.id !== "string" || typeof item.quote !== "string" || typeof item.text !== "string") return false;
+  return !(item.kind === "pin" && !item.text.trim() && !item.quote.trim());
+}
+function formatYamlFrontmatter(doc, zotero) {
+  const meta = buildCitationMetadata(doc, toZoteroItem(zotero));
+  const lines = ["---", "title: " + yamlQuoted(meta.title)];
+  const authors = (meta.authors ?? []).map(yamlInline).filter(Boolean);
+  if (authors.length) {
+    lines.push("authors:");
+    for (const author of authors) lines.push("  - " + yamlQuoted(author));
+  }
+  if (meta.year && /^\d{4}$/.test(meta.year)) lines.push("year: " + meta.year);
+  const venue = yamlInline(meta.venue ?? meta.publisher ?? "");
+  if (venue) lines.push("venue: " + yamlQuoted(venue));
+  const doi = yamlInline(meta.doi ?? "");
+  if (doi) lines.push("doi: " + yamlQuoted(doi));
+  const citekey = yamlInline(buildCiteKey(meta));
+  if (citekey) lines.push("citekey: " + (/^[a-z0-9_-]+$/i.test(citekey) ? citekey : yamlQuoted(citekey)));
+  const publicUrl = safePublicUrl(meta.url) ?? safePublicUrl(doc.url) ?? safePublicUrl(zotero?.original);
+  if (publicUrl) lines.push("url: " + yamlQuoted(publicUrl));
+  const zoteroUrl = safeZoteroUrl(zotero?.link) ?? safeZoteroUrl(zotero?.webUrl);
+  if (zoteroUrl) lines.push("zotero: " + yamlQuoted(zoteroUrl));
+  lines.push("---");
+  return lines.join("\n");
+}
+function formatHighlightsSection(annotations, options) {
+  const live = annotations.filter(isLiveAnnotation).sort((a, b) => a.page - b.page || (a.createdAt || "").localeCompare(b.createdAt || "") || a.id.localeCompare(b.id));
+  if (!live.length) return "";
+  const blocks3 = ["## Highlights & Page Notes"];
+  let currentPage = 0;
+  for (const ann of live) {
+    if (!options?.isWeb && ann.page !== currentPage) {
+      currentPage = ann.page;
+      const section = options?.sectionTitle?.(ann.page)?.trim();
+      blocks3.push("### " + (section ? markdownHeading(section) : "Page " + ann.page));
+    }
+    const meta = ANNOTATION_COLOR_META[ann.color] ?? ANNOTATION_COLOR_META.yellow;
+    const badge = ann.kind === "pin" ? "**Page note**" : `**${meta.en} \xB7 ${meta.meaningEn}**`;
+    const label = ann.label.trim();
+    const loc = options?.formatLink ? options.formatLink(ann) : label && !(ann.kind === "pin" && (label === "Page note" || label === "\u9875\u8FB9\u7B14\u8BB0")) ? markdownHeading(label) : "";
+    blocks3.push(loc ? `${badge} \xB7 ${loc}` : badge);
+    if (ann.quote.trim()) blocks3.push(blockquote(ann.quote));
+    if (ann.text.trim()) blocks3.push(escapedComments(ann.text.replace(/\r\n?/g, "\n").trim()));
+  }
+  return blocks3.join("\n\n");
+}
+
 // src/shared/source-link.ts
 function quoteLocator(text2) {
   return text2.slice(0, 240).replace(/[\uD800-\uDBFF]$/u, "");
@@ -1830,6 +2137,9 @@ var NotebookRecords = class {
     const order = kind === "note" ? "updatedAt DESC,rowid DESC" : "page,createdAt,rowid";
     return this.db.prepare("SELECT * FROM entries WHERE kind=? AND docId=?" + scope + " ORDER BY " + order).all(kind, docId, ...pages).map(decodeEntry);
   }
+  annotations(docId, chapter) {
+    return listAnnotations(this.db, { docId }).filter((item) => !chapter || chapter.sections.has(item.page));
+  }
   save(input, importedId, allowEmpty = false) {
     return storeEntry(this.db, "note", input, importedId, allowEmpty);
   }
@@ -2043,7 +2353,7 @@ var ReaderStore = class {
       if (!settings.vaultPath) throw new ServiceError(503, "Set your Obsidian vault directory in Settings.");
       const row = db.prepare("SELECT filename FROM notebooks WHERE vault=? AND docId=?").get(settings.vaultPath, docId);
       const entries = collect(db.prepare("SELECT * FROM entries WHERE docId=? ORDER BY page,createdAt,rowid").iterate(docId));
-      const result = write({ settings, entries, filename: row && readColumn(row, "filename"), zotero: new NotebookRecords(db).zoteroSource(docId) });
+      const result = write({ settings, entries, annotations: listAnnotations(db, { docId }), filename: row && readColumn(row, "filename"), zotero: new NotebookRecords(db).zoteroSource(docId) });
       db.prepare("INSERT OR REPLACE INTO notebooks VALUES(?,?,?)").run(settings.vaultPath, docId, path3.basename(result.path));
       return result;
     });
@@ -2319,7 +2629,7 @@ function vocabulary(base, words, chapter) {
   }
   return rows;
 }
-function markdown(title, docId, base, entries) {
+function markdown(title, docId, base, entries, highlights = "") {
   const rows = ["# " + markdownHeading(title), "", "[Open in Paper Reader](<" + source(base, docId, 1, "") + ">)"];
   if (entries.notes.length) rows.push("", "## Notes");
   for (const note of entries.notes) {
@@ -2327,6 +2637,7 @@ function markdown(title, docId, base, entries) {
     if (note.quote) rows.push(...escapedComments(note.quote).split(/\r?\n/).map((line) => "> " + line), "");
     rows.push(escapedComments(note.text));
   }
+  if (highlights) rows.push("", highlights);
   if (entries.vocabulary.length) rows.push("", ...vocabulary(base, entries.vocabulary));
   return rows.join("\n");
 }
@@ -2353,6 +2664,15 @@ function exportChapterVocabulary(previous, key2, base, words, chapter) {
   const id = key2 + "/vocabulary";
   if (!words.length && !previous.includes("<!-- Paper Reader " + hash2(id).slice(0, 20))) return previous;
   return mergeMarkdown(previous, vocabulary(base, words, chapter).join("\n"), id);
+}
+function exportChapterMarks(previous, key2, base, annotations, chapter) {
+  const id = key2 + "/annotations";
+  if (!annotations.length && !previous.includes("<!-- Paper Reader " + hash2(id).slice(0, 20))) return previous;
+  const content = formatHighlightsSection(annotations, {
+    sectionTitle: (page) => chapter?.sections.get(page)?.title,
+    formatLink: (ann) => sourceText(ann, base, ann.quote, chapter?.sections.get(ann.page)?.title)
+  });
+  return mergeMarkdown(previous, content, id);
 }
 function fileContent(file) {
   try {
@@ -2397,8 +2717,8 @@ function exportNotebook(store, input, sources, notebook) {
   const docId = single(input.docId, "document ID", 512, true);
   const title = stringValue(input.title, "paper title", 2048, true);
   const supplied = address(input.sourceUrl);
-  return store.notebook(docId, ({ settings, entries, filename, zotero }) => {
-    const candidates = [supplied, ...entries.notes.map((row) => row.sourceUrl), ...entries.vocabulary.map((row) => row.sourceUrl)];
+  return store.notebook(docId, ({ settings, entries, annotations, filename, zotero }) => {
+    const candidates = [supplied, ...entries.notes.map((row) => row.sourceUrl), ...entries.vocabulary.map((row) => row.sourceUrl), ...annotations.map((row) => row.sourceUrl)];
     sources.useSavedSources([zotero?.original ?? "", ...candidates]);
     const base = candidates.find((url) => url && /^\/api\/paper-reader\/app\/(?:index\.html)?$/.test(new URL(url).pathname)) ?? (supplied || "http://localhost/");
     try {
@@ -2407,11 +2727,21 @@ function exportNotebook(store, input, sources, notebook) {
       if (name2 !== path5.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
       const file = path5.join(folder, name2);
       const observed = fileContent(file);
-      const content = notebook === void 0 ? markdown(title, docId, base, entries) : notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, "").trimEnd() + (entries.vocabulary.length ? "\n\n" + vocabulary(base, entries.vocabulary).join("\n") : "");
+      const doc = sources.doc ?? { id: docId, kind: "pdf", title, ...supplied ? { url: supplied } : {} };
+      const highlights = formatHighlightsSection(annotations, {
+        formatLink: (ann) => sourceText(ann, base, ann.quote),
+        isWeb: doc.kind === "web" && !doc.book
+      });
+      const content = notebook === void 0 ? markdown(title, docId, base, entries, highlights) : [
+        notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, "").trimEnd(),
+        highlights,
+        entries.vocabulary.length ? vocabulary(base, entries.vocabulary).join("\n") : ""
+      ].filter(Boolean).join("\n\n");
       const render = (label, url) => portableCitation(label, sources.targets(url, settings.vaultPath, folder, zotero?.link));
       const generated = vaultMarkdown(content, docId, render, false);
-      writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(observed ?? "", generated, docId), docId, render, false));
-      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length };
+      const seed = observed?.trim() ? observed : formatYamlFrontmatter(doc, zotero);
+      writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(seed, generated, docId), docId, render, false));
+      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length, annotations: annotations.length };
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(503, "Cannot write to the configured Obsidian vault. Check its path and write permissions.");
@@ -2749,9 +3079,10 @@ var PaperNotebooks = class {
       if (!book.file) throw new ServiceError(503, "Set your Obsidian vault directory in Settings.");
       const { chapter, docId, sourceUrl: sourceUrl2 } = book.local;
       const words = records.entries("word", docId, chapter);
-      book.markdown = exportChapterVocabulary(book.markdown, notebookKey(docId, chapter), sourceUrl2, words, chapter);
+      const marks = records.annotations(docId, chapter);
+      book.markdown = exportChapterMarks(exportChapterVocabulary(book.markdown, notebookKey(docId, chapter), sourceUrl2, words, chapter), notebookKey(docId, chapter), sourceUrl2, marks, chapter);
       persist(records, book);
-      return { path: book.file, notes: records.entries("note", docId, chapter).length, words: words.length };
+      return { path: book.file, notes: records.entries("note", docId, chapter).length, words: words.length, annotations: marks.length };
     });
   }
   async saveNote(input) {
@@ -3528,52 +3859,6 @@ var PdfOutlines = class {
 
 // src/server/web-article.ts
 import { parse as parse2 } from "parse5";
-
-// src/shared/citation-export.ts
-var ARXIV_NEW = "\\d{4}\\.\\d{4,5}";
-var ARXIV_OLD = "[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}";
-var ARXIV_ID_SOURCE = `(?:${ARXIV_NEW}|${ARXIV_OLD})`;
-var ARXIV_PATH_RE = new RegExp(`^\\/(?:abs|pdf|html|e-print|format)\\/(${ARXIV_ID_SOURCE})(?:v\\d+)?(?:\\.pdf)?\\/?$`, "i");
-var ARXIV_DOI_RE = new RegExp(`^(?:https?:\\/\\/(?:dx\\.)?doi\\.org\\/|doi:\\s*)?10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, "i");
-var ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`, "i");
-function nonEmpty(value) {
-  if (typeof value !== "string") return void 0;
-  const trimmed = value.trim();
-  return trimmed && normalizeInline(trimmed) ? trimmed : void 0;
-}
-function normalizeInline(value) {
-  return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
-}
-function extractArxivId(url, doi) {
-  const rawUrl = nonEmpty(url);
-  if (rawUrl) {
-    const parsed = URL.parse(rawUrl);
-    if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
-      if (/(?:^|\.)arxiv\.org$/i.test(parsed.hostname)) {
-        const match = ARXIV_PATH_RE.exec(parsed.pathname);
-        if (match) return match[1].toLowerCase();
-      }
-      if (/^(?:dx\.)?doi\.org$/i.test(parsed.hostname)) {
-        const doiPath = parsed.pathname.slice(1);
-        if (doiPath.startsWith("10.")) {
-          const match = ARXIV_DOI_RE.exec(doiPath);
-          if (match) return match[1].toLowerCase();
-        }
-      }
-    } else if (!parsed || parsed.protocol === "arxiv:" || parsed.protocol === "doi:") {
-      const bare = ARXIV_BARE_RE.exec(rawUrl);
-      if (bare) return bare[1].toLowerCase();
-      const doiInUrl = ARXIV_DOI_RE.exec(rawUrl);
-      if (doiInUrl) return doiInUrl[1].toLowerCase();
-    }
-  }
-  const rawDoi = nonEmpty(doi);
-  if (rawDoi) {
-    const match = ARXIV_DOI_RE.exec(rawDoi);
-    if (match) return match[1].toLowerCase();
-  }
-  return void 0;
-}
 
 // src/shared/academic-intake.ts
 var ARXIV_URL_RE = /^\/(?:abs|pdf)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;

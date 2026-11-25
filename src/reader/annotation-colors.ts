@@ -1,7 +1,7 @@
-import type { AnnotationColor, PaperAnnotation } from '../shared/annotations.js';
+import { ANNOTATION_COLORS, ANNOTATION_COLOR_META, type AnnotationColor, type PaperAnnotation } from '../shared/annotations.js';
 import { button, el, readerLabel as label } from './ui.js';
 
-export const ANNOTATION_COLORS: readonly AnnotationColor[] = ['yellow', 'green', 'purple'];
+export { ANNOTATION_COLORS };
 
 export interface AnnotationFilter {
   kind: PaperAnnotation['kind'] | 'all';
@@ -17,15 +17,13 @@ export interface MarksFilterControls {
 }
 
 function colorName(color: AnnotationColor): string {
-  return color === 'yellow' ? label('Yellow', '黄色')
-    : color === 'green' ? label('Green', '绿色')
-    : label('Purple', '紫色');
+  const meta = ANNOTATION_COLOR_META[color];
+  return label(meta.en, meta.zh);
 }
 
 export function colorMeaning(color: AnnotationColor): string {
-  return color === 'yellow' ? label('Key point', '要点')
-    : color === 'green' ? label('Method', '方法')
-    : label('Question', '疑问');
+  const meta = ANNOTATION_COLOR_META[color];
+  return label(meta.meaningEn, meta.meaningZh);
 }
 
 export function highlightName(color: AnnotationColor): string {

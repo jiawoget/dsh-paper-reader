@@ -21,6 +21,7 @@ export interface ReaderPort {
   discussionScreenshot(source: ChatSource): Promise<string>;
   resumeDiscussion(ref: DiscussionRef, requestId?: string): Promise<void>;
   notebookHighlights(): readonly PaperAnnotation[];
+  documentMarks(): readonly PaperAnnotation[];
   editNotebookHighlight(id: string, trigger: HTMLElement): void;
   attachDiscussionPosition?(header: HTMLElement, signal: AbortSignal): void;
   saveHighlight?(source: SourceRecord, quote: string, color?: AnnotationColor): Promise<void>;

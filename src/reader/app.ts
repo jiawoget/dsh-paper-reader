@@ -13,7 +13,7 @@ import { renderArticle } from './article-view.js';
 import { installCitationPreviews } from './citation-preview.js';
 import { openPdf, bundledPdfUrl, type PdfDocument, type PdfPageView } from './pdf-view.js';
 import { collectionsDialog } from './collections-dialog.js';
-import { notesPanel } from './notes-panel.js';
+import { notesPanel, readingPackBar } from './notes-panel.js';
 import { referencePanel } from './reference-panel.js';
 import { settingsDialog } from './settings-dialog.js';
 import { installShortcuts } from './shortcuts.js';
@@ -150,7 +150,7 @@ class Reader implements ReaderPort {
       this.state.notes=[...book.value.notes,...state.notes.filter(note=>note.docId!==doc.id ||
         Boolean(chapterId && doc.book?.sections[note.page-1]?.chapterId!==chapterId))];
     }
-    if((this.tab==='notes' && notebookChanged)||(this.tab!=='contents' && !byId('railBody').hasChildNodes()))this.repaintNotes();
+    if(((this.tab==='notes'||this.tab==='marks') && notebookChanged)||(this.tab!=='contents' && !byId('railBody').hasChildNodes()))this.repaintNotes();
     this.card.refresh();
     this.chat.render();
     this.pdfControls?.syncTargetLanguage(this.targetLanguage);
@@ -161,6 +161,7 @@ class Reader implements ReaderPort {
     }
   }
   paperSelection(source?: ChatSource):void { this.chat.selected(source); }
+  documentMarks() { return this.marks.all(); }
   notebookHighlights() {
     if(this.desk.highlightDisplay!=='inline')return [];
     const marks=this.marks.savedHighlights(),book=this.doc.book;
@@ -311,7 +312,7 @@ class Reader implements ReaderPort {
       if(selected && !contents)body.setAttribute('aria-labelledby',id);
     }
     if(contents)return;
-    if(this.tab==='marks')this.marks.attach(body);
+    if(this.tab==='marks')this.marks.attach(body,readingPackBar(this,'marks'));
     else if(this.tab==='notes')notesPanel(this,body);
     else {body.replaceChildren();referencePanel(this,body);}
   }

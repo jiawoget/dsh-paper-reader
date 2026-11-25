@@ -336,7 +336,7 @@ class NotebookEditor {
     else if (preceding) { preceding.to += gap.length; preceding.text += gap; }
   }
 
-  private async flush(): Promise<void> {
+  async flush(): Promise<void> {
     if (this.activeWrite) await this.activeWrite;
     if (!this.current) throw Error(label('Reopen Notes to save your edits.', '请重新打开「笔记」以保存修改。'));
     if (this.dirty) await this.save();
@@ -442,8 +442,10 @@ class NotebookEditor {
     this.highlights = items;
     this.view.dispatch({ effects: refreshSources.of() });
   }
-  attach(parent: HTMLElement, guide?: (parent: HTMLElement) => void): void {
+  currentMarkdown(): string { return this.draft.text; }
+  attach(parent: HTMLElement, guide?: (parent: HTMLElement) => void, packBar?: HTMLElement): void {
     if (this.root.parentElement !== parent) { parent.replaceChildren(this.root); this.view.requestMeasure(); }
+    if (packBar && packBar.parentElement !== this.root) this.guide.after(packBar);
     this.renderGuide = guide ? node => { node.replaceChildren(); guide(node); } : undefined;
     this.guide.hidden = !guide;
     if (this.guide.open) this.renderGuide?.(this.guide.lastElementChild as HTMLElement);
@@ -582,3 +584,9 @@ export function refreshNotebookHighlights(app: ReaderPort): void {
   const editor = editors.get(app);
   if (editor?.belongsTo(app.doc.id, currentChapter(app))) editor.setHighlights(app.notebookHighlights());
 }
+export function currentNotebookMarkdown(app: ReaderPort): string | undefined {
+  const chapterId = currentChapter(app), editor = editors.get(app);
+  if (editor?.belongsTo(app.doc.id, chapterId)) return editor.currentMarkdown();
+  return remembered(chapterId ? app.doc.id + '/' + encodeURIComponent(chapterId) : app.doc.id)?.text ?? (app.notebook?.docId === app.doc.id && app.notebook.chapterId === chapterId ? app.notebook.markdown : undefined);
+}
+export async function flushNotebook(app: ReaderPort): Promise<void> { const editor = editors.get(app); if (editor?.belongsTo(app.doc.id, currentChapter(app))) await editor.flush(); }

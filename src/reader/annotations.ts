@@ -112,18 +112,17 @@ export class AnnotationWorkspace {
       else sessionStorage.removeItem(storageKey(this.docId));
     } catch { /* The live editor still owns its draft. */ }
   }
-  private all(): PaperAnnotation[] {
-    return [...new Map([...this.records, ...this.drafts]).values()];
-  }
+  all(): PaperAnnotation[] { return [...new Map([...this.records, ...this.drafts]).values()]; }
   onPage(page: number): PaperAnnotation[] { return this.all().filter(item => item.page === page); }
   savedHighlights(): PaperAnnotation[] {
     return Array.from(this.records.values()).filter(item => item.kind === 'highlight')
       .sort((a, b) => a.page - b.page || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
-  pinAt(page: number, anchor: string): PaperAnnotation | undefined {
-    return this.onPage(page).find(item => item.kind === 'pin' && item.anchor === anchor);
+  pinAt(page: number, anchor: string): PaperAnnotation | undefined { return this.onPage(page).find(item => item.kind === 'pin' && item.anchor === anchor); }
+  attach(parent: HTMLElement, footer?: HTMLElement): void {
+    if (this.root.parentElement !== parent) parent.replaceChildren(this.root);
+    if (footer && footer.parentElement !== this.index) this.index.append(footer);
   }
-  attach(parent: HTMLElement): void { if (this.root.parentElement !== parent) parent.replaceChildren(this.root); }
   showList(): void { this.closeEditor(false); this.controls.showIndex(); }
   private renderIndex(): void {
     const focusedId = this.list.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.id : undefined;

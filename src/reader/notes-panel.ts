@@ -1,9 +1,10 @@
 import type { SourceRecord } from '../shared/types.js';
 import { chapterPassageLabel } from '../shared/notebook-structure.js';
+import { formatReadingPackMarkdown, readingPackFilename } from '../shared/reading-pack.js';
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
-import { notebookEditor } from './notebook.js';
+import { currentNotebookMarkdown, flushNotebook, notebookEditor } from './notebook.js';
 import { settingsDialog } from './settings-dialog.js';
-import { button, el, icon, readerLabel as label, type ReaderPort } from './ui.js';
+import { api, button, copyText, downloadFile, el, icon, readerLabel as label, sourceUrl, toast, type ReaderPort } from './ui.js';
 
 export function sourceChip(app: ReaderPort, source: Pick<SourceRecord, 'docId' | 'page' | 'anchor' | 'label'> & { sourceUrl?: string; context?: string }, quote = ''): HTMLButtonElement {
   const url = source.sourceUrl && URL.canParse(source.sourceUrl) ? new URL(source.sourceUrl) : undefined;
@@ -48,13 +49,73 @@ function guide(app: ReaderPort, parent: HTMLElement): void {
   three.append(el('h3', '', label('To revisit', '待回顾')), checkLabel); parent.append(one, two, three);
 }
 
+const packBars = new WeakMap<ReaderPort, Partial<Record<'notes' | 'marks', { root: HTMLElement; obsidian: HTMLButtonElement }>>>();
+
+async function fetchLinkedZotero(app: ReaderPort, docId: string) {
+  if (app.state.settings.zoteroMode !== 'desktop' && !app.state.settings.zoteroLibraryId) return null;
+  const lookup = async () => {
+    const status = await api('zotero.status', {});
+    if (!status.connected) return null;
+    const { item } = await api('zotero.get', { docId });
+    if (!item) return null;
+    const link = status.mode === 'desktop' ? 'zotero://select/library/items/' + encodeURIComponent(item.key) : item.webUrl;
+    return link ? { ...item, link } : item;
+  };
+  return Promise.race([lookup().catch(() => null), new Promise<null>(resolve => window.setTimeout(() => resolve(null), 800))]);
+}
+
+async function buildReadingPack(app: ReaderPort): Promise<{ content: string; filename: string } | undefined> {
+  const doc = app.doc, markdown = currentNotebookMarkdown(app);
+  const notes = markdown !== undefined ? markdown : app.state.notes.filter(note => note.docId === doc.id);
+  const marks = app.documentMarks(), vocabulary = app.state.vocabulary.filter(word => word.docId === doc.id);
+  const zotero = await fetchLinkedZotero(app, doc.id);
+  if (app.doc.id !== doc.id) return undefined;
+  return { content: formatReadingPackMarkdown(doc, notes, marks, vocabulary, zotero), filename: readingPackFilename(doc, zotero) };
+}
+
+export function readingPackBar(app: ReaderPort, slot: 'notes' | 'marks'): HTMLElement {
+  let slots = packBars.get(app);
+  if (!slots) { slots = {}; packBars.set(app, slots); }
+  let entry = slots[slot];
+  if (!entry) {
+    const root = el('div', 'reading-pack-bar');
+    root.setAttribute('role', 'group');
+    root.ariaLabel = label('Export Markdown', '导出 Markdown');
+    const copy = button(label('Copy Markdown', '复制 Markdown'), async () => {
+      const pack = await buildReadingPack(app);
+      if (!pack) return;
+      toast((await copyText(pack.content))
+        ? label('Markdown copied to clipboard.', 'Markdown 已复制到剪贴板。')
+        : label('Clipboard access was blocked. Use Download instead.', '剪贴板权限受限，请改用下载按钮。'));
+    }, 'btn reading-pack-btn');
+    const download = button(label('Download .md', '下载 .md'), async () => {
+      const pack = await buildReadingPack(app);
+      if (!pack) return;
+      downloadFile(pack.filename, pack.content, 'text/markdown;charset=utf-8');
+      toast(label(`Downloaded ${pack.filename}.`, `已下载 ${pack.filename}。`));
+    }, 'btn reading-pack-btn');
+    const obsidian = button(label('Export to Obsidian', '导出到 Obsidian'), async () => {
+      await flushNotebook(app);
+      await api('obsidian.export', { docId: app.doc.id, title: app.doc.title, page: app.page, sourceUrl: sourceUrl(app.doc.id, app.page) });
+      await app.refresh();
+      toast(label('Exported to Obsidian.', '已导出到 Obsidian。'));
+    }, 'btn reading-pack-btn reading-pack-obsidian');
+    root.append(copy, download, obsidian);
+    entry = { root, obsidian };
+    slots[slot] = entry;
+  }
+  entry.obsidian.hidden = !app.state.settings.vaultPath;
+  return entry.root;
+}
+
 export function paperNotebook(app: ReaderPort) {
   return notebookEditor(app, sourceChip, () => settingsDialog(app, true));
 }
 
 export function notesPanel(app: ReaderPort, parent: HTMLElement): void {
   const editor = paperNotebook(app);
-  if (editor) editor.attach(parent, app.doc.id === 'pagedattention' ? node => guide(app, node) : undefined);
+  const bar = readingPackBar(app, 'notes');
+  if (editor) editor.attach(parent, app.doc.id === 'pagedattention' ? node => guide(app, node) : undefined, bar);
   else parent.replaceChildren(el('p', 'hint', app.notebookError || label('Opening notes…', '正在打开笔记…')),
-    button(label('Obsidian vault settings', 'Obsidian 笔记库设置'), () => settingsDialog(app, true), 'text-btn'));
+    button(label('Obsidian vault settings', 'Obsidian 笔记库设置'), () => settingsDialog(app, true), 'text-btn'), bar);
 }
