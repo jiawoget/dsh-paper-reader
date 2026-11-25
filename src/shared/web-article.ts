@@ -27,6 +27,7 @@ export interface WebArticle {
   doi?: string;
   publisher?: string;
   abstract?: string;
+  pdfUrl?: string;
 }
 
 export function articleUrl(value: string | undefined, base?: string): URL | undefined {
@@ -267,6 +268,7 @@ export function extractArticle<N>(root: N, tree: ArticleTree<N>, address: string
   const doi = firstMeta('citation_doi', 'dc.identifier');
   const publisher = firstMeta('citation_publisher', 'dc.publisher', 'dcterms.publisher');
   const abstract = firstMeta('citation_abstract', 'dcterms.abstract', 'dc.description', 'description', 'og:description');
+  const pdfUrl = articleUrl(firstMeta('citation_pdf_url'), base)?.href;
   return {
     article: {
       url: address,
@@ -279,7 +281,8 @@ export function extractArticle<N>(root: N, tree: ArticleTree<N>, address: string
       ...(year ? { year } : {}),
       ...(doi ? { doi } : {}),
       ...(publisher ? { publisher } : {}),
-      ...(abstract ? { abstract } : {})
+      ...(abstract ? { abstract } : {}),
+      ...(pdfUrl ? { pdfUrl } : {})
     },
     index: pickedIndex
   };

@@ -11,6 +11,7 @@ import {
   type CitationMetadata
 } from '../src/shared/citation-export.js';
 import type { DocumentInfo, ZoteroItem } from '../src/shared/types.js';
+import { parsePdfMetadata } from '../src/reader/pdf/metadata.js';
 import { sample } from '../src/server/library.js';
 
 function assertBalancedBraces(bibtex: string): void {
@@ -427,4 +428,17 @@ test('regression: Object.prototype property names in zoteroType fall back safely
   assert.match(mergedBib, /^@misc\{smith2025malicious,\n/);
   const mergedRis = formatRIS(merged);
   assert.equal(mergedRis.split('\n')[0], 'TY  - GEN');
+});
+
+test('parsePdfMetadata extracts PDF Info, XMP, D:YYYY dates, page-1 arXiv/DOI, and filters placeholders', () => {
+  assert.deepEqual(
+    parsePdfMetadata({ Title: 'Attention Is All You Need', Author: 'Vaswani, Ashish', Subject: 'NeurIPS', CreationDate: 'D:20170612153000Z' }, null, 'arXiv:1706.03762v7 [cs.CL] 2 Aug 2023\nDOI:\n10.48550/arXiv.1706.03762.'),
+    { paperTitle: 'Attention Is All You Need', authors: 'Vaswani, Ashish', venue: 'NeurIPS', year: '2017', doi: '10.48550/arXiv.1706.03762', url: 'https://arxiv.org/abs/1706.03762' }
+  );
+  const xmp = new Map<string, unknown>([['dc:title', 'XMP Paper'], ['dc:creator', ['Ada Lovelace', 'Charles Babbage']], ['prism:publicationname', 'Nature'], ['xmp:createdate', '2025-01-05']]);
+  assert.deepEqual(parsePdfMetadata({ Title: 'Untitled', Subject: 'arXiv:2501.00001' }, { get: k => xmp.get(k) }, ''), { paperTitle: 'XMP Paper', authors: 'Ada Lovelace; Charles Babbage', venue: 'Nature', year: '2025', url: 'https://arxiv.org/abs/2501.00001' });
+  const ph = parsePdfMetadata({ Title: 'Slide 1' }, null, 'Preprint arXiv:2403.09999v1 [cs.LG] 15 Mar 2024');
+  assert.equal(ph.paperTitle, undefined); assert.equal(ph.year, '2024'); assert.equal(ph.url, 'https://arxiv.org/abs/2403.09999');
+  assert.deepEqual(parsePdfMetadata(null, null, 'doi:10.1145/\n3600006.3613165 arXiv:2309.\n06180'), { doi: '10.1145/3600006.3613165', url: 'https://arxiv.org/abs/2309.06180', year: '2023' });
+  assert.equal(parsePdfMetadata(null, null, 'arXiv:hep-th/9901001v1 [hep-th] 1 Jan 1999').year, '1999');
 });

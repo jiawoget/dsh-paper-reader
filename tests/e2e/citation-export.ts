@@ -68,12 +68,15 @@ function startAcademicPublisherFixture() {
         <h1>大语言模型 100% 推理 &amp; 缓存_优化 #1 }</h1>
         <p>用于验证中文标题、作者与 LaTeX 特殊字符转义及 ASCII 引文键生成。</p>
       </article></body></html>`
-    ]
+    ],
+    ['/abs/2401.12345', `<!doctype html><html><head><meta charset="utf-8"><meta name="citation_title" content="Smart Intake ArXiv Paper"><meta name="citation_author" content="Turing, Alan"><meta name="citation_date" content="2024/01/15"></head><body><article><p>ArXiv abstract body.</p></article></body></html>`]
   ]);
+  let arxivPdf: Buffer = Buffer.alloc(0);
 
-  return new Promise<{ origin: string; close: () => Promise<void> }>((resolve, reject) => {
+  return new Promise<{ origin: string; setArxivPdf: (b: Buffer) => void; close: () => Promise<void> }>((resolve, reject) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname === '/pdf/2401.12345.pdf' && arxivPdf.length) { res.writeHead(200, { 'content-type': 'application/pdf' }).end(arxivPdf); return; }
       const html = pages.get(url.pathname);
       if (!html) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found');
@@ -90,6 +93,7 @@ function startAcademicPublisherFixture() {
       }
       resolve({
         origin: 'http://127.0.0.1:' + address.port,
+        setArxivPdf: (b: Buffer) => { arxivPdf = b; },
         close: () => closeServer(server)
       });
     });
@@ -404,6 +408,39 @@ try {
         assert.ok(mergedRis.includes('DO  - 10.1000/local.doi\n'), mergedRis);
         assert.ok(mergedRis.includes(`UR  - ${ARTICLE_URLS.localMerge}\n`), mergedRis);
         console.log('PASS T2-F3-08: Partial Zotero merge preserves local doi and url.');
+
+        publisher.setArxivPdf(await makePdf(context, 'Smart Intake ArXiv Paper', ['ArXiv intake PDF body.']));
+        await page.locator('#library').click();
+        const intake = page.getByRole('dialog');
+        await intake.getByRole('button', { name: 'Open web page', exact: true }).click();
+        await intake.locator('#library-url').fill('2401.12345');
+        await intake.getByRole('button', { name: 'Import paper', exact: true }).click();
+        await intake.waitFor({ state: 'hidden' });
+        await page.locator('#original [data-pdf-side="source"]').first().waitFor({ timeout: 25_000 });
+        await openReferenceTab(page);
+        await page.locator('.citation-preview-toggle').click();
+        await page.locator('.citation-preview-code').filter({ hasText: 'eprint = {2401.12345}' }).waitFor({ state: 'visible' });
+        await page.locator('.citation-preview-tabs').getByRole('tab', { name: 'RIS', exact: true }).click();
+        await page.locator('.citation-preview-code').filter({ hasText: 'N1  - arXiv:2401.12345' }).waitFor({ state: 'visible' });
+        await page.getByRole('button', { name: 'Edit metadata', exact: true }).click();
+        const inputs = page.locator('.ref-meta-form input');
+        for (const [i, val] of ['Refined ArXiv Title', 'Turing, Alan; Church, Alonzo', 'SOSP', '2025', '10.1145/2401.12345'].entries()) await inputs.nth(i).fill(val);
+        await page.locator('.citation-preview-code').filter({ hasText: 'TI  - Refined ArXiv Title' }).waitFor({ state: 'visible' });
+        await page.getByRole('button', { name: 'Save metadata', exact: true }).click();
+        await page.locator('#toast').filter({ hasText: 'Metadata updated.' }).waitFor({ state: 'visible' });
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.locator('#original [data-pdf-side="source"]').first().waitFor({ timeout: 25_000 });
+        await openReferenceTab(page);
+        await page.locator('#railBody h1').filter({ hasText: 'Refined ArXiv Title' }).waitFor({ state: 'visible' });
+        const metaPdf = await makePdf(context, 'Local Meta Extract', ['Preprint arXiv:2402.54321 and doi:10.1145/9999.1 body text.']);
+        await page.locator('#library').click();
+        const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('dialog').getByRole('button', { name: 'Open a PDF', exact: true }).click()]);
+        await chooser.setFiles({ name: 'local-meta.pdf', mimeType: 'application/pdf', buffer: metaPdf });
+        await page.getByRole('dialog').waitFor({ state: 'hidden' });
+        await page.locator('#original [data-pdf-side="source"]').first().waitFor({ timeout: 25_000 });
+        await openReferenceTab(page);
+        await page.locator('.citation-preview-toggle').click();
+        await page.locator('.citation-preview-code').filter({ hasText: '10.1145/9999.1' }).waitFor({ state: 'visible' });
 
         await context.close();
 

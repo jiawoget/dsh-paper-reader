@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from 'node:module';
 const output = process.env.PAPER_READER_E2E_PUBLISHER_LOG;
 if (!output) throw new Error('The end-to-end publisher log path is missing.');
 
-const tracedHosts = new Set(['openstax.org', 'research.google', 'storage.googleapis.com']);
+const tracedHosts = new Set(['openstax.org', 'research.google', 'storage.googleapis.com', 'arxiv.org', 'export.arxiv.org', 'doi.org', 'dx.doi.org', 'api.crossref.org']);
 function log(raw: string, method: string, accept: string) {
   const url = URL.parse(raw);
   if (!url || !tracedHosts.has(url.hostname)) return;

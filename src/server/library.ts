@@ -5,10 +5,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { DEFAULT_TARGET_LANGUAGE, findTargetLanguagePreset, parseTargetLanguage, targetsSimplifiedChinese } from '../shared/languages.js';
 import { bookSlug, openStaxLocation, openStaxUrl, type OpenStaxLocation } from '../shared/openstax.js';
-import type { DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
-import type { WebArticle } from '../shared/web-article.js';
+import type { DocMetadata, DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
+import { articleUrl, type WebArticle } from '../shared/web-article.js';
 import { hasDecoderRepetition, translationQualityError } from '../shared/translation-quality.js';
 import { readArticleLayout } from './article-layout.js';
+import { applyMetaPatch, missingDocMeta, sanitizeDocMeta } from './library-meta.js';
 import { parseOpenStaxPage, publishedEntry, type ReadBookResource } from './openstax.js';
 import { publicResource } from './public-resource.js';
 
@@ -36,20 +37,10 @@ export function fail(message: string, status = 400): never { throw Object.assign
 function isFsError(error: unknown, code: string): boolean { return isRecord(error) && error.code === code; }
 const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
 
-function optionalText(value: unknown, max: number, multiline = false): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const cleaned = multiline
-    ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/\r\n?/g, '\n').trim()
-    : value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return cleaned ? cleaned.slice(0, max) : undefined;
-}
-function optionalDoi(value: unknown): string | undefined {
-  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').trim();
-  return raw && /^10\.\d{4,9}\/\S+$/i.test(raw) ? raw : undefined;
-}
-function optionalYear(value: unknown): string | undefined {
-  const raw = optionalText(value, 32);
-  return raw?.match(/(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/)?.[1];
+async function writeAtomic(file: string, content: Buffer | string): Promise<void> {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, { flag: 'wx' });
+  try { await rename(tmp, file); } finally { await rm(tmp, { force: true }); }
 }
 
 async function writeOnce(file: string, bytes: Buffer | string): Promise<void> {
@@ -70,6 +61,7 @@ export class Library {
   private readonly imageJobs = new Map<string, Promise<ArticleImage>>();
   private readonly jobs = new Map<string, Promise<Record<string,string>>>();
   private readonly bookJobs = new Map<string, Promise<DocumentInfo>>();
+  private readonly metaJobs = new Map<string, Promise<unknown>>();
   constructor(root: string, private readonly readBook: ReadBookResource = publicResource, private readonly onDelete?: (id: string) => void) {
     this.directory = path.join(root, 'documents');
     this.translationDir = path.join(root, 'translations');
@@ -114,18 +106,31 @@ export class Library {
     const docs = await Promise.all(names.map(name => this.get(name.slice(0,-5))));
     return [sample, ...docs.sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
+  private async mutateMeta(id: string, mutate: (saved: Record<string, unknown>) => boolean | void): Promise<DocumentInfo> {
+    const prev = this.metaJobs.get(id);
+    const job = (async () => {
+      if (prev) await prev.catch(() => undefined);
+      await this.get(id);
+      const file = path.join(this.directory, id + '.json');
+      const saved = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
+      return this.get(id);
+    })();
+    this.metaJobs.set(id, job);
+    try { return await job; } finally { if (this.metaJobs.get(id) === job) this.metaJobs.delete(id); }
+  }
   async rename(id: unknown, title: unknown): Promise<DocumentInfo> {
     if (id === sample.id) fail('The bundled sample paper cannot be renamed.');
     const nextTitle = typeof title === 'string' ? title.trim().slice(0, 250) : '';
     if (!nextTitle) fail('A document title is required.');
     const doc = await this.get(id);
-    const file = path.join(this.directory, doc.id + '.json');
-    const saved = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
-    saved.title = nextTitle;
-    const tmp = file + '.' + randomUUID() + '.tmp';
-    try { await writeFile(tmp, JSON.stringify(saved)); await rename(tmp, file); }
-    finally { await rm(tmp, { force: true }); }
-    return this.get(doc.id);
+    return this.mutateMeta(doc.id, saved => { saved.title = nextTitle; });
+  }
+  async updateMeta(input: unknown): Promise<DocumentInfo> {
+    if (!isRecord(input)) fail('Invalid metadata payload.');
+    if (input.id === sample.id) fail('The bundled sample paper metadata cannot be edited.');
+    const doc = await this.get(input.id);
+    return this.mutateMeta(doc.id, saved => { applyMetaPatch(saved, input); });
   }
   async delete(id: unknown): Promise<{ id: string; deleted: boolean }> {
     if (id === sample.id) fail('The bundled sample paper cannot be deleted.');
@@ -239,37 +244,30 @@ export class Library {
       await mkdir(this.directory, { recursive: true });
       await writeOnce(path.join(this.directory, id + '.layout.json'), JSON.stringify(layout));
     }
-    const paperTitle = optionalText(input.paperTitle, 500);
-    const authors = optionalText(input.authors, 2000);
-    const venue = optionalText(input.venue, 500);
-    const year = optionalYear(input.year);
-    const doi = optionalDoi(input.doi);
-    const publisher = optionalText(input.publisher, 500);
-    const abstract = optionalText(input.abstract, 8000, true);
     return { doc: await this.store({ kind:'web', id, url:url.href,
       title: typeof input.title === 'string' && input.title.trim() ? input.title.trim().slice(0,250) : url.hostname,
-      ...(paperTitle ? { paperTitle } : {}),
-      ...(authors ? { authors } : {}),
-      ...(venue ? { venue } : {}),
-      ...(year ? { year } : {}),
-      ...(doi ? { doi } : {}),
-      ...(publisher ? { publisher } : {}),
-      ...(abstract ? { abstract } : {}),
+      ...sanitizeDocMeta(input),
       createdAt:new Date().toISOString(), defaultPage:1, paragraphs }) };
   }
-  async importPdf(title: string, bytes: Buffer, url?: string): Promise<DocumentInfo> {
+  async importPdf(title: string, bytes: Buffer, url?: string, meta?: DocMetadata): Promise<DocumentInfo> {
     if (bytes.length > PDF_LIMIT || !bytes.subarray(0,1024).includes('%PDF-')) fail('Choose a valid PDF of up to 80 MB.');
     const digest = hash(bytes);
     if (digest === sampleDigest) return sample;
     const id = 'pdf-' + digest;
+    const safeUrl = articleUrl(url)?.href;
+    const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
     await mkdir(this.directory, { recursive: true });
     await writeOnce(path.join(this.directory, id + '.pdf'), bytes);
-    const doc = await this.store({ id, kind:'pdf', title:title.trim().slice(0,250) || 'Document.pdf', url, createdAt:new Date().toISOString(), defaultPage:1 });
-    if (!doc.url && url) {
-      // A local upload and its published PDF share one byte identity. Keep
-      // the first subsequently discovered address without replacing metadata.
-      await writeOnce(path.join(this.directory, id + '.source-url'), url);
-      return this.get(id);
+    const doc = await this.store({ id, kind:'pdf', title:title.trim().slice(0,250) || 'Document.pdf', ...(safeUrl ? { url: safeUrl } : {}), ...cleanMeta, createdAt:new Date().toISOString(), defaultPage:1 });
+    const missing = missingDocMeta({ ...doc }, cleanMeta);
+    const needUrl = !doc.url && Boolean(safeUrl);
+    if (needUrl || Object.keys(missing).length) {
+      return this.mutateMeta(id, saved => {
+        let changed = false;
+        if (!saved.url && safeUrl) { saved.url = safeUrl; changed = true; }
+        for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) { saved[k] = v; changed = true; }
+        return changed;
+      });
     }
     return doc;
   }
@@ -350,9 +348,7 @@ export class Library {
           if (problem) fail(problem, 502);
           result[key] = translated[key];
         }
-        const tmp = file + '.' + randomUUID() + '.tmp';
-        try { await writeFile(tmp, JSON.stringify(result)); await rename(tmp, file); }
-        finally { await rm(tmp, { force:true }); }
+        await writeAtomic(file, JSON.stringify(result));
       }
       return result;
     })();

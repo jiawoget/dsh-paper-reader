@@ -226,6 +226,31 @@ async function vocabulary(page: Page) {
   console.log('PASS J18 - saved and filtered "block tables", removed its vocabulary entry, then found exactly one history row. Its source reopened the marked passage on page 6.');
 }
 
+async function batchAndDrop(page: Page, files: Awaited<ReturnType<typeof fixtureFiles>>) {
+  let posts = 0;
+  page.on('request', req => { if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/import-pdf')) posts++; });
+  await openLibrary(page);
+  const choosing = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Open a PDF', exact: true }).click();
+  await (await choosing).setFiles([
+    { name: 'BatchA.pdf', mimeType: 'application/pdf', buffer: files.first },
+    { name: 'skip.txt', mimeType: 'text/plain', buffer: Buffer.from('not a pdf') },
+    { name: 'BatchB.pdf', mimeType: 'application/pdf', buffer: files.second }
+  ]);
+  await loaded(page);
+  await page.locator('#toast').filter({ hasText: /Imported 2 PDFs; 1 skipped \(skip\.txt\)\./ }).waitFor();
+  assert.equal(posts, 2);
+  await page.evaluate(bytes => {
+    const dt = new DataTransfer(), target = document.getElementById('reader')!;
+    dt.items.add(new File([new Uint8Array(bytes)], 'DropC.pdf', { type: 'application/pdf' }));
+    dt.items.add(new File(['bad'], 'drop.txt', { type: 'text/plain' }));
+    target.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  }, Array.from(files.first));
+  await page.locator('#toast').filter({ hasText: /Imported 1 PDF; 1 skipped \(drop\.txt\)\./ }).waitFor();
+  assert.equal(posts, 3);
+}
+
 await withHost(async host => {
   const browser = await chromium.launch({executablePath:host.executable});
   try {
@@ -244,6 +269,7 @@ await withHost(async host => {
       await citation(page);
       await scanPage(page, files.raster, model);
       await vocabulary(page);
+      await batchAndDrop(page, files);
     } finally { await model.close(); }
   } finally { await browser.close(); }
 });

@@ -91,7 +91,15 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
   .zotero-connection .btn, .library-item-actions .icon-btn { min-width: 44px; min-height: 44px; height: 44px; }
 }
 @media (prefers-reduced-motion: no-preference) {
-  :root:not([data-theme-switching]) :is(.library-tab, .library-document, .library-zotero-link) {
-    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+  :root:not([data-theme-switching]) :is(.library-tab, .library-document, .library-zotero-link, .pdf-drop-overlay) {
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease;
   }
 }
+[data-pdf-drop="active"] { position: relative; }
+.pdf-drop-overlay {
+  position: absolute; inset: 8px; z-index: 60; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  border: 2px dashed var(--purple); border-radius: 10px; background: var(--surface-tint); color: var(--purple);
+  font: 600 15px/1.4 system-ui, sans-serif; pointer-events: none; box-shadow: var(--shadow-card);
+}
+[data-pdf-drop="active"] > .pdf-drop-overlay { display: flex; }
+.reader-library > .pdf-drop-overlay { inset: 0; }
