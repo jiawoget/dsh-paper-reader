@@ -54,9 +54,12 @@ if (!world.dshPaperReaderReady) {
   document.addEventListener('pointerup', event => {
     if (enabled && event.isTrusted && event.button === 0 && (!card || !event.composedPath().includes(card.host))) schedule();
   }, true);
+  document.addEventListener('keydown', event => {
+    if (!event.isTrusted || event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') dismiss();
+  }, true);
   document.addEventListener('keyup', event => {
     if (!event.isTrusted || event.isComposing || event.keyCode === 229) return;
-    if (event.key === 'Escape') { dismiss(); return; }
     if (enabled && (!card || !event.composedPath().includes(card.host)) && (event.shiftKey || event.key === 'Shift')) schedule();
   }, true);
 

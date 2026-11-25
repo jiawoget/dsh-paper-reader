@@ -1001,13 +1001,13 @@ var Library = class {
     const job = (async () => {
       if (previous) await previous.catch(() => void 0);
       const result = await this.translations(id, page, targetLanguage);
-      const pending = blocks3.filter((b) => !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
+      const pending = blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
       await mkdir(path.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i, i + 8);
         const translated = await translate(batch, doc.kind);
         for (const { id: key2, text: text2 } of batch) {
-          if (!translated[key2]?.trim()) fail("The model omitted a paragraph. Retry to resume the translation.", 502);
+          if (!Object.hasOwn(translated, key2) || !translated[key2]?.trim()) fail("The model omitted a paragraph. Retry to resume the translation.", 502);
           const problem = checkChineseQuality && translationQualityError(text2, translated[key2]);
           if (problem) fail(problem, 502);
           result[key2] = translated[key2];

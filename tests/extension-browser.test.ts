@@ -267,3 +267,60 @@ test('a signed-in DSH tab receives user-requested lookups, and saving a quote ca
     await until(() => records.some(call => call.payload.mode === 'explain' && call.payload.text === phrase), 'Missing sentence explanation');
   } finally { await context.close(); }
 });
+
+test('extension selection card ignores IME Escape cancellation in textarea and dismisses on normal Escape', { skip, timeout: 30000 }, async t => {
+  const work = await mkdtemp(path.join(tmpdir(), 'dsh-reader-ext-ime-'));
+  t.after(() => rm(work, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 }));
+  const extension = path.join(work, 'extension');
+  await cp(path.join(root, 'extension'), extension, { recursive: true });
+  await build({
+    entryPoints: ['popup', 'background', 'content'].map(name => path.join(root, 'src/extension', name + '.ts')),
+    bundle: true, outdir: extension, format: 'iife', target: 'chrome120'
+  });
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8');
+    res.end('<title>IME fixture</title><article><h1>IME test</h1><p>Select <b id="term">homograph</b> for IME check.</p></article>');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.close(); server.closeAllConnections(); });
+  const address = server.address();
+  assert.ok(typeof address === 'object' && address);
+  const sourceUrl = 'http://reader-fixture.test:' + address.port + '/paper';
+  const context = await chromium.launchPersistentContext(path.join(work, 'profile'), {
+    executablePath, headless: true, ignoreDefaultArgs: ['--disable-extensions'],
+    args: ['--enable-unsafe-extension-debugging', '--no-proxy-server', '--host-resolver-rules=MAP reader-fixture.test 127.0.0.1']
+  });
+  try {
+    const browserCdp = await context.browser()!.newBrowserCDPSession();
+    const { id } = await browserCdp.send('Extensions.loadUnpacked', { path: extension });
+    const page = await context.newPage();
+    await page.goto(sourceUrl);
+    const popup = await openToolbar(page, id);
+    await popup.click('#toggle');
+    await popup.detach();
+
+    await page.locator('#term').dblclick();
+    await until(async () => (await cardElement(page, 'h2'))?.text === 'homograph', 'No card at the selected word');
+    await clickCard(page, '[data-do="followup"]');
+    await clickCard(page, 'textarea');
+    assert.equal(await page.locator('[data-dsh-paper-reader]').count(), 1);
+
+    const pageCdp = await context.newCDPSession(page);
+    try {
+      await pageCdp.send('Input.imeSetComposition', { text: 'nihao', selectionStart: 5, selectionEnd: 5 });
+      await pageCdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+      await pageCdp.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
+      await pageCdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    } finally {
+      await pageCdp.detach();
+    }
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await page.locator('[data-dsh-paper-reader]').count(), 1, 'IME Escape cancellation must not dismiss the extension card');
+
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await page.locator('[data-dsh-paper-reader]').count(), 0, 'Normal Escape must dismiss the extension card');
+  } finally {
+    await context.close();
+  }
+});
