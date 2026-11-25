@@ -34,15 +34,18 @@ export function installCitationPreviews(currentPaper: () => PdfDocument | undefi
   const anchors = new WeakMap<Element, Target>();
   let runs: RunIndex = new WeakMap();
   let pdfTargets = new Set<Target>(), active: Target | undefined, pinned: Target | undefined, hovered: Target | undefined, focused: Target | undefined;
-  let pointer: { x: number; y: number } | undefined, closeTimer: ReturnType<typeof setTimeout> | undefined;
-  let activePaper: PdfDocument | undefined;
+  let pointer: { x: number; y: number } | undefined, down: { x: number; y: number } | undefined, closeTimer: ReturnType<typeof setTimeout> | undefined;
+  let activePaper: PdfDocument | undefined, suppressFocusOpen = false;
   let frame = 0;
 
   const cancelClose = () => { if (closeTimer !== undefined) { clearTimeout(closeTimer); closeTimer = undefined; } };
   const dismiss = (restoreFocus = false) => {
     cancelClose(); const prev = active;
     pinned = hovered = focused = pointer = undefined; show();
-    if (restoreFocus && prev && popup.contains(document.activeElement) && prev.node.isConnected) prev.node.focus({ preventScroll: true });
+    if (restoreFocus && prev && popup.contains(document.activeElement) && prev.node.isConnected) {
+      suppressFocusOpen = true;
+      try { prev.node.focus({ preventScroll: true }); } finally { suppressFocusOpen = false; }
+    }
   };
   const scheduleClose = () => { cancelClose(); closeTimer = setTimeout(() => { closeTimer = undefined; hovered = undefined; show(pinned ?? focused); }, 160); };
   function positionPopup(): void {
@@ -269,12 +272,15 @@ export function installCitationPreviews(currentPaper: () => PdfDocument | undefi
     if (!event.relatedTarget) { pointer = undefined; if (!pinned && !focused) scheduleClose(); }
   });
   document.addEventListener('pointerdown', event => {
+    const trigger = event.target instanceof Element ? event.target.closest('.paper-citation, .pdf-citation-focus') : null;
+    down = trigger && anchors.has(trigger) ? { x: event.clientX, y: event.clientY } : undefined;
     if (!active || !(event.target instanceof Element)) return;
-    const trigger = event.target.closest('.paper-citation, .pdf-citation-focus');
     if (!popup.contains(event.target) && (!trigger || !anchors.has(trigger))) dismiss();
   });
   document.addEventListener('click', event => {
-    if (!(event.target instanceof Element) || !(window.getSelection()?.isCollapsed ?? true)) return;
+    const moved = event.detail > 0 && down ? Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5 : false;
+    down = undefined;
+    if (moved || !(event.target instanceof Element) || !(window.getSelection()?.isCollapsed ?? true)) return;
     const trigger = event.target.closest('.paper-citation, .pdf-citation-focus');
     const target = trigger ? anchors.get(trigger) : undefined;
     if (!target) return;
@@ -284,6 +290,7 @@ export function installCitationPreviews(currentPaper: () => PdfDocument | undefi
     show(pinned ?? hovered ?? focused);
   });
   document.addEventListener('focusin', event => {
+    if (suppressFocusOpen) return;
     if (event.target instanceof Node && popup.contains(event.target)) { cancelClose(); return; }
     focused = event.target instanceof Element ? anchors.get(event.target) : undefined;
     if (focused) { cancelClose(); pointer = undefined; hovered = undefined; }

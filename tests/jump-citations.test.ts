@@ -31,6 +31,9 @@ test('JumpHistory tracks back/forward, strips historyTop, deduplicates, bounds t
   while (h.canBack()) { h.back(pos(99)); steps++; }
   assert.equal(steps, 50);
   h.clear(); assert.equal(h.canBack(), false); assert.equal(h.canForward(), false);
+  h.push(pos(1, 0)); h.push(pos(2, 0));
+  assert.equal(h.back(pos(3, 0))?.page, 2); assert.equal(h.canForward(), true);
+  h.push(pos(1, 2)); assert.equal(h.canForward(), false);
 });
 
 test('answerMarkdown decorates closed EN/ZH page citations safely and ignores math/code/links/partials', () => {
@@ -47,12 +50,16 @@ test('parseBibliography extracts page, authors, year, arxivId, doi, url, and wra
     ['References',
       '[1] A. Author, B. Author, and C. Author. 2023. "Demo Paper." arXiv:2301.12345 [cs.CL].',
       '[2] D. Doe. 2022. Another Paper. https://lmsys.', 'org/blog/demo/'],
-    ['[3] E. Eve. 2021. DOI Paper. https://doi.org/10.48550/arXiv.2210.12924']
+    ['[3] E. Eve. 2021. DOI Paper. https://doi.org/10.48550/arXiv.2210.12924',
+      '[4] F. Foo. 2023. "Three Line URL." https://example.org/', 'very-long-path/', 'paper.pdf',
+      '[5] G. Bar. 2023. "Wrapped DOI." doi:10.1145/', '3600006.3613165']
   ], 14);
   assert.equal(refs.get(1)?.page, 14); assert.equal(refs.get(1)?.year, '2023');
   assert.equal(refs.get(1)?.arxivId, '2301.12345'); assert.ok(refs.get(1)?.authors?.includes('A. Author'));
   assert.equal(refs.get(2)?.url, 'https://lmsys.org/blog/demo/');
   assert.equal(refs.get(3)?.page, 15); assert.equal(refs.get(3)?.doi, '10.48550/arXiv.2210.12924'); assert.equal(refs.get(3)?.arxivId, '2210.12924');
+  assert.equal(refs.get(4)?.url, 'https://example.org/very-long-path/paper.pdf');
+  assert.equal(refs.get(5)?.doi, '10.1145/3600006.3613165');
 
   const bytes = await readFile(new URL('../public/assets/pagedattention.pdf', import.meta.url));
   const task = getDocument({ data: Uint8Array.from(bytes) });

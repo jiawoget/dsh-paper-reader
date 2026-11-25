@@ -1,5 +1,5 @@
 import type { ReadingMode } from './reading-desk.js';
-import { button, byId, icon, readerLabel as label } from './ui.js';
+import { byId, el, icon, message, readerLabel as label, toast } from './ui.js';
 
 export interface ReadingPosition {
   doc: string; page: number; mode: ReadingMode; text: boolean;
@@ -20,7 +20,10 @@ export class JumpHistory {
 
   push(position: ReadingPosition): void {
     const clean = stripChat(position), prev = this.backStack.at(-1);
-    if (prev && samePosition(prev, clean)) return;
+    if (prev && samePosition(prev, clean)) {
+      if (this.forwardStack.length) { this.forwardStack.length = 0; this.onChange?.(); }
+      return;
+    }
     this.backStack.push(clean);
     if (this.backStack.length > HISTORY_LIMIT) this.backStack.shift();
     this.forwardStack.length = 0;
@@ -64,8 +67,18 @@ export function bindJumpHistoryControls(opts: {
   forwardBtn.ariaLabel = forwardName; forwardBtn.title = label('Jump forward (Alt+→)', '前进到下一位置 (Alt+→)');
   backBtn.addEventListener('click', () => { void opts.onBack(); });
   forwardBtn.addEventListener('click', () => { void opts.onForward(); });
-  const menuBack = button(backName, () => { opts.closeMenu(true); return opts.onBack(); }, '', 'arrowLeft');
-  const menuForward = button(forwardName, () => { opts.closeMenu(true); return opts.onForward(); }, '', 'arrowRight');
+  const menuItem = (name: string, glyph: 'arrowLeft' | 'arrowRight', run: () => unknown) => {
+    const node = el('button', '');
+    node.type = 'button';
+    node.append(icon(glyph, 14), name);
+    node.addEventListener('click', async () => {
+      opts.closeMenu(true); node.disabled = true;
+      try { await run(); } catch (error) { toast(message(error)); } finally { sync(); }
+    });
+    return node;
+  };
+  const menuBack = menuItem(backName, 'arrowLeft', opts.onBack);
+  const menuForward = menuItem(forwardName, 'arrowRight', opts.onForward);
   const sync = () => {
     const mobile = opts.isMobileBar();
     backBtn.disabled = menuBack.disabled = !opts.history.canBack();

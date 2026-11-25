@@ -333,7 +333,6 @@ export class PaperChat {
     const controller = state.controller = new AbortController();
     state.streamText = ''; state.stopped = state.issue = state.retry = undefined; state.pending = request;
     this.clearChat.reset(); this.render();
-    let dispatched = false;
     try {
       const pages = await (this.pages ??= readPaper(doc, this.pdf).catch(error => { if (doc === this.doc) this.pages = undefined; throw error; }));
       const expansion = needsEnglishSearch(pages, request.question)
@@ -343,7 +342,6 @@ export class PaperChat {
       const paper = paperEvidence(section ? doc.title + ' · ' + section.title : doc.paperTitle || doc.title, pages, query);
       if (doc.book) { paper.partial = true; paper.pageCount = doc.book.sections.length; }
       if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      dispatched = true;
       const { text } = await apiStream('chat.ask', { ...request, paper, questionModel }, delta => {
         state.streamText = (state.streamText ?? '') + delta;
         if (this.doc === doc) this.stream.push(state.streamText);
@@ -356,7 +354,7 @@ export class PaperChat {
     } catch (error) {
       if (this.doc === doc) this.stream.finish();
       settleStreamFailure({
-        aborted: controller.signal.aborted, dispatched, streamText: state.streamText,
+        aborted: controller.signal.aborted, streamText: state.streamText,
         restoreDraft: () => { if (clearedDraft !== undefined && !state.draft) state.draft = clearedDraft; },
         onStopped: answer => { state.stopped = { request, answer }; },
         onError: () => { state.issue = message(error); state.retry = request; }

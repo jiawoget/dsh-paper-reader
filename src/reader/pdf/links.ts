@@ -38,7 +38,7 @@ export async function mountPdfLinks(
   const layer = el('div', 'pdf-link-layer');
   let down: { x: number; y: number } | undefined;
   const isDragOrSelect = (e: MouseEvent) => {
-    const moved = down ? Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5 : false;
+    const moved = e.detail > 0 && down ? Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5 : false;
     down = undefined;
     return moved || !(window.getSelection()?.isCollapsed ?? true);
   };

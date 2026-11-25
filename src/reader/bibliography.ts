@@ -92,7 +92,11 @@ export function parseBibliography(pages: string[][], firstPage = 1): Map<number,
   let number = 0, entryPage = firstPage, parts: string[] = [], bracketed: boolean | undefined;
   const finish = () => {
     if (number && parts.length) {
-      const printed = parts.join('\n').replace(/(https?:\/\/(?:\S*[-/.])?)\n(?=\S)/gu, '$1');
+      let printed = parts.join('\n');
+      for (let prev = ''; prev !== printed;) {
+        prev = printed;
+        printed = printed.replace(/((?:https?:\/\/|doi:\s*10\.\d{4,9}\/)(?:\S*[-/.])?)\n(?=\S)/giu, '$1');
+      }
       const entry = printed.replace(/\s+/gu, ' ').trim();
       const joined = printed.replace(/(\p{L})-\n(?=(?:aware|based|level|scale|free|efficient)\b)/giu, '$1-')
         .replace(/\b(self|cross|fine|multi|single|real|large|fixed|end)-\n(?=\p{Ll})/gu, '$1-')

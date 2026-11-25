@@ -437,7 +437,6 @@ export class SelectionChat {
     const controller = request.controller = new AbortController();
     request.streamText = ''; state.stopped = state.failure = undefined; state.pending = request;
     this.changed();
-    let dispatched = false;
     try {
       if (!request.payload && request.mode !== 'translate') {
         if (this.notes.saving) request.savingNotes ??= this.notes;
@@ -471,7 +470,6 @@ export class SelectionChat {
         record: { docId: item.source.docId, requestId: request.requestId, thread: this.thread,
           question: request.prompt, source: chatSource(item), answerQuote: request.quote?.text, answerTurn: request.quote?.turn } };
       if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      dispatched = true;
       const reply = await apiStream('ai', { ...request.payload, questionModel }, delta => {
         request.streamText = (request.streamText ?? '') + delta;
         if (this.pendingRow?.request === request) this.stream.push(request.streamText);
@@ -488,7 +486,7 @@ export class SelectionChat {
     } catch (error) {
       if (this.pendingRow?.request === request) this.stream.finish();
       settleStreamFailure({
-        aborted: controller.signal.aborted, dispatched, streamText: request.streamText,
+        aborted: controller.signal.aborted, streamText: request.streamText,
         restoreDraft: () => { if (draft && !draft.text) draft.text = request.prompt; },
         onStopped: answer => { state.stopped = { request, answer }; },
         onError: () => { state.failure = { request, error: message(error) }; }

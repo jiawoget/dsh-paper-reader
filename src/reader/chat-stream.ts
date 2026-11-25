@@ -56,7 +56,7 @@ export function createStreamSlot(log: HTMLElement, maxPage?: () => number, inter
 }
 
 export function settleStreamFailure(opts: {
-  aborted: boolean; dispatched: boolean; streamText?: string;
+  aborted: boolean; streamText?: string;
   restoreDraft: () => void; onStopped: (answer: string) => void; onError: () => void;
 }): void {
   if (opts.aborted) { if (opts.streamText?.trim()) opts.onStopped(opts.streamText); else opts.restoreDraft(); }

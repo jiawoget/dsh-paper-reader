@@ -204,6 +204,13 @@ await withHost(async host => {
     await firstCite.waitFor();
     const citeBox = (await firstCite.boundingBox())!;
     assert.ok(citeBox.width >= 23.5 && citeBox.height >= 23.5);
+    await firstCite.focus();
+    await tooltip.locator('.citation-actions button').first().waitFor();
+    await page.keyboard.press('Tab');
+    assert.ok(await tooltip.evaluate(node => node.contains(document.activeElement)));
+    await page.keyboard.press('Escape');
+    await tooltip.waitFor({ state: 'hidden' });
+    assert.ok(await firstCite.evaluate(node => node === document.activeElement));
     const printed = await glyph(paperRun, '[34, 49]');
     await page.mouse.move(printed.x, printed.y);
     await checkTitles();
