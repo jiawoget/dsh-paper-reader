@@ -235,7 +235,9 @@ async function mobileChromeJourney(page: Page, browser: Browser, authUrl: string
   await assertMobilePanelTargets(page, '.paper-chat');
   await chatToggle.click(); assert.equal(await page.locator('.paper-chat').getAttribute('data-open'), 'false');
   await page.locator('#mobileRail').click(); assert.equal(await page.locator('#rail').getAttribute('aria-modal'), 'true');
-  for (const tab of ['#notesTab', '#annotationsTab', '#refsTab']) { await page.locator(tab).click(); await assertMobilePanelTargets(page, '#rail'); }
+  await page.locator('#notesTab').click(); if (!filename) await page.locator('.notebook-guide > summary').click();
+  await assertMobilePanelTargets(page, '#rail'); if (!filename) await page.locator('.notebook-guide > summary').click();
+  for (const tab of ['#annotationsTab', '#refsTab']) { await page.locator(tab).click(); await assertMobilePanelTargets(page, '#rail'); }
   await page.locator('#closeRail').click();
   await page.locator('#more').click(); await page.locator('#menu').getByRole('button', { name: 'Read text', exact: true }).click();
   await page.getByRole('region', { name: 'Page text' }).waitFor();

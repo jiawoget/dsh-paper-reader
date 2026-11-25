@@ -199,9 +199,13 @@ export async function assertMobilePanelTargets(page: Page, rootSelector: string)
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
       count++;
-      if (r.width < 43.5 || r.height < 43.5) {
+      const label = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.closest('label') : null;
+      const hit = label ? label.getBoundingClientRect() : r;
+      const minRaw = label ? 23.5 : 43.5;
+      if (hit.width < 43.5 || hit.height < 43.5 || r.width < minRaw || r.height < minRaw) {
+        const box = hit.width < 43.5 || hit.height < 43.5 ? hit : r;
         undersized.push({ tag: el.tagName.toLowerCase() + (el.id ? '#' + el.id : el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : ''),
-          label: el.getAttribute('aria-label') || el.textContent?.trim() || '', width: Math.round(r.width * 10) / 10, height: Math.round(r.height * 10) / 10 });
+          label: el.getAttribute('aria-label') || label?.textContent?.trim() || el.textContent?.trim() || '', width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10 });
       }
     }
     return { visible, overflow, count, undersized };
