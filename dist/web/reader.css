@@ -156,7 +156,7 @@ svg { flex-shrink: 0; }
 .btn.primary { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-on-solid); }
 .btn.primary:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
 .subtle, .text-btn { font-size: 12px; padding: 2px; color: var(--muted); }
-.text-btn { display: inline-flex; align-items: center; gap: 4px; color: var(--purple); }
+.text-btn { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; color: var(--purple); }
 .subtle:hover, .text-btn:hover { text-decoration: underline; }
 .muted, .hint { color: var(--muted); font-size: 12px; }
 .hint { margin: 7px 0 12px; }
@@ -170,7 +170,6 @@ svg { flex-shrink: 0; }
 .tag { display: inline-block; background: var(--lavender); color: var(--purple); font-size: 12px; border-radius: 4px; padding: 2px 5px; margin: 8px 0 4px; }
 .meaning { font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
 .card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
-.card-actions .btn { font-size: 12px; padding: 5px 7px; }
 .doc-row { width: 100%; display: flex; align-items: center; gap: 9px; text-align: left; padding: 8px; border-radius: 5px; font-size: 13px; }
 .doc-row:hover { background: var(--lavender); }
 .doc-row small { margin-left: auto; color: var(--muted); }
@@ -194,7 +193,7 @@ dialog:has(.dialog-footer) #dialogBody { padding-bottom: 0; }
 .list-row p { font-size: 12px; margin: 4px 0; }
 .external { color: var(--purple); font-size: 12px; }
 dialog .subtle { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; }
-dialog .text-btn { min-width: 24px; min-height: 24px; max-width: 100%; justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
+dialog .text-btn { min-width: 24px; max-width: 100%; justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
 dialog a.external { display: inline-flex; align-items: center; min-height: 24px; }
 dialog summary { min-height: 24px; padding-block: 2px; }
 #toast { position: fixed; z-index: 12; bottom: 15px; left: 50%; transform: translateX(-50%); border-radius: 8px; background: var(--toast-bg); color: var(--toast-ink); padding: 8px 13px; max-width: 90%; font-size: 12px; }

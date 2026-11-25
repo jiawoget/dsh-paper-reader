@@ -6,6 +6,7 @@ import path from 'node:path';
 import { chromium, type Locator, type Page } from 'playwright-core';
 import type { JournalNote, ReaderState } from '../../src/shared/types.js';
 import { openReader, withHost } from './host.js';
+import { cardMoreAction, openCardMore } from './helpers/reader.js';
 import { dragAnswer } from './selection-gestures.js';
 
 const firstQuestion = 'What does the paper say is difficult about deeper networks?';
@@ -103,7 +104,7 @@ async function translatedTerm(reader: Page, anchor: string): Promise<void> {
   await select();
   const broadMeaning = await card.locator('.meaning:visible').allTextContents();
   await reader.evaluate(() => window.getSelection()?.removeAllRanges());
-  await card.getByRole('button', { name: 'Locate', exact: true }).click();
+  await cardMoreAction(card, 'Locate');
   assert.deepEqual({ visibleGlossCharacters: broadMeaning.join('').length, exactTargetHighlighted: await marked() },
     { visibleGlossCharacters: 0, exactTargetHighlighted: true },
     'An unaligned four-character selection must keep the surrounding English collapsed and return to the exact translated characters.');
@@ -116,7 +117,7 @@ async function translatedTerm(reader: Page, anchor: string): Promise<void> {
   await details.locator('summary').click();
   assert.ok((await details.locator('p').innerText()).length > 200);
   await details.locator('summary').click();
-  await card.getByRole('button', { name: 'Save word' }).click();
+  await cardMoreAction(card, 'Save word');
   await card.getByRole('button', { name: 'Write note' }).click();
   await card.getByLabel('Your note', { exact: true }).fill('Revisit this Chinese term.');
   await card.getByRole('button', { name: 'Save note', exact: true }).click();
@@ -266,7 +267,7 @@ async function translateWord(reader: Page): Promise<void> {
       await card.getByRole('button', { name: 'Ask AI' }).click();
       assert.equal(await card.getByRole('button', { name: 'Translate to Chinese' }).count(), 0);
     }
-    await card.getByRole('button', { name: 'Save word' }).click();
+    await cardMoreAction(card, 'Save word');
     await closeSelection(card);
   }
   const vocabulary = await reader.evaluate(async () => ((await (await fetch('../action', { method: 'POST',
@@ -427,7 +428,8 @@ await withHost(async host => {
     await card.waitFor();
     const title = await card.getByRole('heading', { level: 2 }).innerText();
     assert.ok(title.length < 50 && !selected.text.startsWith(title), 'A passage needs a short descriptive heading, separate from its quotation.');
-    assert.equal(await card.getByRole('button', { name: 'Save word' }).count(), 0);
+    assert.equal(await (await openCardMore(card)).getByRole('button', { name: 'Save word' }).count(), 0);
+    await reader.keyboard.press('Escape');
     const preview = card.locator('blockquote').first();
     assert.ok((await preview.innerText()).length < selected.text.length);
     await card.getByRole('button', { name: 'Show full passage' }).click();
@@ -525,7 +527,8 @@ await withHost(async host => {
     await dialog.waitFor({ state: 'hidden' });
     await selection(reader);
     await card.getByRole('button', { name: 'Ask AI' }).click();
-    assert.equal(await card.getByRole('button', { name: /explain/i }).count(), 0, 'Once discussion is open, the composer handles follow-ups.');
+    assert.equal(await card.locator('.card-actions').getByRole('button', { name: /explain/i }).count(), 0, 'Explain lives inside Ask AI rather than top-level card actions.');
+    assert.equal(await card.locator('.selection-chat .selection-explain-action').isEnabled(), false, 'Built-in Explain starter stays disabled until a model is connected.');
     const question = card.getByRole('textbox', { name: 'Message about this selection' });
     await question.fill(firstQuestion);
     await card.getByText(/connect a model/i).waitFor();

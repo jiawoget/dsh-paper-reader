@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type FrameLocator, type Locator, type Page } from 'playwright-core';
 import { openReader, withHost } from './e2e/host.js';
+import { cardMoreAction } from './e2e/helpers/reader.js';
 import { markdownLinks, vaultSource, visibleMarkdown } from './e2e/vault-links.js';
 
 async function screen(pane: FrameLocator, page: number): Promise<void> {
@@ -79,7 +80,7 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
     assert.equal(await card.getByRole('heading').innerText(), 'block tables');
     assert.deepEqual(await pane.locator('#original').boundingBox(), original);
     assert.deepEqual(await pane.locator('#translated').boundingBox(), companion);
-    await card.getByRole('button', { name: 'Save word' }).click();
+    await cardMoreAction(card, 'Save word');
     await pane.getByText('Saved to vocabulary.', { exact: true }).waitFor();
     await card.getByRole('button', { name: 'Write note' }).click();
     await card.getByLabel('Your note', { exact: true }).fill('Trace how the block table maps the physical cache.');
@@ -113,7 +114,7 @@ await withHost(async ({ origin, authenticatedUrl, scratch, executable }) => {
     await translatedSource.getByRole('button', {name: 'Show quoted passage'}).click();
     assert.equal(await translatedSource.locator('.quote').innerText(), definition);
     assert.equal(await translatedSource.locator('.notebook-selection').innerText(), chineseTerm);
-    await card.getByRole('button', { name: 'Locate' }).click();
+    await cardMoreAction(card, 'Locate');
     assert.ok(await pane.locator('#original .pdf-quote-mark').count() >= 2);
     const secondTerm = dictionary['block-tables'].match(/\u903b\u8f91/u)?.[0];
     assert.ok(secondTerm);

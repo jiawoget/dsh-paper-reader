@@ -4,6 +4,7 @@ import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type Locator, type Page } from 'playwright-core';
 import type { NotebookSnapshot } from '../../src/shared/types.js';
+import { cardMoreAction } from './helpers/reader.js';
 import { withHost } from './host.js';
 
 // Pass the original ResNet PDF and optionally a cached page-two translation.
@@ -113,7 +114,7 @@ await withHost(async host => {
     await afterLayout(reader);
     assert.ok(scrolled > 0 && Math.abs((await card.boundingBox())!.y - anchored.y + scrolled) < 2,
       'The passage card must follow the source as the paper scrolls.');
-    await card.getByRole('button', { name: 'Open bilingual view', exact: true }).click();
+    await cardMoreAction(card, 'Open bilingual view');
     await reader.getByRole('button', { name: 'Bilingual', exact: true, pressed: true }).waitFor();
     await reader.locator(translated('p2-b3')).waitFor({ timeout: 300_000 });
     await card.getByRole('button', { name: 'Close selection', exact: true }).click();
@@ -122,8 +123,10 @@ await withHost(async host => {
     await pickPassage();
     await card.getByRole('heading', { name: 'Selected passage' }).waitFor();
     assert.ok(await card.locator('.selection-excerpt').evaluate(el => el.getBoundingClientRect().height <= 26));
-    assert.ok(await card.getByRole('button', { name: 'Explain', exact: true }).isVisible());
+    assert.ok(await card.getByRole('button', { name: 'Highlight', exact: true }).isVisible());
     assert.ok(await card.getByRole('button', { name: 'Ask AI', exact: true }).isVisible());
+    assert.ok(await card.getByRole('button', { name: 'Write note', exact: true }).isVisible());
+    assert.ok(await card.locator('.selection-more').isVisible());
     assert.ok(await covered(reader, original('p2-b3'), '#original'), 'Selected English glyphs must remain highlighted.');
     assert.ok(await covered(reader, translated('p2-b3'), '#translated'), 'The paired Chinese text lines must be highlighted.');
     const thirdChinese = await reader.locator(translated('p2-b3')).evaluate(p => {
@@ -149,6 +152,7 @@ await withHost(async host => {
     await reader.screenshot({ path: path.join(directory, 'resnet-page-2-paired-selection.png'), animations: 'disabled' });
 
     await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
+    assert.ok(await card.locator('.selection-chat').getByRole('button', { name: 'Explain', exact: true }).isVisible());
     const composer = card.getByLabel('Message about this selection');
     const draft = 'What does the residual formulation change?';
     await composer.fill(draft);
@@ -160,6 +164,7 @@ await withHost(async host => {
     assert.equal(await card.getAttribute('data-workspace'), 'note');
     assert.ok(await composer.isHidden(), 'The note and question share the same workspace.');
     await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
+    assert.ok(await card.locator('.selection-chat').getByRole('button', { name: 'Explain', exact: true }).isVisible());
     assert.equal(await composer.inputValue(), draft, 'Switching to the note must preserve the question draft.');
     await reader.evaluate(() => window.getSelection()?.removeAllRanges());
     assert.ok(await covered(reader, original('p2-b3'), '#original') && await covered(reader, translated('p2-b3'), '#translated'),
@@ -181,7 +186,7 @@ await withHost(async host => {
     assert.ok(await covered(reader, translated('p2-b3'), '#translated', 6));
     assert.ok(await covered(reader, translated('p2-b4'), '#translated', 7));
     assert.equal(await covered(reader, translated('p2-b4'), '#translated', 9), false);
-    await card.getByRole('button', { name: 'Locate', exact: true }).click();
+    await cardMoreAction(card, 'Locate');
     await reader.reload();
     await reader.locator(translated('p2-b3')).waitFor();
     await afterLayout(reader);
@@ -209,7 +214,7 @@ await withHost(async host => {
     const book = await bookResponse.json() as NotebookSnapshot;
     const note = book.notes.find(saved => saved.text === body);
     assert.ok(note && book.markdown.includes(note.sourceUrl), 'The Markdown source must retain the saved occurrence.');
-    await card.getByRole('button', { name: 'Locate', exact: true }).click();
+    await cardMoreAction(card, 'Locate');
     await reader.goto(note.sourceUrl);
     await reader.reload();
     await repeatedWord.waitFor();
@@ -259,7 +264,7 @@ await withHost(async host => {
       document.getSelection()!.setBaseAndExtent(first.firstChild!, 0, last.firstChild!, 32);
       last.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
     });
-    await card.getByRole('button', { name: 'Locate', exact: true }).click();
+    await cardMoreAction(card, 'Locate');
     assert.equal(new URL(reader.url()).searchParams.get('rangeOrder'), 'reflow');
     await reader.locator('#original .pdf-quote-mark').first().waitFor();
     assert.ok(await covered(reader, original('p7-b7'), '#original'));

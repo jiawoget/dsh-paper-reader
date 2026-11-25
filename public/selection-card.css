@@ -16,10 +16,6 @@
   overscroll-behavior: contain;
 }
 #card[data-selection="term"] { --card-main-width: 320px; }
-#card[data-chat-open="true"] {
-  width: min(calc(var(--card-main-width) + 384px), var(--card-available-width));
-  grid-template-columns: minmax(0, .94fr) minmax(0, 1.06fr);
-}
 #card .selection-main {
   min-width: 0;
   min-height: 0;
@@ -33,46 +29,29 @@
   position: sticky;
   top: 0;
   z-index: 1;
+  display: flex;
   align-items: center;
+  flex: none;
   gap: 8px;
-  padding: 11px 10px 8px;
+  padding: 11px 14px 7px;
+  color: var(--desk-ink);
   background: var(--paper);
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
 }
-#card.is-dragging .word-head, #card.is-dragging .selection-grip { cursor: grabbing; }
-#card .selection-grip {
-  display: grid;
-  place-items: center;
-  flex: 0 0 25px;
-  height: 34px;
-  padding: 0;
-  border-radius: 5px;
-  color: var(--muted);
-  cursor: grab;
-}
-#card .selection-grip::before {
-  content: "";
-  width: 12px;
-  height: 18px;
-  background: radial-gradient(circle, currentColor 1.35px, transparent 1.6px) 0 0 / 6px 6px;
-}
-#card .selection-grip:hover, #card .selection-grip:focus-visible { color: var(--purple); background-color: var(--lavender); }
 #card .selection-heading { flex: 1; min-width: 0; }
 #card .word-head h2 { margin: 0; color: var(--card-ink); }
 #card[data-selection="passage"] .word-head h2 { font-size: 16px; }
-#card .word-head .icon-btn { align-self: flex-start; min-width: 26px; height: 26px; color: var(--muted); }
+#card .word-head .icon-btn { align-self: center; min-width: 29px; height: 29px; color: var(--muted); }
 #card .selection-location { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.35; }
-#card .selection-body { padding: 0 14px 13px; }
+#card .selection-body { padding: 0 14px 14px; }
 #card .selection-excerpt {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
   align-items: start;
   gap: 3px;
   margin: 2px 0 8px;
-  border-left: 2px solid var(--quote-border);
-  padding-left: 8px;
+  padding-inline: 6px;
+  border-radius: 5px;
+  background: var(--surface-tint);
 }
 #card .selection-excerpt blockquote {
   min-width: 0;
@@ -101,8 +80,8 @@
 #card .selection-disclosure:hover { background: var(--lavender); }
 #card .selection-disclosure svg { transform: rotate(90deg); }
 #card .selection-disclosure[aria-expanded="true"] svg { transform: rotate(-90deg); }
-#card .selection-counterpart { margin: 5px 0; color: var(--muted); font-size: 12px; }
-#card .selection-counterpart summary { width: fit-content; cursor: pointer; }
+#card .selection-counterpart { margin: 5px 0; color: var(--purple); font-size: 12px; }
+#card .selection-counterpart summary { width: fit-content; min-height: 24px; padding-block: 2px; cursor: pointer; }
 #card .selection-context, #card .selection-counterpart .meaning {
   max-height: min(155px, 27dvh);
   margin: 6px 0;
@@ -112,37 +91,99 @@
 #card .tag { margin-top: 1px; }
 #card .meaning { margin: 4px 0 8px; overflow-wrap: anywhere; }
 #card .card-actions { gap: 6px; margin-top: 9px; }
-#card .card-actions .btn { padding: 5px 8px; font-size: 12px; }
+#card .card-actions .btn { min-height: 31px; padding: 5px 8px; font-size: 12px; }
 #card .selection-note-action { color: var(--purple); border-color: var(--quote-border); background: var(--lavender); }
-#card .card-actions [aria-expanded="true"] { color: var(--purple); border-color: var(--quote-border); background: var(--lavender-strong); }
-#card .selection-locate { margin-inline-start: auto; font-size: 12px; }
-@media (min-width: 681px) {
-  #card[data-chat-open="true"] {
-    align-items: start;
-    gap: 6px;
-    width: min(calc(var(--card-main-width) + 390px), var(--card-available-width));
-    grid-template-columns: minmax(0, var(--card-main-width)) minmax(0, 1fr);
-    overflow: visible;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-    pointer-events: none;
-  }
-  #card[data-chat-open="true"] > .selection-main, #card[data-chat-open="true"] > .selection-chat {
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    box-shadow: var(--shadow-card);
-    pointer-events: auto;
-  }
-  #card[data-chat-open="true"] > .selection-main { background-color: var(--paper); }
+#card .card-actions [aria-expanded="true"] {
+  color: var(--purple);
+  border-color: var(--quote-border);
+  background: var(--lavender);
 }
-@media (max-width: 680px) {
-  #card[data-chat-open="true"] {
-    width: min(420px, var(--card-available-width));
-    grid-template-columns: minmax(0, 1fr);
-    grid-auto-rows: max-content;
-    overflow-y: auto;
-    scrollbar-width: thin;
+#card .selection-highlight-group, #card .selection-chat-group {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  overflow: hidden;
+}
+#card .selection-highlight-group .selection-highlight, #card .selection-chat-group .btn {
+  border: 0;
+  border-radius: 0;
+}
+#card .selection-highlight-group .selection-highlight, #card .selection-chat-group .btn:first-child {
+  border-inline-end: 1px solid var(--line);
+}
+#card .highlight-dot {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 31px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+#card .highlight-dot:hover, #card .highlight-dot:focus-visible { background: var(--lavender); }
+#card .highlight-dot::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--mark-tint);
+  border: 1px solid var(--border-strong);
+}
+#card .highlight-dot[data-color="yellow"] { --mark-tint: var(--swatch-yellow); }
+#card .highlight-dot[data-color="green"] { --mark-tint: var(--swatch-green); }
+#card .highlight-dot[data-color="purple"] { --mark-tint: var(--swatch-purple); }
+#card .selection-more { gap: 4px; }
+#card .selection-more-chevron { transform: rotate(90deg); }
+#card .selection-more[aria-expanded="true"] .selection-more-chevron { transform: rotate(-90deg); }
+.selection-more-menu {
+  direction: ltr;
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 5px;
+  min-width: 184px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-popover);
+  color: var(--desk-ink);
+  box-shadow: var(--shadow-popover);
+}
+.selection-more-menu:popover-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.selection-more-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--desk-ink);
+  font-size: 13px;
+  text-align: start;
+}
+.selection-more-item:hover, .selection-more-item:focus-visible {
+  background: var(--lavender);
+  color: var(--purple);
+}
+@media (max-width: 700px), (pointer: coarse) {
+  #card .highlight-dot { min-width: 44px; min-height: 44px; }
+  #card .highlight-dot::before { width: 16px; height: 16px; }
+  #card .selection-excerpt { grid-template-columns: minmax(0, 1fr) 44px; align-items: center; }
+  #card .selection-disclosure { width: 44px; height: 44px; }
+  .selection-more-item { min-height: 44px; padding: 8px 12px; font-size: 14px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-theme-switching]) :is(#card .highlight-dot, #card .selection-more-chevron, .selection-more-item) {
+    transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
   }
-  #card[data-chat-open="true"] .selection-main { max-height: none; overflow: visible; }
 }

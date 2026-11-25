@@ -1,5 +1,5 @@
 import type { ChatSource, DocumentInfo, NotebookSnapshot, OpenDocument, Operations, PageView, ReaderState, SourceRecord } from '../shared/types.js';
-import type { PaperAnnotation } from '../shared/annotations.js';
+import type { AnnotationColor, PaperAnnotation } from '../shared/annotations.js';
 import type { SavedSelectionRange, TranslatedLocator } from '../shared/source-link.js';
 import type { DiscussionRef } from './discussion-drafts.js';
 
@@ -22,7 +22,7 @@ export interface ReaderPort {
   notebookHighlights(): readonly PaperAnnotation[];
   editNotebookHighlight(id: string, trigger: HTMLElement): void;
   attachDiscussionPosition?(header: HTMLElement, signal: AbortSignal): void;
-  saveHighlight?(source: SourceRecord, quote: string): Promise<void>;
+  saveHighlight?(source: SourceRecord, quote: string, color?: AnnotationColor): Promise<void>;
   paperSelection?(source?: ChatSource): void;
   showReadingSide?(side: 'source' | 'translation'): void;
   discussionChanged?(docId: string): void;

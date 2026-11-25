@@ -47,8 +47,7 @@ const summary = (text: string) => {
 export class SelectionChat {
   readonly root = el('aside', 'selection-chat');
   readonly heading = el('header', 'chat-heading');
-  readonly action = button(label('Ask AI', '提问'), () => this.open('ask'), 'btn selection-chat-action');
-  readonly explain = button(label('Explain', '解释'), () => this.open('explain'), 'btn selection-explain-action');
+  readonly action = button(label('Ask AI', '提问'), () => this.open('ask'), 'btn primary selection-chat-action');
   private log = el('div', 'selection-chat-log');
   private quoteBar = el('div', 'answer-selection');
   private connection = el('div', 'chat-notice');
@@ -102,13 +101,13 @@ export class SelectionChat {
         return this.notes.show();
       }, 'text-btn chat-write-note'));
     }
+    this.starters.append(button(label('Explain', '解释'), () => this.ask({ mode: 'explain', prompt: this.explainPrompt() }), 'chat-starter selection-explain-action'));
     if (item.hit.regionText === undefined) {
       const target = this.app.state.settings.targetLanguage || DEFAULT_TARGET_LANGUAGE;
       const targetName = label(targetLanguageLabel(target, false), targetLanguageLabel(target, true));
       if (item.hit.side === 'translation') {
         if (targetLanguageBcp47(target) !== 'en') {
           this.starters.append(button(label('Translate to English', '翻译为英文'), () => this.ask({ mode: 'translate', prompt: label('Translate this selection into English.', '将此选段翻译为英文。') }), 'chat-starter'));
-          content.append(this.starters);
         }
       } else if (!targetsSimplifiedChinese(target)) {
         this.starters.append(button(
@@ -116,9 +115,9 @@ export class SelectionChat {
           () => this.ask({ mode: 'translate', prompt: label('Translate this selection into ' + targetName + '.', '将此选段翻译为' + targetName + '。') }),
           'chat-starter'
         ));
-        content.append(this.starters);
       }
     }
+    content.append(this.starters);
     content.append(this.log, this.quoteBar, this.connection, this.form);
     const signal = this.events.signal;
     this.log.addEventListener('pointerdown', () => { this.dragging = true; }, { signal });
@@ -152,6 +151,10 @@ export class SelectionChat {
     material.append(caption, passage);
     return material;
   }
+  private explainPrompt(): string {
+    return this.item.hit.regionText === undefined
+      ? label('Explain this passage.', '解释这段原文。') : label('Explain this screenshot.', '解释这张截图。');
+  }
   open(intent: 'ask' | 'explain', remember = true, replyId?: string): void | Promise<void> {
     if (remember) {
       this.engage();
@@ -160,11 +163,7 @@ export class SelectionChat {
     }
     this.show(true, intent === 'ask');
     if (replyId) return this.focusAnswer(replyId);
-    if (intent === 'explain') {
-      const prompt = this.item.hit.regionText === undefined
-        ? label('Explain this passage.', '解释这段原文。') : label('Explain this screenshot.', '解释这张截图。');
-      return this.ask({ mode: 'explain', prompt });
-    }
+    if (intent === 'explain') return this.ask({ mode: 'explain', prompt: this.explainPrompt() });
   }
   private async focusAnswer(id: string): Promise<void> {
     await this.restore();
@@ -180,7 +179,6 @@ export class SelectionChat {
   }
   private show(open: boolean, focusInput = true): void {
     this.root.hidden = !open;
-    byId('card').dataset.chatOpen = String(open);
     this.action.setAttribute('aria-expanded', String(open));
     if (!open) return;
     this.render();

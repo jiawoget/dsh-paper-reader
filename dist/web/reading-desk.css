@@ -182,7 +182,7 @@
 }
 
 #paperScroll { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; padding: 2px var(--desk-edge) 20px; scrollbar-color: var(--scrollbar-thumb) transparent; }
-#paperScroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+#paperScroll:focus-visible { outline: 1px solid transparent; box-shadow: inset 0 2px 0 0 var(--focus-ring); }
 .pages { min-width: 100%; align-items: start; }
 .lane { min-width: 0; }
 .lane > div:not(:empty) { position: relative; background: var(--paper); color: var(--desk-ink); border-radius: 3px; box-shadow: var(--shadow-sheet); }
@@ -433,9 +433,8 @@
   pointer-events: auto;
   scrollbar-width: thin;
 }
-#card[data-selection]:not([data-docked="true"]) > :is(.selection-notes, .selection-chat),
-#card :is(.selection-grip, .window-action, .window-resize) { display: none; }
-#card[data-selection] :is(.word-head, .chat-heading) {
+#card[data-selection]:not([data-docked="true"]) > :is(.selection-notes, .selection-chat) { display: none; }
+#card[data-selection] .chat-heading {
   display: flex;
   align-items: center;
   flex: none;
@@ -443,42 +442,16 @@
   padding: 11px 14px 7px;
   color: var(--desk-ink);
   background: var(--paper);
-  cursor: auto;
-  touch-action: auto;
-  user-select: auto;
 }
-#card[data-selection] :is(.word-head, .chat-heading) .icon-btn {
+#card[data-selection] .chat-heading .icon-btn {
   align-self: center;
   min-width: 29px;
   height: 29px;
 }
-#card[data-selection] .selection-location { color: var(--muted); }
-#card[data-selection] .selection-body { padding: 0 14px 14px; }
-#card .selection-excerpt {
-  border: 0;
-  padding-inline: 6px;
-  border-radius: 5px;
-  background: var(--surface-tint);
-}
-#card .selection-excerpt blockquote { color: var(--desk-ink); }
-#card .selection-counterpart, #card .selection-locate { color: var(--purple); }
 #card .selection-recovery { display: flex; gap: 10px; flex-wrap: wrap; }
 #card .selection-recovery button { min-height: 32px; padding-inline: 6px; }
 #card .selection-heading h2:focus-visible { width: fit-content; outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 #card .selection-counterpart .meaning { color: var(--desk-ink); font-size: 14px; }
-#card .card-actions .btn { min-height: 31px; }
-#card .selection-explain-action {
-  color: var(--accent-on-solid);
-  background: var(--accent-solid);
-  border-color: var(--accent-solid);
-}
-#card .selection-explain-action:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
-#card[data-workspace="chat"] .selection-explain-action { display: none; }
-#card .card-actions [aria-expanded="true"] {
-  color: var(--purple);
-  border-color: var(--quote-border);
-  background: var(--lavender);
-}
 #card .chat-heading h3 { flex: 1; min-width: 0; }
 #card .chat-contents {
   display: flex;
@@ -508,14 +481,14 @@
   background: var(--paper);
 }
 #passageSplit { display: none; }
-#selectionDock:has(> #card:not([data-workspace])) {
+#selectionDock:has(> #card:not([data-workspace="chat"])) {
   display: flex;
   flex-direction: column;
   height: var(--preview-height, auto);
   max-height: 65dvh;
   overflow: hidden;
 }
-#selectionDock:has(> #card:not([data-workspace])) > #passageSplit {
+#selectionDock:has(> #card:not([data-workspace="chat"])) > #passageSplit {
   display: grid;
   place-items: center;
   flex: 0 0 12px;
@@ -537,6 +510,9 @@
   max-height: var(--preview-height, min(32dvh, 235px));
   overflow: auto;
 }
+#selectionDock > #card[data-workspace="note"] { flex: 1 1 auto; min-height: 0; max-height: none; }
+#selectionDock > #card[data-workspace="note"] > .selection-notes { max-height: none; }
+@media (min-width: 701px) and (min-height: 521px) { #selectionDock > #card[data-workspace="note"] > .selection-main { max-height: none; } }
 #selectionDock > #card:not([data-workspace]) > .selection-main {
   max-height: none;
   overflow: visible;
@@ -864,6 +840,9 @@
   #railBody :is(.search, .btn, .text-btn, .doc-row) { min-height: 44px; }
   #railBody .btn { min-width: 44px; }
   #railBody a.external { display: inline-flex; align-items: center; min-height: 44px; }
+  #card :is(.card-actions, .selection-notes, .chat-input-row, .selection-recovery, .chat-notice, .answer-notebook) :is(button, .btn), #card .chat-write-note { min-width: 44px; min-height: 44px; }
+  #card :is(.selection-counterpart, .discussion-source) summary { min-height: 44px; padding-block: 11px; }
+  #card :is(.selection-note-footer, .selection-saved-note) .text-btn { justify-content: center; }
 }
 @media (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
   #reader { --desk-edge: 12px; }
@@ -872,8 +851,7 @@
   .workspace:has(#card[data-workspace="chat"]:not([hidden])) > .paper-chat[data-open="false"], #card[data-workspace="chat"] > .selection-main { display: none; }
   .toc-entry, .toc-chapter > summary, .toc-fold, .headings, #translationMode, #pinHeading > #placePin, .target-heading #translate,
   #highlightDisplay, #returnDiscussion, #readText, #placePin, .passage-pick, #pageJump :is(input, .btn), .citation-export .btn,
-  #reader #menu :is(button, #zoom), #card .card-actions .btn,
-  #card :is(.card-actions button, .selection-language, .selection-note-footer button, .chat-input-row button, .answer-notebook .text-btn, .selection-recovery button) { min-height: 44px; }
+  #reader #menu :is(button, #zoom) { min-height: 44px; }
   .toc-fold { width: 44px; }
   .toc-nav:has(.toc-fold) .toc-line:not(:has(.toc-fold)) { padding-inline-start: 44px; }
   #reader[data-reading-mode="bilingual"] :is(.pages, .headings) { grid-template-columns: minmax(0, 1fr); }
@@ -903,7 +881,6 @@
   #card[data-workspace="chat"] .chat-heading h3 { font-size: 17px; }
   #card[data-workspace="chat"] .selection-chat-log { max-height: none; }
   #card[data-workspace="chat"] .selection-chat-log:empty { display: block; }
-  #card .discussion-source summary { padding-block: 4px; }
 }
 @media (max-width: 520px) {
   .topbar { display: flex; flex-wrap: nowrap; align-items: center; min-height: 48px; padding: 2px 4px; gap: 2px; }

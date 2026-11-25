@@ -1,7 +1,8 @@
 import { WidgetType } from '@codemirror/view';
 import type { PaperAnnotation } from '../shared/annotations.js';
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
-import { highlightName, visibleQuote } from './annotations.js';
+import { highlightName } from './annotation-colors.js';
+import { visibleQuote } from './annotations.js';
 import { button, el, readerLabel as label } from './ui.js';
 
 export interface NotebookCitation { url: URL; at: number }

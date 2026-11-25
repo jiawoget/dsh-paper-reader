@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type Locator } from 'playwright-core';
+import { cardMoreAction, openCardMore } from './helpers/reader.js';
 import { withHost } from './host.js';
 
 async function selectPassage(run: Locator): Promise<void> {
@@ -58,8 +59,26 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     assert.ok(resized.width > floating.width + 25 && resized.height > floating.height + 30,
       'Dragging the outer corner should enlarge the floating preview in both dimensions.');
     await page.setViewportSize({ width: 1440, height: 900 });
+    const cardAudit = await card.evaluate(node => {
+      const bar = node.querySelector<HTMLElement>('.card-actions')!;
+      const dots = Array.from(bar.querySelectorAll<HTMLElement>('.highlight-dot')).map(el => el.getBoundingClientRect());
+      return {
+        primaryCount: bar.children.length,
+        hasTopLevelExplain: Boolean(bar.querySelector('.selection-explain-action')),
+        dotsMin: Math.min(...dots.map(r => Math.min(r.width, r.height)))
+      };
+    });
+    assert.ok(cardAudit.primaryCount <= 4, 'Selection card primary actions must stay <= 4: ' + JSON.stringify(cardAudit));
+    assert.equal(cardAudit.hasTopLevelExplain, false, 'Explain must live inside Ask AI instead of top-level card actions.');
+    assert.ok(cardAudit.dotsMin >= 23.5, 'Desktop highlight color dots must be >= 24x24px: ' + cardAudit.dotsMin);
+    const moreMenu = await openCardMore(card);
+    const menuRect = (await moreMenu.boundingBox())!;
+    assert.ok(menuRect.x >= 0 && menuRect.y >= 0 && menuRect.x + menuRect.width <= 1440 && menuRect.y + menuRect.height <= 900);
+    await page.keyboard.press('Escape');
+    await moreMenu.waitFor({ state: 'hidden' });
+    assert.ok(await card.isVisible(), 'Escape closes only the More popover without dismissing the selection card.');
     await capture('C-Original.png');
-    await card.getByRole('button', { name: 'Open bilingual view' }).click();
+    await cardMoreAction(card, 'Open bilingual view');
     assert.equal(await reader.getAttribute('data-reading-mode'), 'bilingual');
     await original.locator('.pdf-quote-mark').first().waitFor();
     await translated.locator('.pdf-quote-mark').first().waitFor();
@@ -86,6 +105,15 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     const note = dock.getByRole('textbox', { name: 'Your note' });
     const draft = 'The block table lets vLLM allocate physical KV blocks as a sequence grows.';
     await note.fill(draft);
+    assert.ok(await grip.isVisible(), 'Docked Write note mode must keep #passageSplit visible.');
+    const noteDockBefore = (await dock.boundingBox())!;
+    const noteGrip = (await grip.boundingBox())!;
+    await page.mouse.move(noteGrip.x + noteGrip.width / 2, noteGrip.y + noteGrip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(noteGrip.x + noteGrip.width / 2, noteGrip.y - 70, { steps: 6 });
+    await page.mouse.up();
+    assert.ok((await dock.boundingBox())!.height > noteDockBefore.height + 40, 'Docked Write note mode must resize via #passageSplit.');
+    await grip.dblclick();
     await capture('B-Bilingual.png');
     await reader.getByRole('button', { name: 'Original', exact: true }).click();
     assert.equal(await reader.getAttribute('data-reading-mode'), 'source');
@@ -101,8 +129,17 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     assert.ok((await translated.boundingBox())!.width >= 350);
     assert.equal(await note.inputValue(), draft);
     await capture('B-390.png');
+    const mobileDotMin = await card.locator('.highlight-dot').evaluateAll(els =>
+      Math.min(...els.map(el => { const r = el.getBoundingClientRect(); return Math.min(r.width, r.height); }))
+    );
+    assert.ok(mobileDotMin >= 43.5, 'Mobile highlight color dots must be >= 44x44px: ' + mobileDotMin);
+    const mobileMenu = await openCardMore(card);
+    const mobileMenuBox = (await mobileMenu.boundingBox())!;
+    assert.ok(mobileMenuBox.x >= 0 && mobileMenuBox.y >= 0 && mobileMenuBox.x + mobileMenuBox.width <= 390 && mobileMenuBox.y + mobileMenuBox.height <= 844);
+    await page.keyboard.press('Escape');
     await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
     await dock.getByRole('heading', { name: 'Reading discussion' }).waitFor();
+    assert.ok(await dock.locator('.selection-chat .selection-explain-action').isVisible(), 'Built-in Explain starter must appear inside Ask AI.');
     await dock.getByRole('button', { name: 'Close chat' }).click();
     await dock.getByRole('heading', { name: 'Selected passage' }).waitFor();
     assert.equal(await card.locator('.selection-chat').isVisible(), false);
@@ -181,6 +218,14 @@ await withHost(async ({ origin, authenticatedUrl, executable }) => {
     await reader.locator('.source-chip[data-note-id=' + JSON.stringify(noteId) + ']').click();
     await original.locator('.pdf-quote-mark').first().waitFor();
     assert.equal(await text.isVisible(), false, 'Notes should open their original PDF source.');
+    await page.keyboard.press('Escape');
+    await reader.locator('#paperScroll').focus();
+    const paperFocus = await reader.locator('#paperScroll').evaluate(el => {
+      const style = getComputedStyle(el);
+      return { visible: el.matches(':focus-visible'), outlineWidth: parseFloat(style.outlineWidth) || 0, boxShadow: style.boxShadow };
+    });
+    assert.ok(paperFocus.visible && paperFocus.outlineWidth <= 1 && paperFocus.boxShadow !== 'none',
+      '#paperScroll:focus-visible should show subtle top inset shadow without a heavy full-viewport outline: ' + JSON.stringify(paperFocus));
 
     const phone = await browser.newPage({ locale: 'en-US', viewport: { width: 320, height: 720 }, isMobile: true, hasTouch: true });
     await phone.goto(authenticatedUrl);

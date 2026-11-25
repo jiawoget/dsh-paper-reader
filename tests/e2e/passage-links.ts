@@ -3,6 +3,7 @@ import { appendFile, copyFile, mkdir, readFile, writeFile } from 'node:fs/promis
 import path from 'node:path';
 import { chromium, type Locator, type Page } from 'playwright-core';
 import type { DocumentInfo, NotebookSnapshot } from '../../src/shared/types.js';
+import { cardMoreAction } from './helpers/reader.js';
 import { withHost } from './host.js';
 import { modelFixture } from './integration-fixtures.js';
 import { dragAnswer } from './selection-gestures.js';
@@ -176,14 +177,14 @@ await withHost(async host => {
     await page.getByRole('button', { name: 'Show notes', exact: true }).click();
     await page.getByRole('tab', { name: 'Notes', exact: true }).click();
     const rail = page.getByRole('textbox', { name: 'Notes Markdown' });
-    const card = page.locator('#card'), insert = card.getByRole('button', { name: 'Insert passage link' });
+    const card = page.locator('#card');
     const run = (value: string) => page.locator('#original .pdf-native-text [data-block-id]').filter({ hasText: value }).first();
     await run(training).waitFor();
     await rail.click(); await page.keyboard.press('Control+End'); await page.keyboard.press('Enter');
     await page.keyboard.insertText(table);
     await caret(page, rail, firstRow, firstRow.indexOf(' with'));
     await select(run(training), training);
-    await insert.click();
+    await cardMoreAction(card, 'Insert passage link');
     const links = rail.locator('a.notebook-passage-link');
     await links.first().waitFor();
     assert.equal(await links.nth(0).innerText(), 'p. 1 · ' + training);
@@ -229,7 +230,7 @@ await withHost(async host => {
     await card.locator('.selection-counterpart').getByRole('button', { name: 'References 34, 49', exact: true }).first().focus();
     await checkTitles();
     await page.keyboard.press('Escape');
-    await insert.click();
+    await cardMoreAction(card, 'Insert passage link');
     await links.nth(1).waitFor();
     await page.keyboard.press('Control+z');
     assert.equal(await links.count(), 1, 'Undo removes the second insertion in a single edit.');
@@ -281,7 +282,7 @@ await withHost(async host => {
     await caret(page, rail, prose, prose.indexOf('this translation'));
     for (const _ of 'this translation') await page.keyboard.press('Shift+ArrowRight');
     await select(target, '连接到输出');
-    await insert.click();
+    await cardMoreAction(card, 'Insert passage link');
     const proseLink = rail.getByRole('link', { name: 'p. 2 · 连接到输出' });
     await proseLink.waitFor();
     assert.equal(await proseLink.locator('..').innerText(), 'Compare p. 2 · 连接到输出 with the source.');

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, type Page } from 'playwright-core';
+import { assertContrast } from './helpers/contrast.js';
+import { assertMobilePanelTargets } from './helpers/dom-probes.js';
 import { withHost } from './host.js';
 import type { NotebookSnapshot, Operations } from '../../src/shared/types.js';
 
@@ -40,8 +42,40 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     assert.equal((await book()).markdown,initialBook.markdown);
     assert.equal((await marks()).length,1);
 
+    const selectPhrase = async (blockId: string, match: RegExp) => {
+      const el = page.locator(`#original .pdf-native-text [data-block-id="${blockId}"]`).filter({ hasText: match }).first();
+      await el.evaluate(node => {
+        const text = node.firstChild as Text;
+        document.getSelection()!.setBaseAndExtent(text, 0, text, Math.min(text.data.length, 32));
+        node.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
+      });
+      await page.locator('#card').waitFor({ state: 'visible' });
+    };
+    await selectPhrase('figure-6', /Block table translation/i);
+    await page.locator('#card .highlight-dot[data-color="green"]').click();
+    await selectPhrase('block-tables', /KV block manager/i);
+    await page.locator('#card .highlight-dot[data-color="purple"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#original .annotation-highlight').length >= 3);
+    const createdColors = new Set((await marks()).map(m => m.color));
+    assert.deepEqual(createdColors, new Set(['yellow', 'green', 'purple']), '1-click color dots must persist yellow, green, and purple highlights.');
+
     const reader=page.locator('#reader'), rail=page.locator('#rail'), marksTab=page.locator('#annotationsTab');
     await page.locator('#mobileRail').click();
+    await marksTab.click();
+    assert.equal(await rail.locator('.annotation-entry').count(), 3);
+    await rail.locator('.annotation-color-filter[data-color-filter="purple"]').click();
+    assert.equal(await rail.locator('.annotation-entry').count(), 1);
+    assert.ok((await rail.locator('.annotation-entry').first().innerText()).includes('Question'));
+    await rail.locator('.annotation-color-filter[data-color-filter="all"]').click();
+    const search = rail.locator('.annotation-search');
+    await search.fill('KV block manager');
+    assert.ok(await search.evaluate(el => el === document.activeElement), 'Typing in Marks search must not lose focus.');
+    assert.equal(await rail.locator('.annotation-entry').count(), 1);
+    await search.fill('no-such-mark-xyz');
+    await rail.getByText('No marks match the current filter.', { exact: true }).waitFor();
+    await rail.getByRole('button', { name: 'Clear filters', exact: true }).click();
+    assert.equal(await rail.locator('.annotation-entry').count(), 3);
+    await page.locator('#notesTab').click();
     const presentation=rail.getByRole('combobox',{name:'Highlight display'});
     assert.equal(await presentation.count(),1,'Readers can choose how highlights appear in their notebook.');
     assert.equal(await presentation.inputValue(),'inline');
@@ -62,7 +96,7 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     await page.locator('#notebookPose').selectOption('left');
     assert.equal(await reader.getAttribute('data-notebook-pose'),'left');
     await rail.getByRole('button',{name:'Save',exact:true}).click();
-    await rail.getByRole('heading',{name:'Marks',exact:true}).waitFor();
+    await rail.locator('.annotation-workspace').getByRole('heading',{name:'Marks',exact:true}).waitFor();
     assert.equal((await marks())[0].color,'green');
     await capture('Docked notebook');
     await rail.locator('.annotation-entry').first().click();
@@ -76,7 +110,7 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     assert.equal(await comment.inputValue(),'Trace the mapping before comparing throughput.');
     await rail.getByRole('button',{name:'Keep my draft'}).click();
     await rail.getByRole('button',{name:'Save',exact:true}).click();
-    await rail.getByRole('heading',{name:'Marks',exact:true}).waitFor();
+    await rail.locator('.annotation-workspace').getByRole('heading',{name:'Marks',exact:true}).waitFor();
     await page.locator('#closeRail').click();
 
     async function pin(text:string,figure:string){
@@ -105,7 +139,7 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     await pin(first,'figure-6');
     assert.equal((await book()).markdown,initialBook.markdown);
     await go(7);await pin('Figure 8: trace the write after sharing the initial blocks.','figure-8');
-    assert.equal((await marks()).length,3);
+    assert.equal((await marks()).length,5);
     await page.locator('#mobileRail').click();await marksTab.click();
     const cite=async(value:string)=>{
       await rail.locator('.annotation-entry').filter({hasText:value}).click();
@@ -131,16 +165,32 @@ await withHost(async ({origin, authenticatedUrl, executable}) => {
     await page.locator('#zoom').selectOption('1');
     await marksTab.click();
     const firstEntry=rail.locator('.annotation-entry').filter({hasText:first});
-    await firstEntry.click();await rail.getByRole('button',{name:'Remove',exact:true}).click();
+    await firstEntry.click();
+    const removeBtn = rail.locator('.annotation-editor-actions .annotation-remove');
+    await removeBtn.waitFor({ state: 'visible' });
+    const rowBoxes = await Promise.all([
+      rail.locator('.annotation-editor-actions .btn.primary').boundingBox(),
+      removeBtn.boundingBox()
+    ]);
+    assert.ok(rowBoxes[0] && rowBoxes[1] && Math.abs(rowBoxes[0].y - rowBoxes[1].y) < 12 && rowBoxes[1].x > rowBoxes[0].x,
+      'Remove button must align on the same row to the right of Save/Cite in Notes.');
+    await assertContrast(removeBtn, '.annotation-remove (light)', 4.5);
+    await page.evaluate(() => { document.documentElement.setAttribute('data-theme-switching', ''); document.documentElement.setAttribute('data-theme', 'dark'); });
+    await assertContrast(removeBtn, '.annotation-remove (dark)', 4.5);
+    await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); document.documentElement.removeAttribute('data-theme-switching'); });
+    await removeBtn.click();
     await rail.getByRole('button',{name:'Remove mark',exact:true}).click();await firstEntry.waitFor({state:'detached'});
-    assert.equal((await marks()).length,2);
+    assert.equal((await marks()).length,4);
     const revisit=await ctx.newPage();await revisit.goto(firstHref);await loaded(revisit);
     assert.equal(new URL(revisit.url()).searchParams.get('anchor'),new URL(firstHref).searchParams.get('anchor'));
     await revisit.locator('#original .annotation-location').waitFor();
     await revisit.close();await page.locator('#toast').getByText('Undo',{exact:true}).click();await firstEntry.waitFor();
-    assert.equal((await marks()).length,3);
+    assert.equal((await marks()).length,5);
     await page.locator('#parallel').click();assert.equal(await reader.getAttribute('data-notebook-pose'),'left');await capture('Bilingual notes');
     await page.setViewportSize({width:390,height:844});await page.goto(secondHref);await loaded(page);
+    await page.locator('#mobileRail').click();await marksTab.click();
+    await assertMobilePanelTargets(page, '#rail');
+    await page.locator('#closeRail').click();
     await page.locator('#original .annotation-pin').first().click();await rail.getByRole('textbox',{name:'Comment'}).waitFor();
     assert.equal(await reader.getAttribute('data-notebook-pose'),'sheet');
     await capture('Mobile page note');
