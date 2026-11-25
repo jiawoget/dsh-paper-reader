@@ -60,7 +60,7 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
   glossaryInput.rows = 3;
   glossaryInput.maxLength = 8000;
   glossaryInput.value = data.glossary ?? '';
-  glossaryInput.placeholder = label('One entry per line: KV = 键值缓存 (term only to keep unchanged)', '每行一条：KV = 键值缓存（仅填术语则保留原文）');
+  glossaryInput.placeholder = label('One entry per line: KV = key-value cache (term only to keep unchanged)', '每行一条：KV = 键值缓存（仅填术语则保留原文）');
   glossaryRow.append(el('span', '', label('Translation glossary', '翻译术语表')), glossaryInput);
   const glossaryHint = el('p', 'hint', label('Matched terms are locked during AI translation. Lines starting with # are ignored.', '翻译时会自动锁定匹配到的术语，以 # 开头的行会被忽略。'));
 

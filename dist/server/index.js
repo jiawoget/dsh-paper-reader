@@ -2890,10 +2890,12 @@ function parseGlossary(raw) {
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const sep = trimmed.search(/[=＝]/);
+    const spaced = trimmed.match(/\s+[=＝]\s+/);
+    const sep = spaced?.index !== void 0 ? spaced.index : trimmed.search(/[=＝]/);
+    const sepLen = spaced?.index !== void 0 ? spaced[0].length : 1;
     const term = (sep === -1 ? trimmed : trimmed.slice(0, sep)).trim();
     if (!term) continue;
-    const translation = sep === -1 ? "" : trimmed.slice(sep + 1).trim();
+    const translation = sep === -1 ? "" : trimmed.slice(sep + sepLen).trim();
     const key2 = term.normalize("NFKC").toLowerCase();
     entries.set(key2, translation ? { term, translation } : { term });
   }
@@ -2901,11 +2903,13 @@ function parseGlossary(raw) {
 }
 function matchGlossary(text2, entries) {
   if (!text2 || !entries.length) return [];
+  const normText = text2.normalize("NFKC");
   return entries.filter((entry) => {
-    const escaped = escapeRegex(entry.term).replace(/\s+/g, "\\s+");
-    const prefix2 = /^[A-Za-z0-9_]/.test(entry.term) ? "(?<![A-Za-z0-9_])" : "";
-    const suffix = /[A-Za-z0-9_]$/.test(entry.term) ? "(?![A-Za-z0-9_])" : "";
-    return new RegExp(prefix2 + escaped + suffix, "iu").test(text2);
+    const normTerm = entry.term.normalize("NFKC");
+    const escaped = escapeRegex(normTerm).replace(/\s+/g, "\\s+");
+    const prefix2 = /^[A-Za-z0-9_]/.test(normTerm) ? "(?<![A-Za-z0-9_])" : "";
+    const suffix = /[A-Za-z0-9_]$/.test(normTerm) ? "(?![A-Za-z0-9_])" : "";
+    return new RegExp(prefix2 + escaped + suffix, "iu").test(normText);
   });
 }
 function formatGlossaryPrompt(raw, text2) {

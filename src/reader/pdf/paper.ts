@@ -65,7 +65,7 @@ export function makeSheet(side: ReadingSide, page: number, window: Box, width: n
 }
 
 export function fitPageScale(paperScroll: HTMLElement | null, sheetOuter: HTMLElement, win: Box, currentFactor: number): number {
-  if (!paperScroll || currentFactor <= 0) return 1;
+  if (!paperScroll || currentFactor <= 0 || sheetOuter.dataset.focus === 'passage') return 1;
   const stage = sheetOuter.querySelector<HTMLElement>('.pdf-stage') ?? sheetOuter;
   const rect = stage.getBoundingClientRect();
   if (!rect.width) return 1;

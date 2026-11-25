@@ -151,7 +151,7 @@ export class ReadingDesk {
     pageSplit.setAttribute('aria-valuetext', label(Math.round(proportion * 100) + '% original', '原文占 ' + Math.round(proportion * 100) + '%'));
     const scope = byId<HTMLSelectElement>('translationMode');
     scope.hidden = !this.pdf;
-    scope.value = this.effectiveFocus === 'column' && this.focus === 'page' ? 'column' : this.focus;
+    scope.value = this.effectiveFocus && this.effectiveFocus !== 'page' && this.focus === 'page' ? 'column' : this.focus;
   }
   private applyNotebook(): void {
     this.root.dataset.notebookOpen = String(this.notebookOpen);

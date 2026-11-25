@@ -12,6 +12,7 @@ test('parseGlossary handles comments, blanks, full-width separators, bare terms,
     'vLLM = ',
     ' = ignored',
     'expr = a = b',
+    'E=mc^2 = 质能方程',
     'kv cache = KV 缓存'
   ].join('\r\n');
   const parsed: GlossaryEntry[] = parseGlossary(raw);
@@ -20,10 +21,19 @@ test('parseGlossary handles comments, blanks, full-width separators, bare terms,
     { term: 'PagedAttention', translation: '分页注意力' },
     { term: 'Transformer' },
     { term: 'vLLM' },
-    { term: 'expr', translation: 'a = b' }
+    { term: 'expr', translation: 'a = b' },
+    { term: 'E=mc^2', translation: '质能方程' }
   ]);
   assert.deepEqual(parseGlossary(''), []);
   assert.deepEqual(parseGlossary(undefined), []);
+});
+
+test('matchGlossary normalizes NFKC overrides and PDF ligatures', () => {
+  const entries = parseGlossary('KV = 键值1\nＫＶ = 键值2\nfile = 文件');
+  assert.deepEqual(matchGlossary('KV cache stores ﬁle handles.', entries), [
+    { term: 'ＫＶ', translation: '键值2' },
+    { term: 'file', translation: '文件' }
+  ]);
 });
 
 test('matchGlossary enforces ASCII boundaries while matching punctuation, CJK, and line wraps', () => {

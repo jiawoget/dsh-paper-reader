@@ -102,7 +102,10 @@ export function bindPdfControls(host: PdfControlsHost): PdfControlsHandle {
 
   const savedTheme = localStorage.getItem(THEME_KEY);
   let pdfTheme: PdfTheme = PDF_THEMES.some(([id]) => id === savedTheme) ? savedTheme as PdfTheme : 'paper';
-  themeBtn.ariaLabel = themeBtn.title = themeMenu.ariaLabel = label('PDF paper theme', 'PDF 页面主题');
+  const themeLabel = label('PDF paper theme', 'PDF 页面主题');
+  themeBtn.ariaLabel = themeBtn.title = themeMenu.ariaLabel = themeLabel;
+  const themeText = themeBtn.querySelector('.pdf-theme-label');
+  if (themeText) themeText.textContent = themeLabel;
   const themeItems = new Map<PdfTheme, HTMLButtonElement>();
   const applyTheme = (next: PdfTheme, persist: boolean) => {
     pdfTheme = next; reader.dataset.pdfTheme = next;
@@ -170,13 +173,14 @@ export function bindPdfControls(host: PdfControlsHost): PdfControlsHandle {
   });
 
   const retranslateLabel = label('Re-translate', '重新翻译');
-  retranslateBtn.textContent = retranslateLabel;
+  const retranslateText = el('span', 'retranslate-label', retranslateLabel);
+  retranslateBtn.replaceChildren(icon('refresh', 14), retranslateText);
   retranslateBtn.ariaLabel = retranslateBtn.title = label('Re-translate page', '重新翻译本页');
   retranslateBtn.addEventListener('click', async () => {
-    retranslateBtn.disabled = true; retranslateBtn.textContent = label('Re-translating…', '正在重译…');
+    retranslateBtn.disabled = true; retranslateText.textContent = label('Re-translating…', '正在重译…');
     try { await host.onRetranslatePage(); }
     catch (error) { toast(message(error)); }
-    finally { retranslateBtn.disabled = false; retranslateBtn.textContent = retranslateLabel; }
+    finally { retranslateBtn.disabled = false; retranslateText.textContent = retranslateLabel; }
   });
   scope.ariaLabel = scope.title = label('Translation scope', '译文范围');
   scope.options[0].text = label('Full page', '整页译文');
@@ -190,7 +194,10 @@ export function bindPdfControls(host: PdfControlsHost): PdfControlsHandle {
     stepZoom, syncZoom, syncTargetLanguage,
     syncDocument(isPdf: boolean) {
       themeControl.hidden = !isPdf; zoomSelect.options[0].hidden = !isPdf;
-      if (!isPdf) { info.hidden = true; info.textContent = ''; if (themeMenu.matches(':popover-open')) themeMenu.hidePopover(); }
+      if (!isPdf) {
+        if (zoomSelect.value === 'fit-page') zoomSelect.value = '1';
+        info.hidden = true; info.textContent = ''; if (themeMenu.matches(':popover-open')) themeMenu.hidePopover();
+      } else syncZoom(host.getZoom());
     },
     syncFocus(effective: TranslationFocus, focusLabel: string, degraded: boolean, preferred: TranslationFocus) {
       info.hidden = effective === 'page'; info.textContent = effective === 'page' ? '' : focusLabel;

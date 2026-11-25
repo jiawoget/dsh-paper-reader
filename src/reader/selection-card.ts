@@ -251,6 +251,7 @@ export class SelectionCard {
     const block = (id = hit.id) => app.view?.blocks.find(item => item.id === id);
     const term = !hit.image && isTerm(selection);
     const parts = hit.segments ?? [];
+    const seenTranslations = new Map(parts.map(part => [part.id, block(part.id)?.translation]));
     const translation = parts.length ? parts.map(part => part.translated).filter(Boolean).join('\n\n') : block()?.translation;
     const exactPair = parts.length ? parts.every(part => part.exactPair) : Boolean(block()?.translation && selection === block()?.text);
     const translatedContext = () => parts.length ? parts.map(part => block(part.id)?.translation).filter(Boolean).join('\n\n') : block()?.translation;
@@ -296,8 +297,7 @@ export class SelectionCard {
     reading.append(counterpart);
     body.append(reading);
     const contextual = () => term && !item.exactPair;
-    let lastText: string | undefined, lastSourceMode: boolean | undefined;
-    let lastStatus: PdfPageView['translationStatus'];
+    let lastText: string | undefined, lastSourceMode: boolean | undefined, lastStatus: PdfPageView['translationStatus'];
     const partTranslation = (part: (typeof parts)[number]) => {
       if (part.translated) return part.translated;
       const current = block(part.id);
@@ -308,6 +308,10 @@ export class SelectionCard {
       return parts.length ? parts.map(partTranslation).filter(Boolean).join('\n\n') : block()?.translation;
     };
     this.updatePreview = () => {
+      for (const part of parts) {
+        const current = block(part.id)?.translation;
+        if (current !== seenTranslations.get(part.id)) { seenTranslations.set(part.id, current); part.translated = undefined; part.exactPair = false; }
+      }
       const sourceMode = byId('reader').dataset.readingMode === 'source' && hit.side === 'source' && !card.dataset.workspace;
       const text = counterpartText();
       const needsStatus = sourceMode && !hit.image && hit.side === 'source' &&
