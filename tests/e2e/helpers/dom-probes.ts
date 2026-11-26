@@ -193,10 +193,11 @@ export async function assertMobilePanelTargets(page: Page, rootSelector: string)
 export async function assertDesktopChromeCraft(page: Page): Promise<void> {
   const prevSize = page.viewportSize() ?? { width: 1440, height: 900 };
   const railTabs = [['contentsTab', 'Contents'], ['annotationsTab', 'Marks'], ['refsTab', 'Reference'], ['notesTab', 'Notes']] as const;
-  for (const [width, height] of [[1440, 900], [1280, 800], [1024, 768]] as const) {
+  for (const [width, height] of [[1440, 900], [1280, 800], [1241, 900], [1160, 900], [1131, 900], [1061, 900], [1024, 768]] as const) {
     await page.setViewportSize({ width, height });
     if (await page.locator('#rail').isVisible()) await page.locator('#closeRail').click();
-    const closedTop = await page.locator('.topbar').evaluate(el => el.getBoundingClientRect().height);
+    const closed = await page.evaluate(() => ({ h: document.querySelector('.topbar')!.getBoundingClientRect().height, title: document.getElementById('docTitle')!.getBoundingClientRect().width, ov: Math.max(document.documentElement.scrollWidth - innerWidth, document.querySelector('.topbar')!.scrollWidth - document.querySelector('.topbar')!.clientWidth) }));
+    assert.ok(closed.h <= 64 && closed.title >= 80 && closed.ov <= 0, `Closed topbar regression at ${width}px: ${JSON.stringify(closed)}`);
     await page.locator('#mobileRail').click();
     await page.locator('#rail').waitFor({ state: 'visible' });
     const tabIds = railTabs.map(([id]) => id);
@@ -240,7 +241,7 @@ export async function assertDesktopChromeCraft(page: Page): Promise<void> {
       };
     });
     assert.equal(metrics.saveStateExists, false, '#saveState must be removed');
-    assert.ok(Math.abs(metrics.topbarHeight - closedTop) <= 1, `Topbar jumped at ${width}px: ${closedTop} -> ${metrics.topbarHeight}`);
+    assert.ok(metrics.topbarHeight <= 64 && Math.abs(metrics.topbarHeight - closed.h) <= 1 && await page.evaluate(() => Math.max(document.documentElement.scrollWidth - innerWidth, document.querySelector('.topbar')!.scrollWidth - document.querySelector('.topbar')!.clientWidth)) <= 0, `Topbar regression at ${width}px: ${closed.h} -> ${metrics.topbarHeight}`);
     assert.ok(metrics.titleWidth >= 80, `#docTitle width ${metrics.titleWidth} < 80px at ${width}px`);
     assert.ok(metrics.footerHeight > 0 && metrics.footerHeight <= 42 && metrics.footerOverflow <= 1,
       `Notebook footer wrapped or overflowed at ${width}px: ${JSON.stringify(metrics)}`);
