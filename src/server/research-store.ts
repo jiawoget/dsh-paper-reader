@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
 import type { DocPageRecord, TopicRecord } from '../shared/types.js';
-import { ServiceError, single, stringValue, type Input } from './service-types.js';
+import { single, stringValue, type Input } from './service-types.js';
 
 type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
@@ -36,7 +36,7 @@ export function buildFtsQuery(raw: string): string {
       if (tokens?.length) clauses.push('"' + tokens.join(' ') + '"');
       return;
     }
-    for (const part of chunk.match(/\p{Script=Han}+|[\p{L}\p{N}]+/gu) ?? []) {
+    for (const part of chunk.match(/\p{Script=Han}+|(?:(?!\p{Script=Han})[\p{L}\p{N}])+/gu) ?? []) {
       clauses.push('"' + (/\p{Script=Han}/u.test(part) ? [...part].join(' ') : part) + '"');
     }
   };
@@ -55,7 +55,7 @@ function makeSnippet(text: string, query: string): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean) return '';
   const lower = clean.toLocaleLowerCase();
-  const terms = (query.match(/\p{Script=Han}+|[\p{L}\p{N}]{2,}/gu) ?? []).map(t => t.toLocaleLowerCase()).sort((a, b) => b.length - a.length);
+  const terms = (query.match(/\p{Script=Han}+|(?:(?!\p{Script=Han})[\p{L}\p{N}]){2,}/gu) ?? []).map(t => t.toLocaleLowerCase()).sort((a, b) => b.length - a.length);
   for (const term of terms) {
     const idx = lower.indexOf(term);
     if (idx < 0) continue;
@@ -120,7 +120,7 @@ export function listTopics(db: DatabaseSync): TopicRecord[] {
 export function saveTopic(db: DatabaseSync, input: Input): TopicRecord {
   const name = single(input.name, 'topic name', 120, true);
   const id = input.id === undefined ? randomUUID() : single(input.id, 'topic ID', 128, true);
-  const tag = single(input.tag ?? name, 'topic tag', 40) || name.slice(0, 40);
+  const tag = single(input.tag, 'topic tag', 40) || name.slice(0, 40).trim();
   const zoteroCollection = single(input.zoteroCollection, 'Zotero collection', 120);
   const description = stringValue(input.description, 'topic description', 1000, false, true).trim();
   const prev = db.prepare('SELECT createdAt, updatedAt FROM topics WHERE id=?').get(id);
@@ -135,6 +135,5 @@ export function saveTopic(db: DatabaseSync, input: Input): TopicRecord {
 
 export function deleteTopic(db: DatabaseSync, id: unknown): { id: string; deleted: boolean } {
   const topicId = single(id, 'topic ID', 128, true);
-  if (!topicId) throw new ServiceError(400, 'Topic ID is required.');
   return { id: topicId, deleted: Boolean(db.prepare('DELETE FROM topics WHERE id=?').run(topicId).changes) };
 }

@@ -7,7 +7,7 @@ import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/server/library.ts
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir as mkdir2, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2, rename as rename2 } from "node:fs/promises";
+import { mkdir as mkdir2, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync2, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path3 from "node:path";
@@ -844,7 +844,7 @@ async function extractDocumentPages(doc, pdfBytes) {
 function bad2(message, status = 400) {
   throw new ServiceError(status, message);
 }
-async function atomicWrite(file, content) {
+async function writeAtomic(file, content) {
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, content, { flag: "wx" });
   try {
@@ -861,7 +861,7 @@ function abstractDocId(input) {
   const key2 = doi ? "doi:" + doi : arxiv2 ? "arxiv:" + arxiv2 : "title:" + normTitle + "|" + (meta.year ?? "");
   return "abs-" + createHash("sha256").update(key2).digest("hex");
 }
-async function createAbstractRecord(dir, input) {
+async function createAbstractRecord(dir, input, withLock) {
   if (!isObject(input)) bad2("Invalid abstract record payload.");
   const rawTitle = typeof input.title === "string" && input.title.trim() ? input.title.trim() : typeof input.paperTitle === "string" ? input.paperTitle.trim() : "";
   const title = rawTitle.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250);
@@ -870,43 +870,36 @@ async function createAbstractRecord(dir, input) {
   const safeUrl2 = typeof input.url === "string" ? articleUrl(input.url)?.href : void 0;
   const id = abstractDocId({ title, ...safeUrl2 ? { url: safeUrl2 } : {}, ...cleanMeta });
   const file = path2.join(dir, id + ".json");
-  await mkdir(dir, { recursive: true });
-  if (existsSync(file)) {
-    const saved = JSON.parse(await readFile(file, "utf8"));
-    let changed = false;
-    if (!saved.url && safeUrl2) {
-      saved.url = safeUrl2;
-      changed = true;
+  return withLock(id, async () => {
+    await mkdir(dir, { recursive: true });
+    if (existsSync(file)) {
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      let changed = false;
+      if (!saved.url && safeUrl2) {
+        saved.url = safeUrl2;
+        changed = true;
+      }
+      for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
+        saved[k] = v;
+        changed = true;
+      }
+      if (changed) await writeAtomic(file, JSON.stringify(saved));
+      return { id };
     }
-    for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
-      saved[k] = v;
-      changed = true;
-    }
-    if (changed) await atomicWrite(file, JSON.stringify(saved));
-    const kind = saved.kind === "pdf" || saved.kind === "web" || saved.kind === "abstract" ? saved.kind : "abstract";
-    return {
+    const doc = {
       id,
-      kind,
-      title: typeof saved.title === "string" ? saved.title : title,
-      ...typeof saved.url === "string" ? { url: saved.url } : {},
-      ...sanitizeDocMeta(saved),
-      ...typeof saved.createdAt === "string" ? { createdAt: saved.createdAt } : {},
-      defaultPage: typeof saved.defaultPage === "number" ? saved.defaultPage : 1
+      kind: "abstract",
+      title,
+      ...safeUrl2 ? { url: safeUrl2 } : {},
+      ...cleanMeta,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      defaultPage: 1
     };
-  }
-  const doc = {
-    id,
-    kind: "abstract",
-    title,
-    ...safeUrl2 ? { url: safeUrl2 } : {},
-    ...cleanMeta,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    defaultPage: 1
-  };
-  await atomicWrite(file, JSON.stringify(doc));
-  return doc;
+    await writeAtomic(file, JSON.stringify(doc));
+    return { id };
+  });
 }
-async function attachPdfToRecord(dir, doc, bytes, limit) {
+async function attachPdfToRecord(dir, doc, bytes, limit, withLock) {
   if (doc.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
   if (!bytes.length || bytes.length > limit || !bytes.subarray(0, 1024).includes("%PDF-")) bad2("Choose a valid PDF of up to 80 MB.");
   let pages;
@@ -917,12 +910,19 @@ async function attachPdfToRecord(dir, doc, bytes, limit) {
   }
   if (!pages.length) bad2("The uploaded PDF has no readable pages.");
   const jsonFile = path2.join(dir, doc.id + ".json"), pdfFile = path2.join(dir, doc.id + ".pdf");
-  if (!existsSync(jsonFile)) bad2("This document has not been imported.", 404);
-  const saved = JSON.parse(await readFile(jsonFile, "utf8"));
-  await atomicWrite(pdfFile, bytes);
-  saved.kind = "pdf";
-  await atomicWrite(jsonFile, JSON.stringify(saved));
-  return { doc: { ...doc, kind: "pdf" }, pages };
+  await withLock(doc.id, async () => {
+    if (!existsSync(jsonFile)) bad2("This document has not been imported.", 404);
+    const saved = JSON.parse(await readFile(jsonFile, "utf8"));
+    if (saved.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
+    await writeAtomic(pdfFile, bytes);
+    if (!existsSync(jsonFile)) {
+      await rm(pdfFile, { force: true });
+      bad2("This document has not been imported.", 404);
+    }
+    saved.kind = "pdf";
+    await writeAtomic(jsonFile, JSON.stringify(saved));
+  });
+  return { pages };
 }
 
 // src/server/article-layout.ts
@@ -1217,15 +1217,6 @@ function isFsError(error, code) {
   return isRecord(error) && error.code === code;
 }
 var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
-async function writeAtomic(file, content) {
-  const tmp = `${file}.${process.pid}.${randomUUID2()}.tmp`;
-  await writeFile2(tmp, content, { flag: "wx" });
-  try {
-    await rename2(tmp, file);
-  } finally {
-    await rm2(tmp, { force: true });
-  }
-}
 async function writeOnce(file, bytes) {
   const temporary = file + "." + randomUUID2() + ".tmp";
   await writeFile2(temporary, bytes, { flag: "wx" });
@@ -1303,15 +1294,11 @@ var Library = class {
     const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
     return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
-  async mutateMeta(id, mutate) {
+  async withMetaLock(id, run) {
     const prev = this.metaJobs.get(id);
     const job = (async () => {
       if (prev) await prev.catch(() => void 0);
-      await this.get(id);
-      const file = path3.join(this.directory, id + ".json");
-      const saved = JSON.parse(await readFile2(file, "utf8"));
-      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
-      return this.get(id);
+      return run();
     })();
     this.metaJobs.set(id, job);
     try {
@@ -1319,6 +1306,15 @@ var Library = class {
     } finally {
       if (this.metaJobs.get(id) === job) this.metaJobs.delete(id);
     }
+  }
+  async mutateMeta(id, mutate) {
+    return this.withMetaLock(id, async () => {
+      await this.get(id);
+      const file = path3.join(this.directory, id + ".json");
+      const saved = JSON.parse(await readFile2(file, "utf8"));
+      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
+      return this.get(id);
+    });
   }
   async rename(id, title) {
     if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
@@ -1340,19 +1336,21 @@ var Library = class {
   async delete(id) {
     if (id === sample.id) fail("The bundled sample paper cannot be deleted.");
     if (!validDocId(id)) fail("Invalid document ID.", 404);
-    const file = path3.join(this.directory, id + ".json");
-    const existed = existsSync2(file);
-    await Promise.all([
-      rm2(file, { force: true }),
-      rm2(path3.join(this.directory, id + ".pdf"), { force: true }),
-      rm2(path3.join(this.directory, id + ".source-url"), { force: true }),
-      rm2(path3.join(this.directory, id + ".layout.json"), { force: true }),
-      rm2(path3.join(this.directory, "book-sections", id), { recursive: true, force: true }),
-      rm2(path3.join(this.translationDir, id), { recursive: true, force: true }),
-      rm2(path3.join(this.imageDir, id), { recursive: true, force: true })
-    ]);
-    this.onDelete?.(id);
-    return { id, deleted: existed };
+    return this.withMetaLock(id, async () => {
+      const file = path3.join(this.directory, id + ".json");
+      const existed = existsSync2(file);
+      await Promise.all([
+        rm2(file, { force: true }),
+        rm2(path3.join(this.directory, id + ".pdf"), { force: true }),
+        rm2(path3.join(this.directory, id + ".source-url"), { force: true }),
+        rm2(path3.join(this.directory, id + ".layout.json"), { force: true }),
+        rm2(path3.join(this.directory, "book-sections", id), { recursive: true, force: true }),
+        rm2(path3.join(this.translationDir, id), { recursive: true, force: true }),
+        rm2(path3.join(this.imageDir, id), { recursive: true, force: true })
+      ]);
+      this.onDelete?.(id);
+      return { id, deleted: existed };
+    });
   }
   bookJob(key2, start) {
     const pending = this.bookJobs.get(key2);
@@ -1501,13 +1499,13 @@ var Library = class {
     return doc;
   }
   async createAbstract(input) {
-    const doc = await createAbstractRecord(this.directory, input);
-    return this.get(doc.id);
+    const { id } = await createAbstractRecord(this.directory, input, (key2, run) => this.withMetaLock(key2, run));
+    return this.get(id);
   }
   async attachPdf(id, bytes) {
     const doc = await this.get(id);
-    const result = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT);
-    return { doc: await this.get(doc.id), pages: result.pages };
+    const { pages } = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT, (key2, run) => this.withMetaLock(key2, run));
+    return { doc: await this.get(doc.id), pages };
   }
   async bytes(id) {
     const doc = await this.get(id);
@@ -1637,7 +1635,7 @@ function buildFtsQuery(raw) {
       if (tokens?.length) clauses.push('"' + tokens.join(" ") + '"');
       return;
     }
-    for (const part of chunk.match(new RegExp("\\p{Script=Han}+|[\\p{L}\\p{N}]+", "gu")) ?? []) {
+    for (const part of chunk.match(new RegExp("\\p{Script=Han}+|(?:(?!\\p{Script=Han})[\\p{L}\\p{N}])+", "gu")) ?? []) {
       clauses.push('"' + (new RegExp("\\p{Script=Han}", "u").test(part) ? [...part].join(" ") : part) + '"');
     }
   };
@@ -1655,7 +1653,7 @@ function makeSnippet(text2, query) {
   const clean2 = text2.replace(/\s+/g, " ").trim();
   if (!clean2) return "";
   const lower = clean2.toLocaleLowerCase();
-  const terms = (query.match(new RegExp("\\p{Script=Han}+|[\\p{L}\\p{N}]{2,}", "gu")) ?? []).map((t) => t.toLocaleLowerCase()).sort((a, b) => b.length - a.length);
+  const terms = (query.match(new RegExp("\\p{Script=Han}+|(?:(?!\\p{Script=Han})[\\p{L}\\p{N}]){2,}", "gu")) ?? []).map((t) => t.toLocaleLowerCase()).sort((a, b) => b.length - a.length);
   for (const term of terms) {
     const idx = lower.indexOf(term);
     if (idx < 0) continue;
@@ -1716,7 +1714,7 @@ function listTopics(db) {
 function saveTopic(db, input) {
   const name2 = single(input.name, "topic name", 120, true);
   const id = input.id === void 0 ? randomUUID3() : single(input.id, "topic ID", 128, true);
-  const tag = single(input.tag ?? name2, "topic tag", 40) || name2.slice(0, 40);
+  const tag = single(input.tag, "topic tag", 40) || name2.slice(0, 40).trim();
   const zoteroCollection = single(input.zoteroCollection, "Zotero collection", 120);
   const description = stringValue(input.description, "topic description", 1e3, false, true).trim();
   const prev = db.prepare("SELECT createdAt, updatedAt FROM topics WHERE id=?").get(id);
@@ -1729,7 +1727,6 @@ function saveTopic(db, input) {
 }
 function deleteTopic(db, id) {
   const topicId = single(id, "topic ID", 128, true);
-  if (!topicId) throw new ServiceError(400, "Topic ID is required.");
   return { id: topicId, deleted: Boolean(db.prepare("DELETE FROM topics WHERE id=?").run(topicId).changes) };
 }
 

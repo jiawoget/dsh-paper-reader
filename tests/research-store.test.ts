@@ -58,13 +58,21 @@ test('abstract-only creation deduplicates by DOI, preserves docId/tags/notes acr
   assert.equal((await library.get(expectedId)).kind, 'abstract');
   assert.equal(existsSync(path.join(root, 'documents', expectedId + '.pdf')), false);
 
-  const attached = await library.attachPdf(expectedId, await readFile(samplePdfPath));
+  const pdfBytes = await readFile(samplePdfPath);
+  const race = await Promise.allSettled([library.attachPdf(expectedId, pdfBytes), library.attachPdf(expectedId, pdfBytes)]);
+  const fulfilled = race.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<Library['attachPdf']>>> => r.status === 'fulfilled');
+  const rejected = race.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0].reason instanceof Error && 'status' in rejected[0].reason && rejected[0].reason.status === 400);
+  const attached = fulfilled[0].value;
   store.withDb(true, db => replaceDocPages(db, attached.doc.id, attached.pages));
   assert.equal(attached.doc.id, expectedId);
   assert.equal(attached.doc.kind, 'pdf');
   assert.equal(attached.doc.doi, '10.1056/NEJMoa2032183');
   assert.equal(attached.pages.length, 16);
   assert.equal(existsSync(path.join(root, 'documents', expectedId + '.pdf')), true);
+  assert.equal((await act('library.createAbstract', { title: input.title, doi: input.doi })).doc.kind, 'pdf');
 
   const afterGet = await act('library.get', { id: expectedId });
   assert.equal(afterGet.doc.kind, 'pdf');
@@ -101,11 +109,14 @@ test('server-side PagedAttention extraction and bilingual FTS5 search handle EN,
 
   const web = await act('web.import', {
     url: 'https://example.org/zh-paged', title: '虚拟内存分页综述',
-    paragraphs: ['本文分析大语言模型推理中的虚拟内存分页与显存碎片优化。']
+    paragraphs: ['本文分析大语言模型推理中的虚拟内存分页、KV缓存、LLM推理与GLP1抑制剂优化。']
   });
   assert.equal((await extractDocumentPages(web.doc)).length, 1);
   assert.equal(segmentFtsText('虚拟内存分页'), '虚 拟 内 存 分 页');
-  assert.ok((await act('pages.search', { query: '分页' })).hits.some(h => h.docId === web.doc.id && h.page === 1));
+  assert.equal(buildFtsQuery('KV缓存'), '"KV" "缓 存"');
+  for (const query of ['分页', 'KV缓存', 'LLM推理', 'GLP1抑制剂']) {
+    assert.ok((await act('pages.search', { query })).hits.some(h => h.docId === web.doc.id && h.page === 1), query);
+  }
   assert.equal(buildFtsQuery('*** ??? ---'), '');
   assert.ok(Array.isArray(store.withDb(false, db => searchDocPagesFts(db, 'NOT (KV:cache) "unclosed * ^ GLP-1'))));
 });
@@ -126,6 +137,11 @@ test('topics CRUD supports list, create, update, and delete', async t => {
   assert.equal(updated.id, created.id);
   assert.equal(updated.createdAt, created.createdAt);
   assert.equal(store.withDb(false, listTopics).length, 1);
+  const longTopic: TopicRecord = (await act('topics.save', {
+    name: 'Large Language Model Serving and KV Cache Memory Management'
+  })).topic;
+  assert.equal(longTopic.tag, 'Large Language Model Serving and KV Cach');
+  await act('topics.delete', { id: longTopic.id });
   assert.deepEqual(await act('topics.delete', { id: created.id }), { id: created.id, deleted: true });
   assert.deepEqual(store.withDb(true, db => deleteTopic(db, created.id)), { id: created.id, deleted: false });
   assert.deepEqual((await act('topics.list', {})).topics, []);
