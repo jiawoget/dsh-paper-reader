@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { extractArxivId } from '../shared/citation-export.js';
 import type { WatchlistCheckResult, WatchlistEntry, WatchlistItem, WatchlistKind } from '../shared/deep-search-types.js';
 import type { DocumentInfo, GraphPaper, GraphSource } from '../shared/types.js';
 import { arrOf, attachLibraryMatch, cleanDoi, fetchJson, paperCanonKey, paperIdentityKeys, parseS2Paper, resolveAcademicPaper, S2_FIELDS, s2Headers, shortOaId, type GraphContext } from './academic-graph.js';
@@ -53,9 +54,9 @@ async function fetchWatchPapers(entry: WatchlistEntry, docs: DocumentInfo[], ctx
     for (const src of entry.sources) { attempted++; items.push(...await searchSourcePapers(src, entry.query, ctx, degraded, { since: entry.cursorDate, limit: 20, noCache: true, cacheKey: `wl:${src}:${entry.id}` })); }
     return { items, workId, attempted, selfKeys };
   }
-  const localDoc = entry.docId ? docs.find(d => d.id === entry.docId) : undefined, oaId0 = shortOaId(workId), docDoi = cleanDoi(localDoc?.doi), workDoi = workId && !oaId0 ? cleanDoi(workId) : undefined;
-  let oaId = oaId0, s2Key = workDoi?.startsWith('10.') ? 'DOI:' + workDoi : (workId && !oaId ? workId : (docDoi ? 'DOI:' + docDoi : ''));
-  for (const k of [oaId && 'oa:' + oaId, docDoi && 'doi:' + docDoi.toLowerCase(), workDoi && 'doi:' + workDoi.toLowerCase()]) if (k) selfKeys.add(k);
+  const localDoc = entry.docId ? docs.find(d => d.id === entry.docId) : undefined, oaId0 = shortOaId(workId), docDoi = cleanDoi(localDoc?.doi), workDoi = workId && !oaId0 ? cleanDoi(workId) : undefined, axId = workId && !oaId0 && !workDoi?.startsWith('10.') ? extractArxivId(workId) : undefined;
+  let oaId = oaId0, s2Key = workDoi?.startsWith('10.') ? 'DOI:' + workDoi : axId ? 'ARXIV:' + axId : (workId && !oaId ? workId : (docDoi ? 'DOI:' + docDoi : ''));
+  for (const k of [oaId && 'oa:' + oaId, docDoi && 'doi:' + docDoi.toLowerCase(), workDoi?.startsWith('10.') && 'doi:' + workDoi.toLowerCase(), axId && 'arxiv:' + axId.toLowerCase()]) if (k) selfKeys.add(k);
   if ((entry.sources.includes('openalex') && !oaId) || (entry.sources.includes('s2') && !s2Key)) {
     const resolved = await resolveAcademicPaper((!oaId && workId) || docDoi || localDoc?.url || localDoc?.paperTitle || localDoc?.title || entry.query, ctx);
     for (const d of resolved.degraded) degraded.add(d);
