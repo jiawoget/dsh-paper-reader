@@ -2,6 +2,8 @@ import type { ChatSource, DocumentInfo, NotebookSnapshot, OpenDocument, Operatio
 import type { AnnotationColor, PaperAnnotation } from '../shared/annotations.js';
 import type { SavedSelectionRange, TranslatedLocator } from '../shared/source-link.js';
 import type { DiscussionRef } from './discussion-drafts.js';
+import type { ResearchViewId } from './research/labels.js';
+import type { ResearchOpenContext } from './research/state.js';
 
 export interface ReaderPort {
   doc: DocumentInfo;
@@ -31,6 +33,7 @@ export interface ReaderPort {
   discussionChanged?(docId: string): void;
   exchangeDeleted?(thread: string, requestId: string): void;
   regionDiscussionClosed?(explicit: boolean): void;
+  openResearchWorkspace?(view?: ResearchViewId, ctx?: ResearchOpenContext): void;
   notebook?: NotebookSnapshot;
   notebookError?: string;
 }
