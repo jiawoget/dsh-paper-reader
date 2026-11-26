@@ -1,6 +1,7 @@
 import type { DocumentInfo, GraphDirection, GraphExploreResult, GraphNode, GraphPaper } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { CitationMapSvg, type AuthorLabelMode, type GraphViewMode } from './citation-map-svg.js';
+import { researchText, researchViewName } from './labels.js';
 import { formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
 import type { ResearchShellContext, ResearchViewModule } from './state.js';
 
@@ -53,7 +54,7 @@ export function createCitationMapView(): ResearchViewModule {
     if (sources.length) degradedEl.textContent = formatDegradedSources(sources);
   };
   const renderActionSlot = (slot: HTMLElement, node: GraphNode, inDetail: boolean) => renderPaperActions(slot, node, {
-    prefix: 'cm', busy: savingIds.has(node.id), openLabel: inDetail ? t('Open in Reader', '在精读中打开') : t('Open', '打开'),
+    prefix: 'cm', busy: savingIds.has(node.id), openLabel: inDetail ? t('Open in Reader', '在精读中打开') : researchText.open(),
     onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); },
     onSave: saveMode => { void savePaperInPlace(node, saveMode); }
   });
@@ -92,6 +93,7 @@ export function createCitationMapView(): ResearchViewModule {
     if (href) { const link = el('a', 'external cm-detail-link', node.doi ? `DOI: ${node.doi} ↗` : t('Open source link ↗', '打开原文链接 ↗')); link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer'; body.append(link); }
     const dirRow = el('div', 'cm-detail-dirs');
     for (const dir of DIRS) { const b = mkBtn('btn', DIR_TEXT[dir], () => { void explorePaper(node, dir, false); }); b.dataset.dir = dir; dirRow.append(b); }
+    dirRow.append(mkBtn('btn cm-to-cit', researchViewName('citations'), () => shell?.openView('citations', { docId: node.docId, doi: node.doi, arxivId: node.arxivId, query: node.title })));
     body.append(dirRow, el('p', 'cm-detail-abstract', node.abstract || t('No abstract available.', '暂无摘要。')));
     renderActionSlot(foot, node, true); detailEl.append(head, body, foot);
   };

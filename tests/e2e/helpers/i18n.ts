@@ -7,7 +7,8 @@ const ZH_ENGLISH_ALLOWLIST = new Set([
   'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
   'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
   'woosuk', 'et', 'al', 'key', 'value', 'kv',
-  'earlier', 'later', 'similar', 'openalex', 'semantic', 'scholar', 'ncbi', 'pubmed', 'europe', 'pmc', 'ytd'
+  'earlier', 'later', 'similar', 'openalex', 'semantic', 'scholar', 'ncbi', 'pubmed', 'europe', 'pmc', 'ytd',
+  'scite', 'introduction', 'methods', 'results', 'discussion'
 ]);
 
 const BANNED_EN_RE = /\b(?:Annotations|Paper conversation|Paper discussion|Reading notebook|Notebook)\b/i;

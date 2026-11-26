@@ -3,7 +3,7 @@ import type { ReadingPosition } from '../jump-history.js';
 import type { ResearchViewId } from './labels.js';
 
 export type ReturnAnchor = ReadingPosition;
-export interface ResearchOpenContext { docId?: string; topic?: string; filter?: string; query?: string; seedDocId?: string }
+export interface ResearchOpenContext { docId?: string; doi?: string; arxivId?: string; stance?: string; direction?: string; topic?: string; filter?: string; query?: string; seedDocId?: string }
 export interface InspectTarget { docId: string; page: number; anchor?: string; quote?: string; openNotes?: boolean }
 export interface WorkspaceSnapshot { activeView: ResearchViewId; viewState?: unknown; scrollTop: number }
 

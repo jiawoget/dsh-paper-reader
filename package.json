@@ -80,6 +80,7 @@
     "test:tier3-cross-feature": "tsx tests/e2e/tier3-cross-feature.ts",
     "test:tier4-real-world": "tsx tests/e2e/tier4-real-world.ts",
     "test:research-workspace": "tsx tests/e2e/research-workspace.ts",
+    "test:research-citations": "tsx tests/e2e/research-citations.ts",
     "test:e2e": "tsx scripts/run-e2e.ts",
     "start": "dsh web --patch ./paper-reader.patch.yml --host 127.0.0.1 --port 29812"
   },

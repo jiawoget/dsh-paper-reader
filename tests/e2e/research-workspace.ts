@@ -54,15 +54,17 @@ async function run(): Promise<void> {
       await page.keyboard.press('Control+Shift+R'); await ws.waitFor({ state: 'hidden' });
       await page.locator('#library').click(); await page.locator('.library-workspace-btn').click();
       await ws.waitFor({ state: 'visible' }); assert.equal(await page.locator('#dialog').isVisible(), false);
+      await page.route('**/api/paper-reader/action', async route => {
+        const body = route.request().postDataJSON() as { op?: string };
+        if (body.op === 'citations.analyze') {
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ target: { targetKey: 'arxiv:2309.06180', docId: 'pagedattention', title: 'PagedAttention', authors: ['Woosuk Kwon'], year: 2023, arxivId: '2309.06180', sciteUrl: 'https://scite.ai/search?q=PagedAttention' }, direction: 'cited_by', tallies: { citingPapers: 1, citationStatements: 1, supporting: 1, extending: 0, contrasting: 0, mentioning: 0, unclassified: 0, localBackCitations: 1 }, statements: [{ targetKey: 'arxiv:2309.06180', direction: 'cited_by', citingKey: 'local:pagedattention:p6', docId: 'pagedattention', source: 'local', citingDocId: 'pagedattention', citingPage: 6, citingTitle: 'PagedAttention Block Table Evaluation', citingAuthors: ['Woosuk Kwon'], citingYear: 2024, section: 'Methods', context: 'PagedAttention organizes KV cache via block table mapping.', stance: 'supporting', rationale: 'Confirms block table layout.', isInfluential: false, isSelfCitation: false, manualOverride: false, updatedAt: '2026-01-01T00:00:00Z' }], sciteUrl: 'https://scite.ai/search?q=PagedAttention', degraded: [], fromCache: false, offline: true }) });
+          return;
+        }
+        await route.fallback();
+      });
       await ws.locator('.rw-nav-btn[data-view="citations"]').click();
-      await ws.locator('.rw-topic-add-btn').click(); await ws.locator('.rw-topic-input').fill('KV Cache');
-      await ws.locator('.rw-topic-form button[type="submit"]').click();
-      await page.waitForFunction(() => (document.getElementById('rwTopicSelect') as HTMLSelectElement | null)?.value === 'KV Cache');
-      await ws.locator('#rwTopicSelect').selectOption('');
-
-      await ws.locator('.rw-search-input').fill('block table');
-      await ws.locator('.rw-search-form button[type="submit"]').click();
-      const hit6 = ws.locator('.rw-hit', { hasText: 'p. 6' }).first();
+      await ws.locator('.cit-search-input').fill('block table');
+      const hit6 = ws.locator('.cit-jump-btn', { hasText: 'p. 6' }).first();
       await hit6.waitFor({ state: 'visible', timeout: 15_000 });
       await hit6.click();
       await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
@@ -75,8 +77,8 @@ async function run(): Promise<void> {
       await page.waitForFunction(() => document.getElementById('pageCount')?.textContent?.trim() === '6 / 16');
       await page.locator('.return-workspace-go').click();
       await ws.waitFor({ state: 'visible' });
-      assert.equal(await ws.locator('.rw-search-input').inputValue(), 'block table');
-      assert.ok((await ws.locator('.rw-hit').count()) >= 1);
+      assert.equal(await ws.locator('.cit-search-input').inputValue(), 'block table');
+      assert.ok((await ws.locator('.cit-card').count()) >= 1);
       await hit6.click();
       await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
       await page.locator('.return-workspace-close').click();
@@ -89,8 +91,7 @@ async function run(): Promise<void> {
       assert.ok(mob.barH <= 56 && mob.barH / 844 <= 0.18 && mob.ov <= 1, JSON.stringify(mob));
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.rw-mobile-select').selectOption('citations');
-      assert.equal((await ws.locator('.rw-view-title').innerText()).trim(), 'Citations');
-      await ws.locator('.rw-hit', { hasText: 'p. 6' }).first().click();
+      await ws.locator('.cit-jump-btn', { hasText: 'p. 6' }).first().click();
       await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
       const pillFit = await page.evaluate(() => {
         const go = document.querySelector('.return-workspace-go')!, pill = document.getElementById('returnWorkspace')!, bar = document.getElementById('mobileBar')!;
@@ -100,6 +101,7 @@ async function run(): Promise<void> {
       await page.locator('.return-workspace-go').click(); await ws.waitFor({ state: 'visible' });
       await ws.locator('.rw-mobile-collapse').click(); await ws.waitFor({ state: 'hidden' });
       await assertMobileChromeBudget(page, 844);
+      await page.unroute('**/api/paper-reader/action');
 
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.locator('#more').click();
@@ -473,7 +475,7 @@ async function run(): Promise<void> {
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Deep Search & Watchlist', ['clarify', 'watchlist']);
       await zhPage.keyboard.press('Escape'); await zhPage.locator('.wl-drawer').waitFor({ state: 'hidden' });
       await zhPage.locator('.rw-nav-btn[data-view="citations"]').click();
-      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '#rwTopicSelect option:not([value=""])'), 'zh-CN Research Workspace');
+      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cit-title, .cit-byline, .cit-doc-select, .cit-card-title, .cit-meta-text, .cit-ctx-text, .cit-rationale'), 'zh-CN Citations');
       await zhPage.locator('.rw-nav-btn[data-view="citation-map"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select'), 'zh-CN Citation Map');
       await zhPage.locator('.rw-nav-btn[data-view="field-trends"]').click();
