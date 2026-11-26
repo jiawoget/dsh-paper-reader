@@ -27,8 +27,9 @@ export function computeCitationMapLayout(
 ): PositionedGraphNode[] {
   if (!nodes.length) return [];
   const safeW = Math.max(160, Number.isFinite(width) ? width : 800), safeH = Math.max(160, Number.isFinite(height) ? height : 500);
-  const pad = Math.min(44, Math.max(24, Math.min(safeW, safeH) * 0.08));
-  const minX = pad, maxX = Math.max(minX + 1, safeW - pad), minY = pad, maxY = Math.max(minY + 1, safeH - pad);
+  const padX = mode === 'timeline' ? Math.min(72, Math.max(48, safeW * 0.09)) : Math.min(68, Math.max(36, safeW * 0.085));
+  const padY = Math.min(44, Math.max(24, safeH * 0.08));
+  const minX = padX, maxX = Math.max(minX + 1, safeW - padX), minY = padY, maxY = Math.max(minY + 1, safeH - padY);
   const spanX = maxX - minX, spanY = maxY - minY, cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const scale = Math.min(1, Math.max(5, Math.min(14, Math.sqrt((spanX * spanY) / (nodes.length * 14)))) / 14);
   const gap = Math.max(2, Math.round(4 * scale));
@@ -62,32 +63,37 @@ export function computeCitationMapLayout(
     });
     others.forEach((idx, rank) => {
       const frac = Math.sqrt((rank + 1) / (others.length + 1)), a = rank * 2.399963229728653;
-      items[idx].x = clamp(cx + Math.cos(a) * (spanX * 0.44 * frac), minX, maxX);
-      items[idx].y = clamp(cy + Math.sin(a) * (spanY * 0.44 * frac), minY, maxY);
+      items[idx].x = clamp(cx + Math.cos(a) * (spanX * 0.48 * frac), minX, maxX);
+      items[idx].y = clamp(cy + Math.sin(a) * (spanY * 0.46 * frac), minY, maxY);
     });
   }
 
   const edgePairs = edges.map(e => [idIndex.get(e.source), idIndex.get(e.target)] as const)
     .filter((p): p is readonly [number, number] => p[0] !== undefined && p[1] !== undefined && p[0] !== p[1]);
-  const idealEdge = Math.min(spanX, spanY) * 0.22;
+  const cell = Math.sqrt((spanX * spanY) / Math.max(1, items.length)), idealEdge = Math.hypot(spanX, spanY) * 0.34;
+  const sepX = Math.min(88, Math.max(34, cell * 1.1)), sepY = Math.min(46, Math.max(22, cell * 0.58));
   for (let step = 0, total = mode === 'network' ? 90 : 70; step < total; step++) {
-    if (mode === 'network' && step < 45) {
+    if (mode === 'network' && step < 40) {
       for (const [ai, bi] of edgePairs) {
         const a = items[ai], b = items[bi], dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy) || 1;
-        const pull = ((dist - idealEdge) / dist) * 0.04;
+        const pull = ((dist - idealEdge) / dist) * 0.008;
         a.x += dx * pull; a.y += dy * pull; b.x -= dx * pull; b.y -= dy * pull;
       }
-      for (const item of items) { item.x += (cx - item.x) * 0.015; item.y += (cy - item.y) * 0.015; }
     } else if (mode === 'timeline' && step < 40) for (const item of items) item.x += (item.tx - item.x) * 0.14;
+    const labelPass = mode === 'network' && step < 65;
     for (let i = 0; i < items.length; i++) {
       for (let j = i + 1; j < items.length; j++) {
         const a = items[i], b = items[j];
         let dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
-        const minDist = a.r + b.r + gap;
-        if (dist >= minDist) continue;
         if (dist < 0.001) { const ang = ((i * 31 + j * 17) % 360) * (Math.PI / 180); dx = Math.cos(ang); dy = Math.sin(ang); dist = 1; }
-        const push = (minDist - dist) * 0.52, ux = dx / dist, uy = dy / dist, xw = mode === 'timeline' ? 0.45 : 1;
-        a.x -= ux * push * xw; a.y -= uy * push; b.x += ux * push * xw; b.y += uy * push;
+        const minDist = a.r + b.r + gap;
+        if (dist < minDist) {
+          const push = (minDist - dist) * 0.52, ux = dx / dist, uy = dy / dist, xw = mode === 'timeline' ? 0.45 : 1;
+          a.x -= ux * push * xw; a.y -= uy * push; b.x += ux * push * xw; b.y += uy * push;
+        } else if (labelPass) {
+          const nd = Math.hypot(dx / sepX, dy / sepY);
+          if (nd < 1) { const f = (1 - nd) * 0.22; a.x -= dx * f; a.y -= dy * f; b.x += dx * f; b.y += dy * f; }
+        }
       }
     }
     for (const item of items) {

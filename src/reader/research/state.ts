@@ -16,7 +16,7 @@ export interface ResearchShellContext {
 export interface ResearchViewModule {
   id: ResearchViewId; mount(host: HTMLElement, ctx: ResearchShellContext): void | Promise<void>;
   unmount?(): void; saveState?(): unknown; restoreState?(state: unknown): void;
-  handleEscape?(): boolean; onDocumentMutated?(docId: string): void;
+  handleEscape?(): boolean; onDocumentMutated?(docId: string, deleted?: boolean): void;
 }
 
 export interface ResearchWorkspaceHost {

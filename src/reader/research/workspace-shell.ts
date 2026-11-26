@@ -65,7 +65,7 @@ export class ResearchWorkspace {
   isOpen(): boolean { return this.opened; }
   notifyDocumentMutated(docId: string, deleted = false): void {
     if (deleted && this.returnAnchor?.doc === docId) this.returnAnchor = undefined;
-    this.activeModule?.onDocumentMutated?.(docId);
+    this.activeModule?.onDocumentMutated?.(docId, deleted);
   }
   open(view?: ResearchViewId, ctx?: ResearchOpenContext): void {
     if (!this.opened && !view && !ctx && this.snapshot) { this.resumeFromPill(); return; }

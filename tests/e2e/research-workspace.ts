@@ -143,8 +143,11 @@ async function run(): Promise<void> {
       await ws.locator('.cm-node[data-node-id="W2"]').waitFor({ state: 'visible' });
       assert.equal(await ws.locator('.cm-node[data-node-id="W1"]').getAttribute('data-kind'), 'library');
       assert.equal(await ws.locator('.cm-node[data-node-id="W2"]').getAttribute('data-kind'), 'discovery');
+      assert.ok((await ws.locator('.cm-row[data-node-id="W2"] .cm-row-title').boundingBox())!.height >= 24);
+      const baseW2Fill = await ws.locator('.cm-node[data-node-id="W2"] .cm-node-circle').evaluate(el => getComputedStyle(el).fill);
       await ws.locator('.cm-row[data-node-id="W2"]').hover();
-      assert.ok((await ws.locator('.cm-node[data-node-id="W2"]').getAttribute('class'))?.includes('is-highlighted'));
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.cm-node[data-node-id="W2"] .cm-node-circle')!).fill === 'rgb(217, 154, 0)');
+      assert.notEqual(baseW2Fill, 'rgb(217, 154, 0)');
       await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Timeline', exact: true }).click();
       assert.ok((await ws.locator('.cm-axis-label').count()) >= 2);
       await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Last Author', exact: true }).click();
@@ -158,9 +161,21 @@ async function run(): Promise<void> {
       await ws.locator('.cm-detail').waitFor({ state: 'visible' });
       const widths = await ws.evaluate(() => ({ total: document.querySelector('.cm-split')!.getBoundingClientRect().width, graph: document.querySelector('.cm-graph-pane')!.getBoundingClientRect().width }));
       assert.ok(widths.graph / widths.total >= 0.55, JSON.stringify(widths));
-      await ws.locator('.cm-detail-dirs button[data-dir="later"]').click();
+      for (const [idx, dir] of (['later', 'earlier', 'later'] as const).entries()) {
+        if (!(await ws.locator('.cm-detail').isVisible())) await ws.locator('.cm-row-title').first().click();
+        await ws.locator(`.cm-detail-dirs button[data-dir="${dir}"]`).click();
+        await ws.locator(`.cm-crumb[data-step="${idx + 1}"]`).waitFor({ state: 'visible' });
+      }
       await ws.locator('.cm-degraded').waitFor({ state: 'visible' });
-      assert.equal(await ws.locator('.cm-crumb').count(), 2);
+      assert.equal(await ws.locator('.cm-crumb').count(), 4);
+      await page.setViewportSize({ width: 1024, height: 768 });
+      const d1024 = await ws.evaluate(() => ({ ov: document.documentElement.scrollWidth - innerWidth, mOv: document.querySelector('.rw-main')!.scrollWidth - document.querySelector('.rw-main')!.clientWidth, sw: document.querySelector('.cm-split')!.getBoundingClientRect().width, mw: document.querySelector('.rw-main')!.clientWidth }));
+      assert.ok(d1024.ov <= 1 && d1024.mOv <= 1 && d1024.sw <= d1024.mw + 1, JSON.stringify(d1024));
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(80);
+      const m4 = await ws.evaluate(() => ({ ov: document.documentElement.scrollWidth - innerWidth, mOv: document.querySelector('.rw-main')!.scrollWidth - document.querySelector('.rw-main')!.clientWidth, sw: document.querySelector('.cm-split')!.getBoundingClientRect().width }));
+      assert.ok(m4.ov <= 1 && m4.mOv <= 1 && m4.sw <= 391, JSON.stringify(m4));
+      await page.setViewportSize({ width: 1440, height: 900 });
       await ws.locator('.cm-crumb[data-step="0"]').click();
       assert.equal(await ws.locator('.cm-crumb').count(), 1);
       await ws.locator('.cm-detail .cm-open-btn').click();
@@ -174,8 +189,12 @@ async function run(): Promise<void> {
       await ws.locator('.cm-detail').waitFor({ state: 'hidden' });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForTimeout(100);
+      const listTop = await ws.locator('.cm-list').evaluate(el => el.getBoundingClientRect().top);
+      assert.ok(listTop <= 152, `Mobile top chrome above .cm-list ${listTop}px > 152px`);
       await ws.locator('.cm-mobile-tabs').getByRole('button', { name: 'Graph', exact: true }).click();
       assert.equal(await ws.locator('.cm-split').getAttribute('data-mobile-pane'), 'graph');
+      const svgTop = await ws.locator('.cm-svg').evaluate(el => el.getBoundingClientRect().top);
+      assert.ok(svgTop <= 152, `Mobile top chrome above .cm-svg ${svgTop}px > 152px`);
       await ws.locator('.cm-mobile-tabs').getByRole('button', { name: 'List', exact: true }).click();
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await page.unroute('**/api/paper-reader/action');
@@ -192,7 +211,7 @@ async function run(): Promise<void> {
       assert.ok(await zhPage.locator('.rw-collapse-btn .rw-label').evaluate(el => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth));
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '#rwTopicSelect option:not([value=""])'), 'zh-CN Research Workspace');
       await zhPage.locator('.rw-nav-btn[data-view="citation-map"]').click();
-      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select option'), 'zh-CN Citation Map');
+      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select'), 'zh-CN Citation Map');
       await zhCtx.close();
       assert.deepEqual(pageErrors, []); assert.deepEqual(consoleErrors, []);
     } finally { await browser.close(); }
