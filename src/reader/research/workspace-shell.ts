@@ -143,7 +143,7 @@ export class ResearchWorkspace {
       const ctx: ResearchShellContext = {
         activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
         openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
-        inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted)
+        inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted), refreshNotebook: docId => this.host.refreshNotebook?.(docId)
       };
       void Promise.resolve(mod.mount(this.main, ctx)).then(() => {
         if (seq !== this.viewSeq) return;

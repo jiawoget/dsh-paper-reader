@@ -305,6 +305,15 @@ async function run(): Promise<void> {
       await ws.locator('.lc-save-note').first().click(); await ws.locator('.lc-save-note[data-saved="true"]').waitFor({ state: 'visible' });
       await page.locator('#toast').getByRole('button', { name: 'Undo', exact: true }).click();
       await ws.locator('.lc-save-note:not([data-saved="true"])').waitFor({ state: 'visible' });
+      await ws.locator('.lc-save-note').first().click(); await ws.locator('.lc-save-note[data-saved="true"]').waitFor({ state: 'visible' });
+      await page.locator('#toast').getByRole('button', { name: 'View', exact: true }).click(); await page.locator('#notesTab[aria-selected="true"]').waitFor({ state: 'visible' });
+      await page.waitForFunction(() => (document.getElementById('railBody')?.textContent ?? '').includes('PagedAttention partitions KV cache'));
+      await page.locator('.return-workspace-go').click(); await ws.locator('.lc-cite').first().waitFor({ state: 'visible' });
+      await page.setViewportSize({ width: 1024, height: 768 }); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
+      await ws.locator('.lc-scope-toggle').click(); await ws.locator('.lc-scope-pane').waitFor({ state: 'visible' });
+      const s1024 = await ws.locator('.lc-scope-pane').evaluate(el => { const r = el.getBoundingClientRect(); return { w: r.width, l: r.left, r: r.right }; });
+      assert.ok(s1024.w >= 280 && s1024.l >= 52 && s1024.r <= 1024, JSON.stringify(s1024));
+      await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
 
       await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
       const lcMob = await ws.evaluate(() => ({ top: document.querySelector('.lc-log')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth }));

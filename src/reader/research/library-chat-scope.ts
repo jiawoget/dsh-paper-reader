@@ -47,9 +47,7 @@ export class LibraryChatScope {
   private selected = new Set<string>();
   private collapsedSections = new Set<string>();
   private collapsedGroups = new Set<string>();
-  private initialized = false;
-  private filter = '';
-  private open = innerWidth > 1080;
+  private initialized = false; private filter = ''; private open = innerWidth > 1080; private restoredScroll?: number;
   private groupRefs: { ids: string[]; input: HTMLInputElement; count: HTMLElement }[] = [];
   private docInputs = new Map<string, HTMLInputElement[]>();
 
@@ -85,7 +83,7 @@ export class LibraryChatScope {
       const scoped = initTopic ? docs.filter(d => d.meta?.tags?.includes(initTopic)) : [];
       for (const d of (scoped.length ? scoped : docs)) this.selected.add(d.id);
     } else for (const id of [...this.selected]) if (!valid.has(id)) this.selected.delete(id);
-    this.render(); this.opts.onChange();
+    this.render(); this.flushScroll(); this.opts.onChange();
   }
 
   removeDoc(docId: string): void { this.docs = this.docs.filter(d => d.id !== docId); this.selected.delete(docId); this.render(); this.opts.onChange(); }
@@ -98,8 +96,10 @@ export class LibraryChatScope {
     this.initialized = true; this.selected = new Set(s.selectedIds ?? []); this.filter = s.filter ?? '';
     this.search.value = this.filter; this.open = Boolean(s.open);
     this.collapsedSections = new Set(s.collapsedSections ?? []); this.collapsedGroups = new Set(s.collapsedGroups ?? []);
-    this.syncVisibility(); this.render(); this.body.scrollTop = s.scrollTop ?? 0;
+    this.restoredScroll = s.scrollTop ?? 0; this.syncVisibility(); this.render(); this.flushScroll();
   }
+
+  private flushScroll(): void { if (this.restoredScroll !== undefined && this.docs.length) { this.body.scrollTop = this.restoredScroll; this.restoredScroll = undefined; } }
 
   private filteredDocs(): DocumentInfo[] {
     const q = this.filter.trim().toLowerCase();

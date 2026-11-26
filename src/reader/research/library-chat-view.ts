@@ -107,14 +107,16 @@ export function createLibraryChatView(): ResearchViewModule {
     sendStop?.sync(pending, canSubmit());
   };
 
-  const undoNote = async (turn: ChatTurn) => {
-    const saved = turn.savedNote; if (!saved || savingTurns.has(turn.id)) return;
-    savingTurns.add(turn.id); renderLog();
-    try { await api('note.delete', { id: saved.noteId, expectedUpdatedAt: saved.updatedAt }); turn.savedNote = undefined; toast(t('Removed saved note.', '已撤销存入笔记。')); }
-    catch (err) { toast(message(err)); }
-    finally { savingTurns.delete(turn.id); if (mounted) renderLog(); }
+  const dropSavedNotes = (drop: (docId: string) => boolean) => {
+    const stale = turns.filter(x => x.savedNote && drop(x.savedNote.docId));
+    if (stale.length) { for (const x of stale) x.savedNote = undefined; if (mounted) renderLog(); }
   };
-
+  const undoNote = async (turn: ChatTurn) => {
+    const live = turns.find(x => x.id === turn.id), saved = (live ?? turn).savedNote; if (!saved || savingTurns.has(turn.id)) return;
+    savingTurns.add(turn.id); renderLog();
+    try { await api('note.delete', { id: saved.noteId, expectedUpdatedAt: saved.updatedAt }); turn.savedNote = undefined; if (live) live.savedNote = undefined; shell?.refreshNotebook?.(saved.docId); toast(t('Removed saved note.', '已撤销存入笔记。')); }
+    catch (err) { toast(message(err)); } finally { savingTurns.delete(turn.id); if (mounted) renderLog(); }
+  };
   const saveToNotes = async (turn: ChatTurn) => {
     if (savingTurns.has(turn.id) || turn.savedNote) return;
     const byId = new Map((scope?.getAllDocs() ?? []).map(d => [d.id, d])), firstCite = turn.citations.find(c => byId.has(c.docId));
@@ -123,10 +125,9 @@ export function createLibraryChatView(): ResearchViewModule {
     const page = firstCite?.page ?? 1; savingTurns.add(turn.id); renderLog();
     try {
       const { note } = await api('note.save', { docId: target.id, title: target.paperTitle || target.title, page, anchor: '', label: t('Library Chat', '文献库对话'), sourceUrl: sourceUrl(target.id, page), quote: turn.question.slice(0, 220), text: turn.answer });
-      turn.savedNote = { noteId: note.id, updatedAt: note.updatedAt, docId: target.id, page };
-      toast(t('Saved to Notes.', '已存入笔记。'), [{ label: t('View', '查看'), run: () => shell?.inspectInReader({ docId: target.id, page }) }, { label: undoLabel(), run: () => undoNote(turn) }]);
-    } catch (err) { toast(message(err)); }
-    finally { savingTurns.delete(turn.id); if (mounted) renderLog(); }
+      turn.savedNote = { noteId: note.id, updatedAt: note.updatedAt, docId: target.id, page }; shell?.refreshNotebook?.(target.id);
+      toast(t('Saved to Notes.', '已存入笔记。'), [{ label: t('View', '查看'), run: () => shell?.inspectInReader({ docId: target.id, page, openNotes: true }) }, { label: undoLabel(), run: () => undoNote(turn) }]);
+    } catch (err) { toast(message(err)); } finally { savingTurns.delete(turn.id); if (mounted) renderLog(); }
   };
 
   const renderTurn = (turn: ChatTurn): DocumentFragment => {
@@ -197,7 +198,7 @@ export function createLibraryChatView(): ResearchViewModule {
 
   const loadLibrary = async (initTopic?: string) => {
     const seq = ++loadSeq;
-    try { const { docs } = await api('library.list', {}); if (mounted && seq === loadSeq) scope?.setDocs(docs, initTopic); }
+    try { const { docs } = await api('library.list', {}); if (mounted && seq === loadSeq) { const valid = new Set(docs.map(d => d.id)); scope?.setDocs(docs, initTopic); dropSavedNotes(id => !valid.has(id)); } }
     catch (err) { if (mounted && seq === loadSeq) toast(message(err)); }
   };
 
@@ -214,8 +215,7 @@ export function createLibraryChatView(): ResearchViewModule {
       capBannerEl = el('div', 'lc-cap-banner'); capBannerEl.setAttribute('role', 'status'); capBannerEl.hidden = true;
       errorBannerEl = el('div', 'lc-error-banner'); errorBannerEl.setAttribute('role', 'alert'); errorBannerEl.hidden = true;
       logEl = el('div', 'lc-log'); logEl.setAttribute('role', 'log'); logEl.setAttribute('aria-live', 'polite'); logEl.tabIndex = 0;
-      streamSlot = createStreamSlot(logEl, () => 0); popoverEl = el('div', 'lc-popover'); popoverEl.setAttribute('role', 'tooltip'); popoverEl.hidden = true;
-      popoverEl.addEventListener('mouseenter', cancelHide); popoverEl.addEventListener('mouseleave', scheduleHide); logEl.addEventListener('scroll', hidePopover, { passive: true });
+      streamSlot = createStreamSlot(logEl, () => 0); popoverEl = el('div', 'lc-popover'); popoverEl.setAttribute('role', 'tooltip'); popoverEl.hidden = true; logEl.addEventListener('scroll', hidePopover, { passive: true });
       const citeOf = (tEl: EventTarget | null) => tEl instanceof Element ? tEl.closest<HTMLButtonElement>('.lc-cite') : null;
       for (const ev of ['mouseover', 'focusin'] as const) logEl.addEventListener(ev, e => { const b = citeOf(e.target); if (b) showPopover(b); });
       for (const ev of ['mouseout', 'focusout'] as const) logEl.addEventListener(ev, e => { if (citeOf(e.target)) scheduleHide(); });
@@ -252,6 +252,6 @@ export function createLibraryChatView(): ResearchViewModule {
       if (scope?.isOpen() && innerWidth <= 1080) { scope.setOpen(false); syncHeader(); scopeToggleBtn?.focus({ preventScroll: true }); return true; }
       return false;
     },
-    onDocumentMutated(docId, deleted) { if (deleted) scope?.removeDoc(docId); if (mounted) void loadLibrary(); }
+    onDocumentMutated(docId, deleted) { if (deleted) { scope?.removeDoc(docId); dropSavedNotes(id => id === docId); } if (mounted) void loadLibrary(); }
   };
 }

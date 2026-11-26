@@ -305,7 +305,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
 .lc-save-note.is-saved { background: var(--success-bg); color: var(--success); border-color: var(--success); opacity: 1; }
 .lc-popover {
   position: fixed; z-index: 32; width: min(360px, calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--line);
-  border-radius: 10px; background: var(--surface-popover); box-shadow: var(--shadow-popover); display: grid; gap: 6px;
+  border-radius: 10px; background: var(--surface-popover); box-shadow: var(--shadow-popover); display: grid; gap: 6px; pointer-events: none;
 }
 .lc-pop-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; } .lc-pop-title { font-size: 13px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
 .lc-pop-page { flex: none; padding: 2px 7px; border-radius: 999px; background: var(--lavender); color: var(--purple); font-size: 12px; font-weight: 600; white-space: nowrap; }
@@ -346,7 +346,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
 @media (max-width: 1080px) {
   .lc-view[data-scope-open="true"] { grid-template-columns: minmax(0, 1fr); }
   .lc-scope-backdrop:not([hidden]) { display: block; position: absolute; inset: 0; z-index: 12; background: var(--backdrop); }
-  .lc-scope-pane { position: absolute; inset: 0 0 0 auto; width: 300px; max-width: calc(100% - 24px); z-index: 14; box-shadow: var(--shadow-dialog); }
+  .lc-scope-pane { position: absolute; grid-column: auto; grid-row: auto; inset: 0 0 0 auto; width: 300px; max-width: calc(100% - 24px); z-index: 14; box-shadow: var(--shadow-dialog); }
 }
 @media (max-width: 1220px) {
   .ft-split[data-drill-open="true"] { grid-template-columns: minmax(0, 1fr) 340px; }
