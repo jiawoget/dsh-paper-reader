@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
+import { VALID_CITATION_SECTIONS, VALID_CITATION_STANCES, type CitationDirection, type CitationSection, type CitationSource, type CitationStance, type CitationStatement } from '../shared/citation-stance-types.js';
 import type { WatchlistEntry, WatchlistItem, WatchlistKind } from '../shared/deep-search-types.js';
 import type { PaperCard } from '../shared/research-types.js';
 import type { DocPageRecord, GraphSource, TopicRecord } from '../shared/types.js';
@@ -9,8 +10,8 @@ type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
 
 export function hasResearchSchema(db: DatabaseSync): boolean {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist')").get();
-  return Number(row?.n ?? 0) === 8;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist','citation_stances')").get();
+  return Number(row?.n ?? 0) === 9;
 }
 
 export function ensureResearchSchema(db: DatabaseSync): void {
@@ -22,6 +23,7 @@ export function ensureResearchSchema(db: DatabaseSync): void {
   db.exec('CREATE TABLE IF NOT EXISTS extraction_tables(id TEXT PRIMARY KEY, name TEXT NOT NULL, preset TEXT NOT NULL, criteria_json TEXT NOT NULL, columns_json TEXT NOT NULL, strict_criterion INTEGER NOT NULL DEFAULT 0, threshold REAL NOT NULL DEFAULT 0.6, updated_at INTEGER NOT NULL) STRICT');
   db.exec("CREATE TABLE IF NOT EXISTS extraction_cells(table_id TEXT NOT NULL, doc_id TEXT NOT NULL, col_id TEXT NOT NULL, value TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', page INTEGER, reasoning TEXT NOT NULL DEFAULT '', verified INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, source_kind TEXT NOT NULL DEFAULT 'pdf', status TEXT NOT NULL DEFAULT 'done', updated_at INTEGER NOT NULL, PRIMARY KEY(table_id, doc_id, col_id)) STRICT");
   db.exec(`CREATE TABLE IF NOT EXISTS watchlist(id TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, query TEXT NOT NULL, doc_id TEXT, work_id TEXT, sources_json TEXT NOT NULL DEFAULT '["openalex","europepmc","arxiv"]', cursor_date TEXT NOT NULL, seen_keys_json TEXT NOT NULL DEFAULT '[]', unread_json TEXT NOT NULL DEFAULT '[]', last_checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT`);
+  db.exec('CREATE TABLE IF NOT EXISTS citation_stances(target_key TEXT NOT NULL, direction TEXT NOT NULL, citing_key TEXT NOT NULL, doc_id TEXT, source TEXT NOT NULL, citing_doc_id TEXT, citing_page INTEGER, citing_title TEXT NOT NULL, citing_authors_json TEXT NOT NULL, citing_year INTEGER, citing_doi TEXT, citing_arxiv TEXT, citing_url TEXT, section TEXT NOT NULL, context TEXT NOT NULL, stance TEXT NOT NULL, rationale TEXT NOT NULL, is_influential INTEGER NOT NULL DEFAULT 0, is_self_citation INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(target_key, direction, citing_key)) STRICT');
 }
 
 export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
@@ -30,6 +32,7 @@ export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
   db.prepare('DELETE FROM paper_cards WHERE doc_id=?').run(docId);
   db.prepare('DELETE FROM extraction_cells WHERE doc_id=?').run(docId);
   db.prepare('DELETE FROM watchlist WHERE doc_id=?').run(docId);
+  db.prepare('DELETE FROM citation_stances WHERE doc_id=? OR citing_doc_id=?').run(docId, docId);
 }
 
 export function segmentFtsText(text: string): string {
@@ -224,4 +227,46 @@ export function upsertWatchlistEntry(db: DatabaseSync, e: WatchlistEntry): Watch
 export function deleteWatchlistEntry(db: DatabaseSync, id: string): { id: string; deleted: boolean } {
   const watchId = single(id, 'watchlist ID', 128, true);
   return { id: watchId, deleted: Boolean(db.prepare('DELETE FROM watchlist WHERE id=?').run(watchId).changes) };
+}
+
+const CITATION_SOURCES = new Set<CitationSource>(['local', 's2', 'europepmc', 'openalex']);
+const CITATION_STANCES = new Set<CitationStance>(VALID_CITATION_STANCES);
+const CITATION_SECTIONS = new Set<CitationSection>(VALID_CITATION_SECTIONS);
+function decodeCitationStance(r: Row): CitationStatement {
+  const source: CitationSource = CITATION_SOURCES.has(r.source as CitationSource) ? (r.source as CitationSource) : 's2';
+  const stance: CitationStance = CITATION_STANCES.has(r.stance as CitationStance) ? (r.stance as CitationStance) : 'unclassified';
+  const section: CitationSection = CITATION_SECTIONS.has(r.section as CitationSection) ? (r.section as CitationSection) : 'Unknown';
+  return {
+    targetKey: String(r.target_key ?? ''), direction: r.direction === 'references' ? 'references' : 'cited_by', citingKey: String(r.citing_key ?? ''),
+    ...(typeof r.doc_id === 'string' && r.doc_id ? { docId: r.doc_id } : {}), source,
+    ...(typeof r.citing_doc_id === 'string' && r.citing_doc_id ? { citingDocId: r.citing_doc_id } : {}),
+    ...(typeof r.citing_page === 'number' && Number.isFinite(r.citing_page) ? { citingPage: r.citing_page } : {}),
+    citingTitle: String(r.citing_title ?? ''), citingAuthors: parseArr<string>(r.citing_authors_json).filter(a => typeof a === 'string'),
+    ...(typeof r.citing_year === 'number' && Number.isFinite(r.citing_year) ? { citingYear: r.citing_year } : {}),
+    ...(typeof r.citing_doi === 'string' && r.citing_doi ? { citingDoi: r.citing_doi } : {}),
+    ...(typeof r.citing_arxiv === 'string' && r.citing_arxiv ? { citingArxiv: r.citing_arxiv } : {}),
+    ...(typeof r.citing_url === 'string' && r.citing_url ? { citingUrl: r.citing_url } : {}),
+    section, context: String(r.context ?? ''), stance, rationale: String(r.rationale ?? ''),
+    isInfluential: Number(r.is_influential ?? 0) !== 0, isSelfCitation: Number(r.is_self_citation ?? 0) !== 0,
+    manualOverride: Number(r.manual_override ?? 0) !== 0, updatedAt: String(r.updated_at ?? '')
+  };
+}
+export function listCitationStances(db: DatabaseSync, targetKey: string, direction: CitationDirection): CitationStatement[] {
+  return db.prepare("SELECT * FROM citation_stances WHERE target_key=? AND direction=? ORDER BY CASE WHEN source='local' THEN 0 ELSE 1 END, is_influential DESC, citing_year DESC, updated_at DESC").all(targetKey, direction).map(decodeCitationStance);
+}
+export function upsertCitationStances(db: DatabaseSync, rows: readonly CitationStatement[]): void {
+  const stmt = db.prepare(`INSERT INTO citation_stances(target_key,direction,citing_key,doc_id,source,citing_doc_id,citing_page,citing_title,citing_authors_json,citing_year,citing_doi,citing_arxiv,citing_url,section,context,stance,rationale,is_influential,is_self_citation,manual_override,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(target_key,direction,citing_key) DO UPDATE SET doc_id=COALESCE(excluded.doc_id,citation_stances.doc_id),source=excluded.source,citing_doc_id=excluded.citing_doc_id,citing_page=excluded.citing_page,citing_title=excluded.citing_title,citing_authors_json=excluded.citing_authors_json,citing_year=excluded.citing_year,citing_doi=excluded.citing_doi,citing_arxiv=excluded.citing_arxiv,citing_url=excluded.citing_url,section=excluded.section,context=excluded.context,stance=excluded.stance,rationale=excluded.rationale,is_influential=excluded.is_influential,is_self_citation=excluded.is_self_citation,updated_at=excluded.updated_at WHERE citation_stances.manual_override=0`);
+  for (const s of rows) {
+    stmt.run(s.targetKey, s.direction, s.citingKey, s.docId ?? null, s.source, s.citingDocId ?? null, s.citingPage ?? null, s.citingTitle, JSON.stringify(s.citingAuthors), s.citingYear ?? null, s.citingDoi ?? null, s.citingArxiv ?? null, s.citingUrl ?? null, s.section, s.context, s.stance, s.rationale, s.isInfluential ? 1 : 0, s.isSelfCitation ? 1 : 0, s.manualOverride ? 1 : 0, s.updatedAt);
+  }
+}
+export function reclassifyCitationStance(db: DatabaseSync, targetKey: string, direction: CitationDirection, citingKey: string, stance: CitationStance, rationale?: string): CitationStatement | undefined {
+  const now = new Date().toISOString();
+  const res = rationale !== undefined
+    ? db.prepare('UPDATE citation_stances SET stance=?, rationale=?, manual_override=1, updated_at=? WHERE target_key=? AND direction=? AND citing_key=?').run(stance, rationale, now, targetKey, direction, citingKey)
+    : db.prepare('UPDATE citation_stances SET stance=?, manual_override=1, updated_at=? WHERE target_key=? AND direction=? AND citing_key=?').run(stance, now, targetKey, direction, citingKey);
+  if (!res.changes) return undefined;
+  const row = db.prepare('SELECT * FROM citation_stances WHERE target_key=? AND direction=? AND citing_key=?').get(targetKey, direction, citingKey);
+  return row ? decodeCitationStance(row) : undefined;
 }
