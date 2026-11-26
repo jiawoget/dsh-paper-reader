@@ -54,7 +54,7 @@ export function bindPdfDropTarget(target: HTMLElement, onFiles: (files: File[]) 
   target.addEventListener('dragenter', e => { if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); depth++; target.dataset.pdfDrop = 'active'; }, ev);
   target.addEventListener('dragover', e => { if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; if (depth === 0) depth = 1; target.dataset.pdfDrop = 'active'; }, ev);
   target.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (depth === 0) delete target.dataset.pdfDrop; }, ev);
-  target.addEventListener('drop', e => { clear(); if (opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); const list = Array.from(e.dataTransfer?.files ?? []); if (list.length) onFiles(list); }, ev);
+  target.addEventListener('drop', e => { clear(); if (e.defaultPrevented || opts?.isBlocked?.() || !hasFiles(e)) return; e.preventDefault(); const list = Array.from(e.dataTransfer?.files ?? []); if (list.length) onFiles(list); }, ev);
   window.addEventListener('dragend', clear, ev); window.addEventListener('drop', clear, ev);
   opts?.signal?.addEventListener('abort', () => { clear(); overlay.remove(); }, { once: true });
 }

@@ -1,4 +1,5 @@
 import type { DocPageHit, DocumentInfo } from '../shared/types.js';
+import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
@@ -10,7 +11,7 @@ import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
 import { deleteTopic, hasDocPages, listTopics, replaceDocPages, saveTopic, searchDocPagesFts } from './research-store.js';
 import { hostAttachments } from './region-image.js';
-import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, type Input, type ServiceResults } from './service-types.js';
+import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, type Input, type ServiceResults } from './service-types.js';
 import { openWebArticle } from './web-article.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
@@ -64,6 +65,41 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       const doc = await documents.createAbstract(input);
       await indexDoc(doc, doc.kind === 'abstract').catch(() => 0);
       return { doc };
+    },
+    'library.importRefs': async input => {
+      const text = stringValue(input.text, 'references text', 4 * 1024 * 1024, true, true);
+      const format = input.format === undefined ? 'auto' : input.format;
+      if (format !== 'auto' && format !== 'bibtex' && format !== 'ris' && format !== 'csv') throw new ServiceError(400, 'Choose BibTeX, RIS, CSV, or auto.');
+      const tag = single(input.tag, 'tag', 40), parsed = parseBulkRefs(text, format);
+      if (parsed.length > 500) throw new ServiceError(400, 'Import at most 500 references at once.');
+      const before = new Set((await documents.list()).map(d => d.id)), seen = new Set<string>(), docs: DocumentInfo[] = [];
+      let created = 0, existing = 0, skipped = 0;
+      for (const entry of parsed) {
+        try {
+          const doc = await documents.createAbstract(entry);
+          if (before.has(doc.id) || seen.has(doc.id)) existing++; else created++;
+          const extra = [...(entry.tags ?? []), ...(tag ? [tag] : [])];
+          let meta = database.listDocMeta(doc.id).get(doc.id);
+          if (extra.length) meta = database.updateDocTriage({ docId: doc.id, tags: [...new Set([...(meta?.tags ?? []), ...extra])].slice(0, 50) });
+          await indexDoc(doc, doc.kind === 'abstract').catch(() => 0);
+          if (!seen.has(doc.id)) { seen.add(doc.id); docs.push(meta ? { ...doc, meta } : doc); }
+        } catch { skipped++; }
+      }
+      return { created, existing, skipped, docs };
+    },
+    'library.exportRefs': async input => {
+      const format = input.format;
+      if (format !== 'bibtex' && format !== 'ris' && format !== 'csv') throw new ServiceError(400, 'Choose BibTeX, RIS, or CSV.');
+      const filter = input.docIds === undefined ? undefined : (() => {
+        if (!Array.isArray(input.docIds) || input.docIds.length > 1000) throw new ServiceError(400, 'Invalid document filter.');
+        return new Set(input.docIds.map(id => single(id, 'document ID', 512, true)));
+      })();
+      const listed = (await documents.list()).filter(d => !filter || filter.has(d.id)), metas = database.listDocMeta();
+      const fullDocs = await Promise.all(listed.map(async d => {
+        const full = d.id === 'pagedattention' ? d : await documents.get(d.id).catch(() => d), meta = metas.get(full.id);
+        return meta ? { ...full, meta } : full;
+      }));
+      return { format: format as BulkRefFormat, filename: `paper-reader-library.${format === 'bibtex' ? 'bib' : format}`, content: exportBulkRefs(fullDocs, format), count: fullDocs.length };
     },
     'library.progress.save': input => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
     'library.triage': input => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
