@@ -33,7 +33,7 @@ test('deep search holdout multi-round gain finds zero-keyword target B in round 
   const userQuery = 'memory fragmentation in autoregressive inference', queryWords = new Set(['memory', 'fragmentation', 'autoregressive', 'inference']);
   assert.equal((paperB.title + ' ' + Object.keys(paperB.abstract_inverted_index).join(' ')).toLowerCase().split(/\W+/).some(w => queryWords.has(w)), false);
 
-  let s2Fail = true, round2Called = false, clarifyBroken = false;
+  let s2Fail = true, round2Called = false, rewriteCalled = false, clarifyBroken = false;
   const fetchImpl: typeof fetch = async (input) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     if (url.hostname === 'api.semanticscholar.org') return s2Fail ? new Response('rate limit', { status: 429, headers: { 'retry-after': '0' } }) : jsonRes({ data: [], recommendedPapers: [] });
@@ -58,7 +58,7 @@ test('deep search holdout multi-round gain finds zero-keyword target B in round 
         : p.title.includes('Mitigating') ? { id: p.id, score: 94, rationale: 'Addresses memory fragmentation in autoregressive decoding.', category: 'KV Allocation', terms: ['virtual block table'] }
         : { id: p.id, score: 10, rationale: 'Off-topic soil study.', category: 'Other', terms: [] }) });
     }
-    if (sys.includes('fresh concise English')) { round2Called = true; return JSON.stringify({ queries: ['virtual block table paging'] }); }
+    if (sys.includes('fresh self-contained English')) { rewriteCalled = true; return JSON.stringify({ queries: ['virtual block table paging'] }); }
     return 'Executive synthesis highlighting [#1] (Alice Researcher, 2023) and [#2] (Alice Researcher, 2024).';
   });
 
@@ -70,21 +70,23 @@ test('deep search holdout multi-round gain finds zero-keyword target B in round 
   assert.ok(zhFb.questions.length === 3 && /[\u4e00-\u9fff]/.test(zhFb.questions[0].question));
 
   const full = await act('deepSearch.run', { query: userQuery, answers: { scope: 'Single GPU' }, rounds: 2, maxResults: 10 });
-  assert.equal(full.aborted, false); assert.equal(full.roundsCompleted, 2); assert.equal(full.saturationCurve.length, 2);
+  assert.equal(full.aborted, false); assert.equal(full.roundsCompleted, 2); assert.equal(full.saturationCurve.length, 2); assert.equal(rewriteCalled, true);
   assert.ok(full.degraded.includes('s2') && full.overview.includes('[#1]') && full.categories.length >= 2);
   const foundA = full.candidates.find(c => c.doi === '10.1000/pa'), foundB = full.candidates.find(c => c.doi === '10.1000/pb');
   assert.ok(foundA && foundA.foundRound === 1 && foundA.inLibrary === true && foundB && foundB.foundRound === 2 && foundB.matchScore >= 85 && foundB.rationale.length > 10);
   assert.equal(full.candidates.some(c => c.doi === '10.1000/pb' && c.foundRound === 1), false);
 
-  s2Fail = false; round2Called = false;
+  s2Fail = false; round2Called = false; rewriteCalled = false;
   const ac = new AbortController(), events: Record<string, unknown>[] = [];
   const partial = await act('deepSearch.run', { query: userQuery, rounds: 3 }, {
     signal: ac.signal, onDelta: d => { const ev = JSON.parse(d) as Record<string, unknown>; events.push(ev); if (ev.round === 1 && ev.stage === 'score' && Number(ev.evaluatedCount) > 0) ac.abort(); }
   });
-  assert.equal(partial.aborted, true); assert.equal(partial.roundsCompleted, 1); assert.equal(round2Called, false);
-  assert.ok(partial.candidates.some(c => c.doi === '10.1000/pa') && !partial.candidates.some(c => c.doi === '10.1000/pb') && events.some(e => e.type === 'progress' && e.stage === 'score'));
-  for (const bad of [{ query: '   ' }, { query: 'ok', rounds: 'bad' }, { query: 'ok', answers: 'bad' }])
+  assert.equal(partial.aborted, true); assert.equal(partial.roundsCompleted, 1); assert.equal(round2Called, false); assert.equal(rewriteCalled, false);
+  const scoreEv = events.find(e => e.type === 'progress' && e.stage === 'score' && Array.isArray(e.candidates));
+  assert.ok(partial.candidates.some(c => c.doi === '10.1000/pa') && !partial.candidates.some(c => c.doi === '10.1000/pb') && scoreEv && (scoreEv.candidates as { doi?: string; inLibrary?: boolean }[]).some(c => c.doi === '10.1000/pa' && c.inLibrary));
+  for (const bad of [{ query: '   ' }, { query: 'ok', rounds: 'bad' }, { query: 'ok', answers: 'bad' }, { query: 'ok', questionModel: { provider: '' } }])
     await assert.rejects(() => Promise.resolve(act('deepSearch.run', bad)), statusIs(400));
+  await assert.rejects(() => Promise.resolve(act('deepSearch.clarify', { query: 'ok', questionModel: 'bad' })), statusIs(400));
 
   const prevHome = process.env.PAPER_READER_HOME, prevFetch = globalThis.fetch; process.env.PAPER_READER_HOME = root; globalThis.fetch = fetchImpl;
   t.after(() => { globalThis.fetch = prevFetch; if (prevHome === undefined) delete process.env.PAPER_READER_HOME; else process.env.PAPER_READER_HOME = prevHome; });
@@ -92,7 +94,7 @@ test('deep search holdout multi-round gain finds zero-keyword target B in round 
   apply({ connection: { fetch: { register: r => routes.set(r.path, r.fetch) } }, inject: (svcs, setup) => { if (svcs[0] === 'llm') setup({ llm: ctx.llm } as never); return () => {}; } });
   const ndRes = await routes.get('/api/paper-reader/action')!(new Request('http://dsh.internal/api/paper-reader/action', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/x-ndjson' }, body: JSON.stringify({ op: 'deepSearch.run', payload: { query: userQuery, rounds: 1 } }) }));
   const frames = (await ndRes.text()).trim().split('\n').map(l => JSON.parse(l) as Record<string, unknown>);
-  assert.ok(frames.some(f => f.type === 'progress') && frames.at(-1)?.type === 'result');
+  assert.ok(frames.some(f => f.type === 'progress' && f.stage === 'score' && Array.isArray(f.candidates) && f.candidates.length > 0) && frames.at(-1)?.type === 'result');
 });
 
 test('watchlist tracks topic and paper incrementally with zero LLM tokens, deduplicates cursor checks, and cascades on deleteDocument', async t => {
@@ -101,41 +103,56 @@ test('watchlist tracks topic and paper incrementally with zero LLM tokens, dedup
   for (const sql of ['CREATE TABLE doc_pages(docId TEXT, page INTEGER, text TEXT, updatedAt INTEGER)', 'CREATE VIRTUAL TABLE doc_pages_fts USING fts5(docId, page, text)', 'CREATE TABLE topics(id TEXT PRIMARY KEY)', 'CREATE TABLE graph_cache(cacheKey TEXT PRIMARY KEY)', 'CREATE TABLE paper_cards(doc_id TEXT PRIMARY KEY)', 'CREATE TABLE extraction_tables(id TEXT PRIMARY KEY)', 'CREATE TABLE extraction_cells(table_id TEXT, doc_id TEXT, col_id TEXT)']) mem.exec(sql);
   assert.equal(hasResearchSchema(mem), false); ensureResearchSchema(mem); assert.equal(hasResearchSchema(mem), true);
 
-  let llmCalls = 0, phase = 1;
+  let llmCalls = 0, phase = 1, oaFail = false, resolveCalls = 0, onFetch: (() => Promise<void>) | undefined;
   const ctx = makeHost(() => { llmCalls++; throw new Error('Watchlist must never call LLM'); });
   const p1 = oaWork('W501', 'GLP-1 Trial Update One', 2025, '2025-01-10', '10.1000/w1', ['Semaglutide']), p2 = oaWork('W502', 'GLP-1 Trial Update Two', 2025, '2025-02-01', '10.1000/w2', ['Tirzepatide']);
+  const oaArxiv = oaWork('W701', 'A <Fast> Method', 2025, '2025-02-10', '10.48550/arxiv.2502.00001', ['Fast']);
+  const arxivXml = '<feed><entry xml:lang="en"><id>http://arxiv.org/abs/2502.00001v1</id><title><![CDATA[A <Fast> Method]]></title><published>2025-02-10T00:00:00Z</published><author><name>Bob</name></author></entry></feed>';
   const cite1 = oaWork('W601', 'Follow-up Citing Seed Paper', 2025, '2025-01-15', '10.1000/c1', ['Followup'], ['W900']);
   const fetchImpl: typeof fetch = async (input) => {
+    if (onFetch) { const fn = onFetch; onFetch = undefined; await fn(); }
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     if (url.hostname === 'api.openalex.org') {
-      const f = url.searchParams.get('filter') ?? '';
-      if (url.pathname.includes('10.1000') || url.pathname === '/works/W900') return jsonRes(oaWork('W900', 'Seed Paper', 2024, '2024-01-01', '10.1000/seed', ['Seed']));
+      if (oaFail) return new Response('rate limit', { status: 429, headers: { 'retry-after': '0' } });
+      const f = url.searchParams.get('filter') ?? '', q = url.searchParams.get('search') ?? '';
+      if (url.pathname.includes('10.1000') || url.pathname === '/works/W900') { resolveCalls++; return jsonRes(oaWork('W900', 'Seed Paper', 2024, '2024-01-01', '10.1000/seed', ['Seed'])); }
       if (f.includes('cites:W900')) return jsonRes({ results: [cite1] });
+      if (q.includes('arxiv')) return jsonRes({ results: [oaArxiv] });
       return jsonRes({ results: phase === 1 ? [p1] : [p1, p2] });
     }
+    if (url.hostname === 'export.arxiv.org') return new Response(arxivXml, { status: 200 });
     return url.hostname === 'www.ebi.ac.uk' ? jsonRes({ resultList: { result: [] } }) : new Response('<feed></feed>', { status: 200 });
   };
   const store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id)), act = createServices({ root, ctx, library, store, fetchImpl });
+  for (const bad of [{ kind: 'topic', query: 'x', cursorDate: '2025-02-31' }, { kind: 'topic', query: 'x', cursorDate: '9999-99-99' }, { kind: 'topic', query: 'x', sources: ['openalex', 'bogus'] }])
+    await assert.rejects(() => Promise.resolve(act('watchlist.save', bad)), statusIs(400));
   const doc = (await act('library.createAbstract', { title: 'Seed Paper', doi: '10.1000/seed', abstract: 'Seed abstract' })).doc;
   const topicW = (await act('watchlist.save', { kind: 'topic', label: 'GLP-1 Watch', query: 'GLP-1 obesity', sources: ['openalex'], cursorDate: '2025-01-01' })).entry;
   const paperW = (await act('watchlist.save', { kind: 'paper', docId: doc.id, sources: ['openalex'], cursorDate: '2025-01-01' })).entry;
   assert.equal((await act('watchlist.list', {})).entries.length, 2);
 
   const chk1 = await act('watchlist.check', {});
-  assert.equal(chk1.checkedCount, 2); assert.equal(chk1.newItemsCount, 2);
   const t1 = chk1.entries.find(e => e.id === topicW.id)!, pEntry1 = chk1.entries.find(e => e.id === paperW.id)!;
-  assert.ok(t1.cursorDate === '2025-01-10' && t1.unread.length === 1 && t1.lastCheckedAt && pEntry1.workId === 'W900' && pEntry1.unread.length === 1);
-  assert.equal((await act('watchlist.check', {})).newItemsCount, 0);
+  assert.ok(chk1.checkedCount === 2 && chk1.newItemsCount === 2 && t1.cursorDate === '2025-01-10' && t1.unread.length === 1 && t1.lastCheckedAt && pEntry1.workId === 'W900' && pEntry1.unread.length === 1);
+  assert.equal((await act('watchlist.check', {})).newItemsCount, 0); assert.equal(resolveCalls, 1);
 
-  phase = 2;
-  const chk3 = await act('watchlist.check', { id: topicW.id });
-  assert.equal(chk3.newItemsCount, 1); assert.equal(chk3.entries.find(e => e.id === topicW.id)?.cursorDate, '2025-02-01');
-  assert.equal((await act('watchlist.markRead', { id: topicW.id })).entry.unread.length, 0); assert.equal(llmCalls, 0);
+  phase = 2; onFetch = async () => { await act('watchlist.markRead', { id: topicW.id }); };
+  const chk3 = await act('watchlist.check', { id: topicW.id }), t3 = chk3.entries.find(e => e.id === topicW.id)!;
+  assert.ok(chk3.newItemsCount === 1 && t3.cursorDate === '2025-02-01');
+  assert.deepEqual(t3.unread.map(i => i.paper.doi), ['10.1000/w2']);
+
+  const arxivW = (await act('watchlist.save', { kind: 'topic', label: 'ArXiv Watch', query: 'arxiv fast', sources: ['openalex', 'arxiv'], cursorDate: '2025-01-01' })).entry;
+  oaFail = true;
+  const degChk = await act('watchlist.check', { id: arxivW.id }), a1 = degChk.entries.find(e => e.id === arxivW.id)!;
+  assert.ok(degChk.degraded.includes('openalex') && degChk.newItemsCount === 1 && a1.cursorDate === '2025-01-01' && a1.unread[0].paper.title === 'A <Fast> Method');
+  oaFail = false;
+  const recChk = await act('watchlist.check', { id: arxivW.id });
+  assert.ok(recChk.newItemsCount === 0 && recChk.entries.find(e => e.id === arxivW.id)?.cursorDate === '2025-02-10');
+  const dupW = (await act('watchlist.save', { kind: 'topic', label: 'Dup Watch', query: 'arxiv dup', sources: ['openalex', 'arxiv'], cursorDate: '2025-01-01' })).entry;
+  assert.equal((await act('watchlist.check', { id: dupW.id })).newItemsCount, 1); assert.equal(llmCalls, 0);
 
   await act('library.delete', { id: doc.id });
   const db = new DatabaseSync(path.join(root, 'reader.sqlite'), { readOnly: true }); t.after(() => db.close());
-  assert.equal(hasResearchSchema(db), true);
-  assert.equal(Number((db.prepare('SELECT COUNT(*) AS n FROM watchlist WHERE doc_id=?').get(doc.id) as { n: number }).n), 0);
-  assert.equal((await act('watchlist.list', {})).entries.length, 1);
+  assert.ok(hasResearchSchema(db) && Number((db.prepare('SELECT COUNT(*) AS n FROM watchlist WHERE doc_id=?').get(doc.id) as { n: number }).n) === 0);
   assert.equal((await act('watchlist.delete', { id: topicW.id })).deleted, true);
 });

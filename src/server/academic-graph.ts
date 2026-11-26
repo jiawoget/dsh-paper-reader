@@ -28,8 +28,13 @@ const cleanPmid = (v: unknown) => { const s = str(v); return s && /^\d+$/.test(s
 export const shortOaId = (v: unknown) => str(v) ? /(?:^|\/)(W\d+)\/?$/i.exec(str(v)!)?.[1]?.toUpperCase() : undefined;
 export const shortTopicId = (v: unknown): string | undefined => str(v) ? /(?:^|\/)(T\d+)\/?$/i.exec(str(v)!)?.[1]?.toUpperCase() : undefined;
 export const normTitle = (s?: string): string => (s ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-export const paperCanonKey = (p: GraphPaper): string => p.doi ? 'doi:' + p.doi.toLowerCase() : p.arxivId ? 'arxiv:' + p.arxivId.toLowerCase() : p.pmid ? 'pmid:' + p.pmid : p.openAlexId ? 'oa:' + p.openAlexId.toUpperCase() : p.s2Id ? 's2:' + p.s2Id : 'title:' + normTitle(p.title);
-const decodeXml = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+export function paperIdentityKeys(p: GraphPaper): string[] {
+  const arxiv = (extractArxivId(p.arxivId, p.doi) ?? p.arxivId)?.toLowerCase(), doi = p.doi?.toLowerCase(), t = normTitle(p.title), axDoi = Boolean(doi && /^10\.48550\/arxiv\./i.test(doi));
+  return [...new Set([doi && !axDoi && 'doi:' + doi, arxiv && 'arxiv:' + arxiv, doi && axDoi && 'doi:' + doi, p.pmid && 'pmid:' + p.pmid, p.openAlexId && 'oa:' + p.openAlexId.toUpperCase(), p.s2Id && 's2:' + p.s2Id, t.length >= 8 && 'title:' + t].filter((v): v is string => Boolean(v)))];
+}
+export const paperCanonKey = (p: GraphPaper): string => paperIdentityKeys(p)[0] ?? 'title:' + normTitle(p.title);
+const XML_ENT: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" };
+const decodeXml = (s: string) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (_, c: string) => c.replace(/[&<>]/g, ch => ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : '&gt;')).replace(/<[^>]+>/g, ' ').replace(/&(amp|lt|gt|quot|#39);/g, (_, k: string) => XML_ENT[k]).replace(/\s+/g, ' ').trim();
 export const s2Headers = (s?: Partial<PrivateSettings>, json = false): Record<string, string> => ({ ...(json ? { 'Content-Type': 'application/json' } : {}), ...(s?.semanticScholarApiKey ? { 'x-api-key': s.semanticScholarApiKey } : {}) });
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -129,16 +134,15 @@ export function parseEpmcItem(raw: unknown): GraphPaper | undefined {
 }
 export function parseArxivEntries(xml: string): { paper: GraphPaper; publishedDate?: string }[] {
   const out: { paper: GraphPaper; publishedDate?: string }[] = [];
-  for (const m of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
-    const entry = m[1], tag = (n: string) => new RegExp(`<${n}[^>]*>([\\s\\S]*?)<\\/${n}>`, 'i').exec(entry)?.[1] ?? '';
+  for (const m of xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)) {
+    const entry = m[1], tag = (n: string) => new RegExp(`<${n}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${n}>`, 'i').exec(entry)?.[1] ?? '';
     const idUrl = decodeXml(tag('id')), title = decodeXml(tag('title')), arxivId = extractArxivId(idUrl), pub = tag('published');
-    const authors = [...entry.matchAll(/<author>\s*<name>([\s\S]*?)<\/name>/gi)].map(a => decodeXml(a[1])).filter(Boolean), year = Number(/(\d{4})/.exec(pub)?.[1]);
+    const authors = [...entry.matchAll(/<author\b[^>]*>\s*<name\b[^>]*>([\s\S]*?)<\/name>/gi)].map(a => decodeXml(a[1])).filter(Boolean), year = Number(/(\d{4})/.exec(pub)?.[1]);
     if (!title || /arxiv\.org\/api\/errors/i.test(idUrl) || (!authors.length && !arxivId)) continue;
     out.push({ paper: makePaper({ title, authors, year: Number.isFinite(year) && year > 1900 ? year : undefined, venue: 'arXiv', doi: cleanDoi(decodeXml(tag('arxiv:doi'))), arxivId, abstract: decodeXml(tag('summary')) || undefined, url: idUrl, source: 'arxiv' }), publishedDate: /(\d{4}-\d{2}-\d{2})/.exec(pub)?.[1] });
   }
   return out;
 }
-const parseArxivXml = (xml: string): GraphPaper | undefined => parseArxivEntries(xml)[0]?.paper;
 
 async function fetchOpenAlexByIds(ids: string[], ctx: GraphContext, degraded: Set<string>): Promise<{ works: ResolvedWork[]; fromCache: boolean }> {
   const unique = [...new Set(ids.map(shortOaId).filter((v): v is string => Boolean(v)))], works: ResolvedWork[] = [];
@@ -169,7 +173,7 @@ async function resolveWorkInternal(rawInput: string, ctx: GraphContext, degraded
   if (work && parsed?.kind === 'arxiv') work = { ...work, paper: { ...work.paper, arxivId: work.paper.arxivId ?? parsed.id.toLowerCase(), oaPdfUrl: work.paper.oaPdfUrl ?? `https://arxiv.org/pdf/${parsed.id.toLowerCase()}.pdf` } };
   if (!work && parsed?.kind === 'arxiv') {
     const res = await cachedFetch<string>('arxiv', 'arxiv:id:' + parsed.id, 'https://export.arxiv.org/api/query?id_list=' + encodeURIComponent(parsed.id), { method: 'GET' }, TTL_WORK, r => r.text(), ctx, degraded);
-    if (res) work = parsePaperWork(parseArxivXml(res.data), res.fromCache);
+    if (res) work = parsePaperWork(parseArxivEntries(res.data)[0]?.paper, res.fromCache);
   }
   if (!work || (!work.paper.abstract && (work.paper.doi || pmidDirect || parsed?.kind === 'doi'))) {
     const doi = work?.paper.doi ?? (parsed?.kind === 'doi' ? parsed.doi : undefined), pmid = work?.paper.pmid ?? pmidDirect, epmcQ = doi ? `DOI:"${doi}"` : pmid ? `EXT_ID:${pmid} AND SRC:MED` : !work ? query : '';
@@ -227,7 +231,7 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
     }
   } else {
     const posIds = resolvedSeeds.map(s => s.paper.s2Id ?? (s.paper.doi ? 'DOI:' + s.paper.doi : s.paper.arxivId ? 'ARXIV:' + s.paper.arxivId : s.paper.pmid ? 'PMID:' + s.paper.pmid : '')).filter(Boolean);
-    const negIds = (params.negativeSeeds ?? []).map(r => { const p = parseAcademicInput(r); return p?.kind === 'doi' ? 'DOI:' + p.doi : p?.kind === 'arxiv' ? 'ARXIV:' + p.id : r.trim(); }).filter(Boolean);
+    const negIds = (params.negativeSeeds ?? []).map(r => { const p = parseAcademicInput(r); return p?.kind === 'doi' ? 'DOI:' + p.doi : p?.kind === 'arxiv' ? 'ARXIV:' + p.id : shortOaId(r) ? '' : r.trim(); }).filter(Boolean);
     if (posIds.length) {
       const res = await fetchJson('s2', `s2:rec:${posIds.join('|')}:${negIds.join('|')}`, `https://api.semanticscholar.org/recommendations/v1/papers/?fields=${S2_FIELDS}&limit=45`, ctx, degraded, TTL_EXPLORE, { method: 'POST', headers: s2Headers(ctx.settings, true), body: JSON.stringify({ positivePaperIds: posIds, negativePaperIds: negIds }) });
       fromCache = fromCache && Boolean(res?.fromCache);

@@ -199,11 +199,11 @@ export function listPaperCards(db: DatabaseSync, docIds?: readonly string[]): Pa
   return rows.map(decodePaperCard).filter((c): c is PaperCard => Boolean(c));
 }
 
-const VALID_SOURCES = new Set<GraphSource>(['openalex', 's2', 'europepmc', 'arxiv']);
+export const VALID_GRAPH_SOURCES = new Set<GraphSource>(['openalex', 's2', 'europepmc', 'arxiv']);
 const parseArr = <T>(raw: SQLOutputValue | undefined): T[] => { try { const v: unknown = typeof raw === 'string' ? JSON.parse(raw) : []; return Array.isArray(v) ? (v as T[]) : []; } catch { return []; } };
 function decodeWatchlist(r: Row): WatchlistEntry {
   const kind: WatchlistKind = r.kind === 'paper' ? 'paper' : 'topic';
-  const sources = parseArr<string>(r.sources_json).filter((s): s is GraphSource => VALID_SOURCES.has(s as GraphSource));
+  const sources = parseArr<string>(r.sources_json).filter((s): s is GraphSource => VALID_GRAPH_SOURCES.has(s as GraphSource));
   return {
     id: String(r.id ?? ''), kind, label: String(r.label ?? ''), query: String(r.query ?? ''),
     ...(typeof r.doc_id === 'string' && r.doc_id ? { docId: r.doc_id } : {}), ...(typeof r.work_id === 'string' && r.work_id ? { workId: r.work_id } : {}),

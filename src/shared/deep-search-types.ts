@@ -9,7 +9,7 @@ export interface DeepSearchCandidate extends GraphPaper { matchScore: number; ra
 export type DeepSearchStage = 'decompose' | 'recall' | 'score' | 'expand' | 'overview';
 export interface DeepSearchProgressEvent {
   type: 'progress'; round: number; totalRounds: number; stage: DeepSearchStage; evaluatedCount: number;
-  matchedCount: number; newMatches: number; saturationCurve: DeepSearchRoundMetric[]; degraded: string[]; message: string;
+  matchedCount: number; newMatches: number; saturationCurve: DeepSearchRoundMetric[]; degraded: string[]; message: string; candidates?: DeepSearchCandidate[];
 }
 export interface DeepSearchResult {
   query: string; overview: string; categories: string[]; candidates: DeepSearchCandidate[]; roundsCompleted: number;

@@ -1972,7 +1972,7 @@ function listPaperCards(db, docIds) {
   const rows = docIds?.length ? db.prepare(`SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards WHERE doc_id IN (${docIds.map(() => "?").join(",")}) ORDER BY updated_at DESC`).all(...docIds) : db.prepare("SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards ORDER BY updated_at DESC").all();
   return rows.map(decodePaperCard).filter((c) => Boolean(c));
 }
-var VALID_SOURCES = /* @__PURE__ */ new Set(["openalex", "s2", "europepmc", "arxiv"]);
+var VALID_GRAPH_SOURCES = /* @__PURE__ */ new Set(["openalex", "s2", "europepmc", "arxiv"]);
 var parseArr = (raw) => {
   try {
     const v = typeof raw === "string" ? JSON.parse(raw) : [];
@@ -1983,7 +1983,7 @@ var parseArr = (raw) => {
 };
 function decodeWatchlist(r) {
   const kind = r.kind === "paper" ? "paper" : "topic";
-  const sources = parseArr(r.sources_json).filter((s) => VALID_SOURCES.has(s));
+  const sources = parseArr(r.sources_json).filter((s) => VALID_GRAPH_SOURCES.has(s));
   return {
     id: String(r.id ?? ""),
     kind,
@@ -2456,8 +2456,13 @@ var cleanPmid = (v) => {
 var shortOaId = (v) => str(v) ? /(?:^|\/)(W\d+)\/?$/i.exec(str(v))?.[1]?.toUpperCase() : void 0;
 var shortTopicId = (v) => str(v) ? /(?:^|\/)(T\d+)\/?$/i.exec(str(v))?.[1]?.toUpperCase() : void 0;
 var normTitle = (s) => (s ?? "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-var paperCanonKey = (p) => p.doi ? "doi:" + p.doi.toLowerCase() : p.arxivId ? "arxiv:" + p.arxivId.toLowerCase() : p.pmid ? "pmid:" + p.pmid : p.openAlexId ? "oa:" + p.openAlexId.toUpperCase() : p.s2Id ? "s2:" + p.s2Id : "title:" + normTitle(p.title);
-var decodeXml = (s) => s.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
+function paperIdentityKeys(p) {
+  const arxiv2 = (extractArxivId(p.arxivId, p.doi) ?? p.arxivId)?.toLowerCase(), doi = p.doi?.toLowerCase(), t = normTitle(p.title), axDoi = Boolean(doi && /^10\.48550\/arxiv\./i.test(doi));
+  return [...new Set([doi && !axDoi && "doi:" + doi, arxiv2 && "arxiv:" + arxiv2, doi && axDoi && "doi:" + doi, p.pmid && "pmid:" + p.pmid, p.openAlexId && "oa:" + p.openAlexId.toUpperCase(), p.s2Id && "s2:" + p.s2Id, t.length >= 8 && "title:" + t].filter((v) => Boolean(v)))];
+}
+var paperCanonKey = (p) => paperIdentityKeys(p)[0] ?? "title:" + normTitle(p.title);
+var XML_ENT = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" };
+var decodeXml = (s) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (_, c) => c.replace(/[&<>]/g, (ch) => ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : "&gt;")).replace(/<[^>]+>/g, " ").replace(/&(amp|lt|gt|quot|#39);/g, (_, k) => XML_ENT[k]).replace(/\s+/g, " ").trim();
 var s2Headers = (s, json2 = false) => ({ ...json2 ? { "Content-Type": "application/json" } : {}, ...s?.semanticScholarApiKey ? { "x-api-key": s.semanticScholarApiKey } : {} });
 function defaultSleep(ms, signal) {
   if (signal?.aborted) return Promise.reject(new ServiceError(499, "Request canceled."));
@@ -2564,16 +2569,15 @@ function parseEpmcItem(raw) {
 }
 function parseArxivEntries(xml) {
   const out = [];
-  for (const m of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
-    const entry = m[1], tag = (n) => new RegExp(`<${n}[^>]*>([\\s\\S]*?)<\\/${n}>`, "i").exec(entry)?.[1] ?? "";
+  for (const m of xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi)) {
+    const entry = m[1], tag = (n) => new RegExp(`<${n}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${n}>`, "i").exec(entry)?.[1] ?? "";
     const idUrl = decodeXml(tag("id")), title = decodeXml(tag("title")), arxivId = extractArxivId(idUrl), pub = tag("published");
-    const authors = [...entry.matchAll(/<author>\s*<name>([\s\S]*?)<\/name>/gi)].map((a) => decodeXml(a[1])).filter(Boolean), year = Number(/(\d{4})/.exec(pub)?.[1]);
+    const authors = [...entry.matchAll(/<author\b[^>]*>\s*<name\b[^>]*>([\s\S]*?)<\/name>/gi)].map((a) => decodeXml(a[1])).filter(Boolean), year = Number(/(\d{4})/.exec(pub)?.[1]);
     if (!title || /arxiv\.org\/api\/errors/i.test(idUrl) || !authors.length && !arxivId) continue;
     out.push({ paper: makePaper({ title, authors, year: Number.isFinite(year) && year > 1900 ? year : void 0, venue: "arXiv", doi: cleanDoi2(decodeXml(tag("arxiv:doi"))), arxivId, abstract: decodeXml(tag("summary")) || void 0, url: idUrl, source: "arxiv" }), publishedDate: /(\d{4}-\d{2}-\d{2})/.exec(pub)?.[1] });
   }
   return out;
 }
-var parseArxivXml = (xml) => parseArxivEntries(xml)[0]?.paper;
 async function fetchOpenAlexByIds(ids, ctx, degraded) {
   const unique = [...new Set(ids.map(shortOaId).filter((v) => Boolean(v)))], works = [];
   let allCached = unique.length > 0;
@@ -2602,7 +2606,7 @@ async function resolveWorkInternal(rawInput, ctx, degraded) {
   if (work && parsed?.kind === "arxiv") work = { ...work, paper: { ...work.paper, arxivId: work.paper.arxivId ?? parsed.id.toLowerCase(), oaPdfUrl: work.paper.oaPdfUrl ?? `https://arxiv.org/pdf/${parsed.id.toLowerCase()}.pdf` } };
   if (!work && parsed?.kind === "arxiv") {
     const res = await cachedFetch("arxiv", "arxiv:id:" + parsed.id, "https://export.arxiv.org/api/query?id_list=" + encodeURIComponent(parsed.id), { method: "GET" }, TTL_WORK, (r) => r.text(), ctx, degraded);
-    if (res) work = parsePaperWork(parseArxivXml(res.data), res.fromCache);
+    if (res) work = parsePaperWork(parseArxivEntries(res.data)[0]?.paper, res.fromCache);
   }
   if (!work || !work.paper.abstract && (work.paper.doi || pmidDirect || parsed?.kind === "doi")) {
     const doi = work?.paper.doi ?? (parsed?.kind === "doi" ? parsed.doi : void 0), pmid = work?.paper.pmid ?? pmidDirect, epmcQ = doi ? `DOI:"${doi}"` : pmid ? `EXT_ID:${pmid} AND SRC:MED` : !work ? query : "";
@@ -2672,7 +2676,7 @@ async function exploreCitationGraph(params, ctx) {
     const posIds = resolvedSeeds.map((s) => s.paper.s2Id ?? (s.paper.doi ? "DOI:" + s.paper.doi : s.paper.arxivId ? "ARXIV:" + s.paper.arxivId : s.paper.pmid ? "PMID:" + s.paper.pmid : "")).filter(Boolean);
     const negIds = (params.negativeSeeds ?? []).map((r) => {
       const p = parseAcademicInput(r);
-      return p?.kind === "doi" ? "DOI:" + p.doi : p?.kind === "arxiv" ? "ARXIV:" + p.id : r.trim();
+      return p?.kind === "doi" ? "DOI:" + p.doi : p?.kind === "arxiv" ? "ARXIV:" + p.id : shortOaId(r) ? "" : r.trim();
     }).filter(Boolean);
     if (posIds.length) {
       const res = await fetchJson("s2", `s2:rec:${posIds.join("|")}:${negIds.join("|")}`, `https://api.semanticscholar.org/recommendations/v1/papers/?fields=${S2_FIELDS}&limit=45`, ctx, degraded, TTL_EXPLORE, { method: "POST", headers: s2Headers(ctx.settings, true), body: JSON.stringify({ positivePaperIds: posIds, negativePaperIds: negIds }) });
@@ -5243,9 +5247,9 @@ async function searchSourcePapers(source2, query, ctx, degraded, opts = {}) {
 }
 var fallbackQuestions = (q) => new RegExp("\\p{Script=Han}", "u").test(q) ? [{ id: "focus", question: "\u6700\u5173\u6CE8\u54EA\u4E00\u7C7B\u7814\u7A76\u91CD\u70B9\uFF1F", options: ["\u6838\u5FC3\u65B9\u6CD5\u4E0E\u673A\u5236", "\u4E34\u5E8A/\u5B9E\u8BC1\u6548\u679C\u8BC4\u4F30", "\u7CFB\u7EDF\u7EFC\u8FF0\u4E0E\u5BF9\u6BD4"] }, { id: "window", question: "\u4F18\u5148\u8986\u76D6\u54EA\u4E2A\u65F6\u95F4\u8303\u56F4\uFF1F", options: ["\u8FD1 3 \u5E74\u6700\u65B0\u8FDB\u5C55", "\u8FD1 5 \u5E74\u4EE3\u8868\u7814\u7A76", "\u4E0D\u9650\u65F6\u95F4\uFF08\u542B\u5960\u57FA\u6587\u732E\uFF09"] }, { id: "evidence", question: "\u66F4\u504F\u597D\u54EA\u7C7B\u8BC1\u636E\u7C7B\u578B\uFF1F", options: ["\u9876\u4F1A/\u9876\u520A\u5B9E\u8BC1\u8BBA\u6587", "\u968F\u673A\u5BF9\u7167\u6216\u961F\u5217\u7814\u7A76", "\u9884\u5370\u672C\u4E0E\u6280\u672F\u62A5\u544A"] }] : [{ id: "focus", question: "Which research aspect matters most?", options: ["Core methods & mechanisms", "Empirical / clinical outcomes", "Benchmarks & systematic reviews"] }, { id: "window", question: "Preferred publication time window?", options: ["Last 3 years", "Last 5 years", "All years including foundational works"] }, { id: "evidence", question: "Preferred study type?", options: ["Peer-reviewed primary studies", "Clinical trials & cohorts", "Include recent preprints"] }];
 async function clarifyDeepSearch(deps, input, opts) {
-  const query = single(input.query, "search query", 1e3, true);
+  const query = single(input.query, "search query", 1e3, true), questionModel = readQuestionModel(input.questionModel);
   try {
-    const parsed = parseJson((await completeWithBackoff(deps, CLARIFY_SYS, { query }, { ...opts, questionModel: input.questionModel })).text);
+    const parsed = parseJson((await completeWithBackoff(deps, CLARIFY_SYS, { query }, { ...opts, questionModel })).text);
     const qs = arrOf(parsed?.questions).flatMap((q, i) => {
       if (!isObject(q) || typeof q.question !== "string" || !q.question.trim()) return [];
       const options = strList(q.options, 5, 80);
@@ -5261,7 +5265,7 @@ var CanonicalPool = class {
   papers = /* @__PURE__ */ new Map();
   #keys = /* @__PURE__ */ new Map();
   add(p) {
-    const t = normTitle(p.title), keys = [p.doi && "doi:" + p.doi.toLowerCase(), p.arxivId && "arxiv:" + p.arxivId.toLowerCase(), p.pmid && "pmid:" + p.pmid, p.openAlexId && "oa:" + p.openAlexId.toUpperCase(), p.s2Id && "s2:" + p.s2Id, t.length >= 8 && "title:" + t].filter((v) => Boolean(v));
+    const keys = paperIdentityKeys(p);
     const canon = keys.map((k) => this.#keys.get(k)).find(Boolean) ?? paperCanonKey(p), c = this.papers.get(canon);
     this.papers.set(canon, !c ? { ...p } : { ...c, authors: c.authors.length ? c.authors : p.authors, firstAuthor: c.firstAuthor || p.firstAuthor, lastAuthor: c.lastAuthor || p.lastAuthor, year: c.year ?? p.year, venue: c.venue ?? p.venue, doi: c.doi ?? p.doi, arxivId: c.arxivId ?? p.arxivId, pmid: c.pmid ?? p.pmid, openAlexId: c.openAlexId ?? p.openAlexId, s2Id: c.s2Id ?? p.s2Id, oaPdfUrl: c.oaPdfUrl ?? p.oaPdfUrl, url: c.url ?? p.url, abstract: (c.abstract?.length ?? 0) >= (p.abstract?.length ?? 0) ? c.abstract : p.abstract, citationCount: Math.max(c.citationCount ?? 0, p.citationCount ?? 0) || c.citationCount || p.citationCount });
     for (const k of keys) this.#keys.set(k, canon);
@@ -5296,17 +5300,20 @@ function readAnswers(raw) {
   }
   return out;
 }
+var clampInt = (v, d, lo, hi, n) => {
+  const x = v === void 0 ? d : v;
+  if (typeof x !== "number" || !Number.isFinite(x)) throw new ServiceError(400, `Invalid ${n} count.`);
+  return Math.min(hi, Math.max(lo, Math.round(x)));
+};
 async function runDeepSearch(deps, input, onEvent, opts) {
-  const query = single(input.query, "search query", 1e3, true), answers = readAnswers(input.answers);
-  const rawRounds = input.rounds === void 0 ? 2 : input.rounds, rawMax = input.maxResults === void 0 ? 25 : input.maxResults;
-  if (typeof rawRounds !== "number" || !Number.isFinite(rawRounds)) throw new ServiceError(400, "Invalid rounds count.");
-  if (typeof rawMax !== "number" || !Number.isFinite(rawMax)) throw new ServiceError(400, "Invalid maxResults count.");
-  const totalRounds = Math.min(3, Math.max(1, Math.round(rawRounds))), maxResults = Math.min(50, Math.max(5, Math.round(rawMax))), signal = opts?.signal, docs = await deps.library.list();
+  const query = single(input.query, "search query", 1e3, true), answers = readAnswers(input.answers), questionModel = readQuestionModel(input.questionModel);
+  const totalRounds = clampInt(input.rounds, 2, 1, 3, "rounds"), maxResults = clampInt(input.maxResults, 25, 5, 50, "maxResults"), signal = opts?.signal, docs = await deps.library.list();
   const ctx = { withDb: (w, run) => deps.store.withDb(w, run), settings: deps.store.settings(), fetchFn: deps.fetchFn, sleepFn: deps.sleepFn, docs, signal };
   const pool = new CanonicalPool(), scored = /* @__PURE__ */ new Map(), degraded = /* @__PURE__ */ new Set(), usedQ = /* @__PURE__ */ new Set(), terms = /* @__PURE__ */ new Set(), saturationCurve = [];
   let roundsCompleted = 0, aborted = Boolean(signal?.aborted);
-  const emit = (round, stage, newMatches, message) => {
-    const ev = { type: "progress", round, totalRounds, stage, evaluatedCount: scored.size, matchedCount: [...scored.values()].filter((s) => s.matchScore >= 50).length, newMatches, saturationCurve: saturationCurve.map((m) => ({ ...m })), degraded: [...degraded], message };
+  const buildCandidates = () => [...scored.entries()].map(([id, s]) => ({ ...attachLibraryMatch(pool.papers.get(id), docs), matchScore: s.matchScore, rationale: s.rationale, category: s.category, foundRound: s.foundRound })).sort((a, b) => b.matchScore - a.matchScore || (b.citationCount ?? 0) - (a.citationCount ?? 0)).slice(0, maxResults);
+  const emit = (round, stage, newMatches, message, candidates2) => {
+    const ev = { type: "progress", round, totalRounds, stage, evaluatedCount: scored.size, matchedCount: [...scored.values()].filter((s) => s.matchScore >= 50).length, newMatches, saturationCurve: saturationCurve.map((m) => ({ ...m })), degraded: [...degraded], message, ...candidates2 ? { candidates: candidates2 } : {} };
     onEvent?.(ev);
     opts?.onDelta?.(JSON.stringify(ev));
   };
@@ -5323,7 +5330,7 @@ async function runDeepSearch(deps, input, onEvent, opts) {
       const batch = ranked.slice(i, i + 10);
       let parsed;
       try {
-        parsed = parseJson((await completeWithBackoff(deps, SCORE_SYS, { query, answers, papers: batch.map(([id, p]) => ({ id, title: p.title, year: p.year, venue: p.venue, abstract: (p.abstract ?? "").slice(0, 900) })) }, { signal, questionModel: input.questionModel })).text);
+        parsed = parseJson((await completeWithBackoff(deps, SCORE_SYS, { query, answers, papers: batch.map(([id, p]) => ({ id, title: p.title, year: p.year, venue: p.venue, abstract: (p.abstract ?? "").slice(0, 900) })) }, { signal, questionModel })).text);
       } catch (err) {
         if (isAbort(err, signal)) {
           aborted = true;
@@ -5339,6 +5346,7 @@ async function runDeepSearch(deps, input, onEvent, opts) {
         scored.set(id, { matchScore, rationale, category, terms: rowTerms, foundRound: round });
         if (matchScore >= 50) newMatches++;
       }
+      if (i + 10 < ranked.length && !signal?.aborted) emit(round, "score", newMatches, `Round ${round}: evaluated ${scored.size} papers...`, buildCandidates());
     }
     return newMatches;
   };
@@ -5353,7 +5361,7 @@ async function runDeepSearch(deps, input, onEvent, opts) {
       emit(1, "decompose", 0, "Decomposing research question into conceptual queries...");
       let queries = [];
       try {
-        const p = parseJson((await completeWithBackoff(deps, DECOMPOSE_SYS, { query, answers }, { signal, questionModel: input.questionModel })).text);
+        const p = parseJson((await completeWithBackoff(deps, DECOMPOSE_SYS, { query, answers }, { signal, questionModel })).text);
         queries = [.../* @__PURE__ */ new Set([...strList(p?.queries, 2, 100), ...strList(p?.synonyms, 2, 80), ...strList(p?.queries, 4, 100)])].slice(0, 4);
       } catch (err) {
         if (isAbort(err, signal)) {
@@ -5374,12 +5382,12 @@ async function runDeepSearch(deps, input, onEvent, opts) {
       const topSeeds = [...scored.entries()].filter(([, s]) => s.matchScore >= 50).sort((a, b) => b[1].matchScore - a[1].matchScore);
       const negSeeds = [...scored.entries()].filter(([, s]) => s.matchScore < 35).sort((a, b) => a[1].matchScore - b[1].matchScore).slice(0, 3).map(([id]) => {
         const p = pool.papers.get(id);
-        return p.doi ?? p.arxivId ?? p.openAlexId ?? p.s2Id ?? "";
+        return p.doi ?? p.arxivId ?? p.s2Id ?? p.openAlexId ?? "";
       }).filter(Boolean);
       let rewriteQ = [];
       if (topSeeds.length) {
         try {
-          rewriteQ = strList(parseJson((await completeWithBackoff(deps, REWRITE_SYS, { originalQuery: query, discoveredTerms: [...terms].slice(0, 12), topPapers: topSeeds.slice(0, 5).map(([id]) => ({ title: pool.papers.get(id).title, abstract: (pool.papers.get(id).abstract ?? "").slice(0, 700) })) }, { signal, questionModel: input.questionModel })).text)?.queries, 3, 100);
+          rewriteQ = strList(parseJson((await completeWithBackoff(deps, REWRITE_SYS, { originalQuery: query, discoveredTerms: [...terms].slice(0, 12), topPapers: topSeeds.slice(0, 5).map(([id]) => ({ title: pool.papers.get(id).title, abstract: (pool.papers.get(id).abstract ?? "").slice(0, 700) })) }, { signal, questionModel })).text)?.queries, 3, 100);
         } catch (err) {
           if (isAbort(err, signal)) {
             aborted = true;
@@ -5414,14 +5422,14 @@ async function runDeepSearch(deps, input, onEvent, opts) {
     roundsCompleted = round;
     const matched = [...scored.values()].filter((s) => s.matchScore >= 50).length;
     saturationCurve.push({ round, evaluated: scored.size, matched, newMatches });
-    emit(round, "score", newMatches, `Round ${round} complete: ${matched} matches from ${scored.size} evaluated.`);
+    emit(round, "score", newMatches, `Round ${round} complete: ${matched} matches from ${scored.size} evaluated.`, buildCandidates());
     if (aborted || signal?.aborted) {
       aborted = true;
       break;
     }
   }
   if (signal?.aborted) aborted = true;
-  const candidates = [...scored.entries()].map(([id, s]) => ({ ...attachLibraryMatch(pool.papers.get(id), docs), matchScore: s.matchScore, rationale: s.rationale, category: s.category, foundRound: s.foundRound })).sort((a, b) => b.matchScore - a.matchScore || (b.citationCount ?? 0) - (a.citationCount ?? 0)).slice(0, maxResults);
+  const candidates = buildCandidates();
   const catCounts = /* @__PURE__ */ new Map();
   for (const c of candidates) if (c.category) catCounts.set(c.category, (catCounts.get(c.category) ?? 0) + 1);
   const categories = [...catCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 8);
@@ -5430,7 +5438,7 @@ async function runDeepSearch(deps, input, onEvent, opts) {
     emit(Math.max(1, roundsCompleted), "overview", 0, "Synthesizing executive overview...");
     try {
       const top = candidates.slice(0, 10).map((c, i) => ({ num: i + 1, title: c.title, firstAuthor: c.firstAuthor, year: c.year, matchScore: c.matchScore, rationale: c.rationale, category: c.category }));
-      const text2 = (await completeWithBackoff(deps, OVERVIEW_SYS, { query, answers, candidates: top }, { signal, questionModel: input.questionModel })).text.trim();
+      const text2 = (await completeWithBackoff(deps, OVERVIEW_SYS, { query, answers, candidates: top }, { signal, questionModel })).text.trim();
       if (text2) overview = text2;
     } catch (err) {
       if (isAbort(err, signal)) aborted = true;
@@ -5441,15 +5449,19 @@ async function runDeepSearch(deps, input, onEvent, opts) {
 
 // src/server/watchlist.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
-var VALID_SOURCES2 = /* @__PURE__ */ new Set(["openalex", "s2", "europepmc", "arxiv"]);
 var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+var isIsoDate = (s) => {
+  if (!DATE_RE.test(s)) return false;
+  const d = /* @__PURE__ */ new Date(s + "T00:00:00Z");
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
 var todayIso = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 var defaultCursor = () => new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
 function parseSources(raw, kind) {
   if (raw === void 0) return kind === "paper" ? ["openalex", "s2"] : ["openalex", "europepmc", "arxiv"];
   if (!Array.isArray(raw) || !raw.length || raw.length > 4) throw new ServiceError(400, "Choose 1 to 4 watchlist sources.");
-  const out = [...new Set(raw.filter((s) => typeof s === "string" && VALID_SOURCES2.has(s)))];
-  if (!out.length) throw new ServiceError(400, "Choose valid watchlist sources.");
+  const out = [...new Set(raw.filter((s) => typeof s === "string" && VALID_GRAPH_SOURCES.has(s)))];
+  if (!out.length || out.length !== new Set(raw).size) throw new ServiceError(400, "Choose valid watchlist sources.");
   return out;
 }
 var listWatchlist = (deps) => ({ entries: deps.store.withDb(false, listWatchlistEntries) });
@@ -5465,7 +5477,7 @@ async function saveWatchlist(input, deps) {
   const label = input.label !== void 0 ? single(input.label, "watchlist label", 120, true) : prev?.label || (doc?.paperTitle || doc?.title || query).slice(0, 120);
   const sources = input.sources === void 0 && prev ? prev.sources : parseSources(input.sources, kind);
   const cursorDate = input.cursorDate === void 0 ? prev?.cursorDate || defaultCursor() : single(input.cursorDate, "cursor date", 16, true);
-  if (!DATE_RE.test(cursorDate)) throw new ServiceError(400, "Cursor date must use YYYY-MM-DD format.");
+  if (!isIsoDate(cursorDate)) throw new ServiceError(400, "Cursor date must be a valid YYYY-MM-DD date.");
   const now = (/* @__PURE__ */ new Date()).toISOString();
   return { entry: deps.store.withDb(true, (db) => upsertWatchlistEntry(db, { id, kind, label, query, ...docId ? { docId } : {}, ...workId ? { workId } : {}, sources, cursorDate, seenKeys: prev?.seenKeys ?? [], unread: prev?.unread ?? [], ...prev?.lastCheckedAt ? { lastCheckedAt: prev.lastCheckedAt } : {}, createdAt: prev?.createdAt ?? now, updatedAt: now })) };
 }
@@ -5482,25 +5494,26 @@ function markWatchlistRead(input, deps) {
   }) };
 }
 async function fetchWatchPapers(entry, docs, ctx, degraded) {
-  const items = [], cursorYear = Number(entry.cursorDate.slice(0, 4)) || 1900;
-  let attempted = 0, workId = entry.workId, selfKey;
+  const items = [], cursorYear = Number(entry.cursorDate.slice(0, 4)) || 1900, selfKeys = /* @__PURE__ */ new Set();
+  let attempted = 0, workId = entry.workId;
   if (entry.kind === "topic") {
     for (const src of entry.sources) {
       attempted++;
       items.push(...await searchSourcePapers(src, entry.query, ctx, degraded, { since: entry.cursorDate, limit: 20, noCache: true, cacheKey: `wl:${src}:${entry.id}` }));
     }
-    return { items, workId, attempted };
+    return { items, workId, attempted, selfKeys };
   }
-  const localDoc = entry.docId ? docs.find((d) => d.id === entry.docId) : void 0;
-  let oaId = shortOaId(workId), s2Key = workId && !oaId ? workId.startsWith("10.") ? "DOI:" + workId : workId : "";
-  if (!oaId || !s2Key) {
-    const resolved = await resolveAcademicPaper(workId || localDoc?.doi || localDoc?.url || localDoc?.paperTitle || localDoc?.title || entry.query, ctx);
+  const localDoc = entry.docId ? docs.find((d) => d.id === entry.docId) : void 0, oaId0 = shortOaId(workId), docDoi = cleanDoi2(localDoc?.doi), workDoi = workId && !oaId0 ? cleanDoi2(workId) : void 0;
+  let oaId = oaId0, s2Key = workDoi?.startsWith("10.") ? "DOI:" + workDoi : workId && !oaId ? workId : docDoi ? "DOI:" + docDoi : "";
+  for (const k of [oaId && "oa:" + oaId, docDoi && "doi:" + docDoi.toLowerCase(), workDoi && "doi:" + workDoi.toLowerCase()]) if (k) selfKeys.add(k);
+  if (entry.sources.includes("openalex") && !oaId || entry.sources.includes("s2") && !s2Key) {
+    const resolved = await resolveAcademicPaper(!oaId && workId || docDoi || localDoc?.url || localDoc?.paperTitle || localDoc?.title || entry.query, ctx);
     for (const d of resolved.degraded) degraded.add(d);
     if (resolved.paper) {
       oaId = oaId ?? resolved.paper.openAlexId;
       s2Key = s2Key || resolved.paper.s2Id || (resolved.paper.doi ? "DOI:" + resolved.paper.doi : resolved.paper.arxivId ? "ARXIV:" + resolved.paper.arxivId : "");
       workId = oaId ?? resolved.paper.doi ?? resolved.paper.arxivId ?? resolved.paper.s2Id ?? workId;
-      selfKey = paperCanonKey(resolved.paper);
+      for (const k of paperIdentityKeys(resolved.paper)) selfKeys.add(k);
     }
   }
   if (entry.sources.includes("openalex") && oaId) {
@@ -5515,7 +5528,7 @@ async function fetchWatchPapers(entry, docs, ctx, degraded) {
       if (p && (!p.year || p.year >= cursorYear)) items.push({ paper: p });
     }
   }
-  return { items, workId, attempted, selfKey };
+  return { items, workId, attempted, selfKeys };
 }
 async function checkWatchlist(input, deps, signal) {
   const targetId = input.id === void 0 ? void 0 : single(input.id, "watchlist ID", 128, true);
@@ -5523,28 +5536,30 @@ async function checkWatchlist(input, deps, signal) {
   if (targetId && !targets.length) throw new ServiceError(404, "Watchlist entry not found.");
   const docs = await deps.library.list(), allDegraded = /* @__PURE__ */ new Set();
   const ctx = { withDb: (w, run) => deps.store.withDb(w, run), settings: deps.store.settings(), fetchFn: deps.fetchFn, sleepFn: deps.sleepFn, docs, signal };
-  let newItemsCount = 0;
+  let newItemsCount = 0, checkedCount = 0;
   for (const entry of targets) {
     if (signal?.aborted) break;
-    const entryDeg = /* @__PURE__ */ new Set(), { items, workId, attempted, selfKey } = await fetchWatchPapers(entry, docs, ctx, entryDeg);
+    const entryDeg = /* @__PURE__ */ new Set(), { items, workId, attempted, selfKeys } = await fetchWatchPapers(entry, docs, ctx, entryDeg);
+    checkedCount++;
     for (const d of entryDeg) allDegraded.add(d);
-    const seen = new Set(entry.seenKeys), nowIso = (/* @__PURE__ */ new Date()).toISOString(), today = todayIso(), fresh = [];
-    let maxDate = "";
-    for (const { paper, pubDate } of items) {
-      if (pubDate && DATE_RE.test(pubDate) && pubDate <= today && pubDate > maxDate) maxDate = pubDate;
-      const key2 = paperCanonKey(paper);
-      if (key2 === selfKey || seen.has(key2)) continue;
-      seen.add(key2);
-      fresh.push({ key: key2, paper: attachLibraryMatch(paper, docs), foundAt: nowIso });
-    }
-    const allFailed = attempted > 0 && entryDeg.size >= attempted && !items.length;
-    const nextCursor = allFailed ? entry.cursorDate : maxDate ? maxDate > entry.cursorDate ? maxDate : entry.cursorDate : entryDeg.size ? entry.cursorDate : today > entry.cursorDate ? today : entry.cursorDate;
-    newItemsCount += fresh.length;
     deps.store.withDb(true, (db) => {
-      if (getWatchlistEntry(db, entry.id)) upsertWatchlistEntry(db, { ...entry, ...workId ? { workId } : {}, cursorDate: nextCursor, seenKeys: [...seen].slice(-500), unread: [...fresh, ...entry.unread].slice(0, 100), lastCheckedAt: nowIso, updatedAt: nowIso });
+      const cur = getWatchlistEntry(db, entry.id);
+      if (!cur) return;
+      const seen = new Set(cur.seenKeys), curUnread = new Set(cur.unread.map((i) => i.key)), nowIso = (/* @__PURE__ */ new Date()).toISOString(), today = todayIso(), fresh = [];
+      let maxDate = "";
+      for (const { paper, pubDate } of items) {
+        if (pubDate && isIsoDate(pubDate) && pubDate <= today && pubDate > maxDate) maxDate = pubDate;
+        const key2 = paperCanonKey(paper), pKeys = paperIdentityKeys(paper), allKeys = pKeys.length ? pKeys : [key2];
+        if (curUnread.has(key2) || allKeys.some((k) => selfKeys.has(k) || seen.has(k))) continue;
+        for (const k of allKeys) seen.add(k);
+        fresh.push({ key: key2, paper: attachLibraryMatch(paper, docs), foundAt: nowIso });
+      }
+      const nextCursor = entryDeg.size || !attempted ? entry.cursorDate : maxDate > entry.cursorDate ? maxDate : !items.length && today > entry.cursorDate ? today : entry.cursorDate;
+      newItemsCount += fresh.length;
+      upsertWatchlistEntry(db, { ...cur, ...workId && cur.workId === entry.workId ? { workId } : {}, cursorDate: cur.cursorDate === entry.cursorDate ? nextCursor : cur.cursorDate, seenKeys: [...seen].slice(-500), unread: [...fresh, ...cur.unread].slice(0, 100), lastCheckedAt: nowIso, updatedAt: nowIso });
     });
   }
-  return { entries: deps.store.withDb(false, listWatchlistEntries), checkedCount: targets.length, newItemsCount, degraded: [...allDegraded] };
+  return { entries: deps.store.withDb(false, listWatchlistEntries), checkedCount, newItemsCount, degraded: [...allDegraded] };
 }
 
 // src/server/notebook.ts
@@ -7666,14 +7681,28 @@ function apply(ctx) {
       case "deepSearch.run": {
         const op = body.op, structured = op === "deepSearch.run";
         if (req.headers.get("accept")?.includes("application/x-ndjson")) {
-          const encoder = new TextEncoder();
-          const controller = new AbortController();
-          const abort = () => controller.abort();
+          const encoder = new TextEncoder(), controller = new AbortController(), abort = () => controller.abort();
+          let closed = false;
           req.signal.addEventListener("abort", abort, { once: true });
+          if (req.signal.aborted) abort();
           const stream = new ReadableStream({
             start(sink) {
+              const closeSink = () => {
+                if (!closed) {
+                  closed = true;
+                  try {
+                    sink.close();
+                  } catch {
+                  }
+                }
+              };
               const sendLine = (value) => {
-                if (!controller.signal.aborted) sink.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
+                if (!closed && !controller.signal.aborted) try {
+                  sink.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
+                } catch {
+                  closed = true;
+                  abort();
+                }
               };
               void service(op, input, {
                 signal: controller.signal,
@@ -7688,19 +7717,17 @@ function apply(ctx) {
               }).then(
                 (result) => {
                   sendLine(structured ? { type: "result", result } : result);
-                  if (!controller.signal.aborted) sink.close();
+                  closeSink();
                 },
                 (error) => {
-                  if (!controller.signal.aborted) {
-                    const msg = error instanceof Error ? error.message : "The request failed.";
-                    sendLine({ error: msg });
-                    sink.close();
-                  }
+                  if (!closed && !controller.signal.aborted) sendLine({ error: error instanceof Error ? error.message : "The request failed." });
+                  closeSink();
                 }
               ).finally(() => req.signal.removeEventListener("abort", abort));
             },
             cancel() {
-              controller.abort();
+              closed = true;
+              abort();
             }
           });
           return new Response(stream, { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });

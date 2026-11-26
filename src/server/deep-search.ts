@@ -1,11 +1,11 @@
 import type { DeepSearchCandidate, DeepSearchClarifyResult, DeepSearchProgressEvent, DeepSearchQuestion, DeepSearchResult, DeepSearchRoundMetric, DeepSearchStage } from '../shared/deep-search-types.js';
 import type { GraphPaper, GraphSource } from '../shared/types.js';
-import { arrOf, attachLibraryMatch, cachedFetch, exploreCitationGraph, fetchJson, normTitle, oaUrl, paperCanonKey, parseArxivEntries, parseEpmcItem, parseOaWork, parseS2Paper, S2_FIELDS, s2Headers, type GraphContext } from './academic-graph.js';
+import { arrOf, attachLibraryMatch, cachedFetch, exploreCitationGraph, fetchJson, normTitle, oaUrl, paperCanonKey, paperIdentityKeys, parseArxivEntries, parseEpmcItem, parseOaWork, parseS2Paper, S2_FIELDS, s2Headers, type GraphContext } from './academic-graph.js';
 import type { Library } from './library.js';
 import { completeWithBackoff } from './library-chat.js';
 import type { ReaderModel, StreamOptions } from './reader-model.js';
 import type { ReaderStore } from './reader-store.js';
-import { isObject, ServiceError, single, type Input } from './service-types.js';
+import { isObject, readQuestionModel, ServiceError, single, type Input } from './service-types.js';
 
 interface DeepSearchDeps { store: ReaderStore; library: Library; model: ReaderModel; fetchFn?: typeof fetch; sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void> }
 interface ScoredEntry { matchScore: number; rationale: string; category: string; terms: string[]; foundRound: number }
@@ -57,9 +57,9 @@ const fallbackQuestions = (q: string): DeepSearchQuestion[] => /\p{Script=Han}/u
   : [{ id: 'focus', question: 'Which research aspect matters most?', options: ['Core methods & mechanisms', 'Empirical / clinical outcomes', 'Benchmarks & systematic reviews'] }, { id: 'window', question: 'Preferred publication time window?', options: ['Last 3 years', 'Last 5 years', 'All years including foundational works'] }, { id: 'evidence', question: 'Preferred study type?', options: ['Peer-reviewed primary studies', 'Clinical trials & cohorts', 'Include recent preprints'] }];
 
 export async function clarifyDeepSearch(deps: DeepSearchDeps, input: Input, opts?: StreamOptions): Promise<DeepSearchClarifyResult> {
-  const query = single(input.query, 'search query', 1000, true);
+  const query = single(input.query, 'search query', 1000, true), questionModel = readQuestionModel(input.questionModel);
   try {
-    const parsed = parseJson((await completeWithBackoff(deps, CLARIFY_SYS, { query }, { ...opts, questionModel: input.questionModel })).text);
+    const parsed = parseJson((await completeWithBackoff(deps, CLARIFY_SYS, { query }, { ...opts, questionModel })).text);
     const qs = arrOf(parsed?.questions).flatMap((q, i): DeepSearchQuestion[] => {
       if (!isObject(q) || typeof q.question !== 'string' || !q.question.trim()) return [];
       const options = strList(q.options, 5, 80);
@@ -74,7 +74,7 @@ class CanonicalPool {
   readonly papers = new Map<string, GraphPaper>();
   readonly #keys = new Map<string, string>();
   add(p: GraphPaper): string {
-    const t = normTitle(p.title), keys = [p.doi && 'doi:' + p.doi.toLowerCase(), p.arxivId && 'arxiv:' + p.arxivId.toLowerCase(), p.pmid && 'pmid:' + p.pmid, p.openAlexId && 'oa:' + p.openAlexId.toUpperCase(), p.s2Id && 's2:' + p.s2Id, t.length >= 8 && 'title:' + t].filter((v): v is string => Boolean(v));
+    const keys = paperIdentityKeys(p);
     const canon = keys.map(k => this.#keys.get(k)).find(Boolean) ?? paperCanonKey(p), c = this.papers.get(canon);
     this.papers.set(canon, !c ? { ...p } : { ...c, authors: c.authors.length ? c.authors : p.authors, firstAuthor: c.firstAuthor || p.firstAuthor, lastAuthor: c.lastAuthor || p.lastAuthor, year: c.year ?? p.year, venue: c.venue ?? p.venue, doi: c.doi ?? p.doi, arxivId: c.arxivId ?? p.arxivId, pmid: c.pmid ?? p.pmid, openAlexId: c.openAlexId ?? p.openAlexId, s2Id: c.s2Id ?? p.s2Id, oaPdfUrl: c.oaPdfUrl ?? p.oaPdfUrl, url: c.url ?? p.url, abstract: (c.abstract?.length ?? 0) >= (p.abstract?.length ?? 0) ? c.abstract : p.abstract, citationCount: Math.max(c.citationCount ?? 0, p.citationCount ?? 0) || c.citationCount || p.citationCount });
     for (const k of keys) this.#keys.set(k, canon);
@@ -109,17 +109,16 @@ function readAnswers(raw: unknown): Record<string, string> {
   return out;
 }
 
+const clampInt = (v: unknown, d: number, lo: number, hi: number, n: string) => { const x = v === undefined ? d : v; if (typeof x !== 'number' || !Number.isFinite(x)) throw new ServiceError(400, `Invalid ${n} count.`); return Math.min(hi, Math.max(lo, Math.round(x))); };
 export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?: (event: DeepSearchProgressEvent) => void, opts?: StreamOptions): Promise<DeepSearchResult> {
-  const query = single(input.query, 'search query', 1000, true), answers = readAnswers(input.answers);
-  const rawRounds = input.rounds === undefined ? 2 : input.rounds, rawMax = input.maxResults === undefined ? 25 : input.maxResults;
-  if (typeof rawRounds !== 'number' || !Number.isFinite(rawRounds)) throw new ServiceError(400, 'Invalid rounds count.');
-  if (typeof rawMax !== 'number' || !Number.isFinite(rawMax)) throw new ServiceError(400, 'Invalid maxResults count.');
-  const totalRounds = Math.min(3, Math.max(1, Math.round(rawRounds))), maxResults = Math.min(50, Math.max(5, Math.round(rawMax))), signal = opts?.signal, docs = await deps.library.list();
+  const query = single(input.query, 'search query', 1000, true), answers = readAnswers(input.answers), questionModel = readQuestionModel(input.questionModel);
+  const totalRounds = clampInt(input.rounds, 2, 1, 3, 'rounds'), maxResults = clampInt(input.maxResults, 25, 5, 50, 'maxResults'), signal = opts?.signal, docs = await deps.library.list();
   const ctx: GraphContext = { withDb: (w, run) => deps.store.withDb(w, run), settings: deps.store.settings(), fetchFn: deps.fetchFn, sleepFn: deps.sleepFn, docs, signal };
   const pool = new CanonicalPool(), scored = new Map<string, ScoredEntry>(), degraded = new Set<string>(), usedQ = new Set<string>(), terms = new Set<string>(), saturationCurve: DeepSearchRoundMetric[] = [];
   let roundsCompleted = 0, aborted = Boolean(signal?.aborted);
-  const emit = (round: number, stage: DeepSearchStage, newMatches: number, message: string) => {
-    const ev: DeepSearchProgressEvent = { type: 'progress', round, totalRounds, stage, evaluatedCount: scored.size, matchedCount: [...scored.values()].filter(s => s.matchScore >= 50).length, newMatches, saturationCurve: saturationCurve.map(m => ({ ...m })), degraded: [...degraded], message };
+  const buildCandidates = (): DeepSearchCandidate[] => [...scored.entries()].map(([id, s]) => ({ ...attachLibraryMatch(pool.papers.get(id)!, docs), matchScore: s.matchScore, rationale: s.rationale, category: s.category, foundRound: s.foundRound })).sort((a, b) => b.matchScore - a.matchScore || (b.citationCount ?? 0) - (a.citationCount ?? 0)).slice(0, maxResults);
+  const emit = (round: number, stage: DeepSearchStage, newMatches: number, message: string, candidates?: DeepSearchCandidate[]) => {
+    const ev: DeepSearchProgressEvent = { type: 'progress', round, totalRounds, stage, evaluatedCount: scored.size, matchedCount: [...scored.values()].filter(s => s.matchScore >= 50).length, newMatches, saturationCurve: saturationCurve.map(m => ({ ...m })), degraded: [...degraded], message, ...(candidates ? { candidates } : {}) };
     onEvent?.(ev); opts?.onDelta?.(JSON.stringify(ev));
   };
   const scoreRound = async (round: number, ids: string[]): Promise<number> => {
@@ -131,7 +130,7 @@ export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?
       if (signal?.aborted) { aborted = true; break; }
       const batch = ranked.slice(i, i + 10);
       let parsed: Input | undefined;
-      try { parsed = parseJson((await completeWithBackoff(deps, SCORE_SYS, { query, answers, papers: batch.map(([id, p]) => ({ id, title: p.title, year: p.year, venue: p.venue, abstract: (p.abstract ?? '').slice(0, 900) })) }, { signal, questionModel: input.questionModel })).text); }
+      try { parsed = parseJson((await completeWithBackoff(deps, SCORE_SYS, { query, answers, papers: batch.map(([id, p]) => ({ id, title: p.title, year: p.year, venue: p.venue, abstract: (p.abstract ?? '').slice(0, 900) })) }, { signal, questionModel })).text); }
       catch (err) { if (isAbort(err, signal)) { aborted = true; break; } }
       const byId = new Map(arrOf(parsed?.scores).filter((r): r is Input => isObject(r) && typeof r.id === 'string').map(r => [String(r.id), r]));
       for (const [id, p] of batch) {
@@ -142,6 +141,7 @@ export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?
         scored.set(id, { matchScore, rationale, category, terms: rowTerms, foundRound: round });
         if (matchScore >= 50) newMatches++;
       }
+      if (i + 10 < ranked.length && !signal?.aborted) emit(round, 'score', newMatches, `Round ${round}: evaluated ${scored.size} papers...`, buildCandidates());
     }
     return newMatches;
   };
@@ -152,7 +152,7 @@ export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?
     if (round === 1) {
       emit(1, 'decompose', 0, 'Decomposing research question into conceptual queries...');
       let queries: string[] = [];
-      try { const p = parseJson((await completeWithBackoff(deps, DECOMPOSE_SYS, { query, answers }, { signal, questionModel: input.questionModel })).text); queries = [...new Set([...strList(p?.queries, 2, 100), ...strList(p?.synonyms, 2, 80), ...strList(p?.queries, 4, 100)])].slice(0, 4); }
+      try { const p = parseJson((await completeWithBackoff(deps, DECOMPOSE_SYS, { query, answers }, { signal, questionModel })).text); queries = [...new Set([...strList(p?.queries, 2, 100), ...strList(p?.synonyms, 2, 80), ...strList(p?.queries, 4, 100)])].slice(0, 4); }
       catch (err) { if (isAbort(err, signal)) { aborted = true; break; } }
       if (!queries.length) queries = [query, ...Object.values(answers).map(v => `${query} ${v}`)].slice(0, 3);
       for (const q of queries) usedQ.add(normTitle(q));
@@ -162,10 +162,10 @@ export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?
     } else {
       emit(round, 'expand', 0, `Round ${round}: rewriting domain terms and snowballing citations...`);
       const topSeeds = [...scored.entries()].filter(([, s]) => s.matchScore >= 50).sort((a, b) => b[1].matchScore - a[1].matchScore);
-      const negSeeds = [...scored.entries()].filter(([, s]) => s.matchScore < 35).sort((a, b) => a[1].matchScore - b[1].matchScore).slice(0, 3).map(([id]) => { const p = pool.papers.get(id)!; return p.doi ?? p.arxivId ?? p.openAlexId ?? p.s2Id ?? ''; }).filter(Boolean);
+      const negSeeds = [...scored.entries()].filter(([, s]) => s.matchScore < 35).sort((a, b) => a[1].matchScore - b[1].matchScore).slice(0, 3).map(([id]) => { const p = pool.papers.get(id)!; return p.doi ?? p.arxivId ?? p.s2Id ?? p.openAlexId ?? ''; }).filter(Boolean);
       let rewriteQ: string[] = [];
       if (topSeeds.length) {
-        try { rewriteQ = strList(parseJson((await completeWithBackoff(deps, REWRITE_SYS, { originalQuery: query, discoveredTerms: [...terms].slice(0, 12), topPapers: topSeeds.slice(0, 5).map(([id]) => ({ title: pool.papers.get(id)!.title, abstract: (pool.papers.get(id)!.abstract ?? '').slice(0, 700) })) }, { signal, questionModel: input.questionModel })).text)?.queries, 3, 100); }
+        try { rewriteQ = strList(parseJson((await completeWithBackoff(deps, REWRITE_SYS, { originalQuery: query, discoveredTerms: [...terms].slice(0, 12), topPapers: topSeeds.slice(0, 5).map(([id]) => ({ title: pool.papers.get(id)!.title, abstract: (pool.papers.get(id)!.abstract ?? '').slice(0, 700) })) }, { signal, questionModel })).text)?.queries, 3, 100); }
         catch (err) { if (isAbort(err, signal)) { aborted = true; break; } }
       }
       if (!rewriteQ.length) rewriteQ = [...terms].filter(t => !usedQ.has(normTitle(t))).slice(0, 3);
@@ -183,11 +183,11 @@ export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?
     roundsCompleted = round;
     const matched = [...scored.values()].filter(s => s.matchScore >= 50).length;
     saturationCurve.push({ round, evaluated: scored.size, matched, newMatches });
-    emit(round, 'score', newMatches, `Round ${round} complete: ${matched} matches from ${scored.size} evaluated.`);
+    emit(round, 'score', newMatches, `Round ${round} complete: ${matched} matches from ${scored.size} evaluated.`, buildCandidates());
     if (aborted || signal?.aborted) { aborted = true; break; }
   }
   if (signal?.aborted) aborted = true;
-  const candidates: DeepSearchCandidate[] = [...scored.entries()].map(([id, s]) => ({ ...attachLibraryMatch(pool.papers.get(id)!, docs), matchScore: s.matchScore, rationale: s.rationale, category: s.category, foundRound: s.foundRound })).sort((a, b) => b.matchScore - a.matchScore || (b.citationCount ?? 0) - (a.citationCount ?? 0)).slice(0, maxResults);
+  const candidates = buildCandidates();
   const catCounts = new Map<string, number>();
   for (const c of candidates) if (c.category) catCounts.set(c.category, (catCounts.get(c.category) ?? 0) + 1);
   const categories = [...catCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 8);
@@ -196,7 +196,7 @@ export async function runDeepSearch(deps: DeepSearchDeps, input: Input, onEvent?
     emit(Math.max(1, roundsCompleted), 'overview', 0, 'Synthesizing executive overview...');
     try {
       const top = candidates.slice(0, 10).map((c, i) => ({ num: i + 1, title: c.title, firstAuthor: c.firstAuthor, year: c.year, matchScore: c.matchScore, rationale: c.rationale, category: c.category }));
-      const text = (await completeWithBackoff(deps, OVERVIEW_SYS, { query, answers, candidates: top }, { signal, questionModel: input.questionModel })).text.trim();
+      const text = (await completeWithBackoff(deps, OVERVIEW_SYS, { query, answers, candidates: top }, { signal, questionModel })).text.trim();
       if (text) overview = text;
     } catch (err) { if (isAbort(err, signal)) aborted = true; }
   }
