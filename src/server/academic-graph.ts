@@ -13,7 +13,7 @@ import { isObject, ServiceError, single, type Input, type PrivateSettings } from
 
 export interface GraphContext {
   withDb: <T>(writer: boolean, run: (db: DatabaseSync) => T) => T;
-  settings?: Partial<PrivateSettings>; fetchFn?: typeof fetch; sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void>; docs?: DocumentInfo[]; signal?: AbortSignal;
+  settings?: Partial<PrivateSettings>; fetchFn?: typeof fetch; sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void>; docs?: DocumentInfo[]; signal?: AbortSignal; readOnly?: boolean;
 }
 interface ResolvedWork { paper: GraphPaper; referencedIds: string[]; relatedIds: string[]; fromCache: boolean; primaryTopicId?: string; primaryTopicName?: string; publishedDate?: string }
 
@@ -77,7 +77,7 @@ export async function cachedFetch<T>(
     }
     try {
       const timeout = AbortSignal.timeout(12_000), res = await fetcher(url, { ...init, headers, signal: ctx.signal ? AbortSignal.any([timeout, ctx.signal]) : timeout });
-      if (res.ok) { const data = await parse(res), fetchedAt = Date.now(); if (!noCache) ctx.withDb(true, db => setGraphCache(db, key, source, data, ttlMs)); return { data, fromCache: false, fetchedAt }; }
+      if (res.ok) { const data = await parse(res), fetchedAt = Date.now(); if (!noCache && !ctx.readOnly) ctx.withDb(true, db => setGraphCache(db, key, source, data, ttlMs)); return { data, fromCache: false, fetchedAt }; }
       if (res.status === 404) return undefined;
       failed = true;
       if (![429, 502, 503, 504].includes(res.status) || attempt >= 2) break;

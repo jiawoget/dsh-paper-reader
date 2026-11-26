@@ -171,7 +171,7 @@ try {
           await searchInput.press('Enter');
           await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '12 / 16');
           assert.equal(await page.locator('#docSearch .doc-search-count').textContent(), '1 / 1');
-          assert.ok(await page.evaluate(() => (CSS.highlights.get('paper-find-current')?.size ?? 0) > 0 && (CSS.highlights.get('paper-find-matches')?.size ?? 0) > 0));
+          await page.waitForFunction(() => (CSS.highlights.get('paper-find-current')?.size ?? 0) > 0 && (CSS.highlights.get('paper-find-matches')?.size ?? 0) > 0);
           await page.locator('#paperScroll').focus();
           await page.keyboard.press('Alt+ArrowLeft');
           await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '6 / 16');
@@ -182,7 +182,7 @@ try {
           await page.locator('#docSearchResults .doc-search-hit').first().click();
           await page.waitForFunction(() => document.getElementById('pageCount')?.textContent === '1 / 16');
           assert.equal(await page.locator('#docSearch .doc-search-count').textContent(), '1 / 14');
-          assert.ok(await page.evaluate(() => (CSS.highlights.get('paper-find-current')?.size ?? 0) > 0));
+          await page.waitForFunction(() => (CSS.highlights.get('paper-find-current')?.size ?? 0) > 0);
           await searchInput.press('Escape');
           await page.locator('#docSearch').waitFor({ state: 'hidden' });
           assert.ok(await page.evaluate(() => !CSS.highlights.has('paper-find-matches') && !CSS.highlights.has('paper-find-current')));
