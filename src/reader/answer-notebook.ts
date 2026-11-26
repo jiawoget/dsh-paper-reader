@@ -4,7 +4,7 @@ import { paperNotebook } from './notes-panel.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
 import { markdownPassageLabel } from './passage-links.js';
-import { button, el, message, readerLabel as label, type ReaderPort } from './ui.js';
+import { button, el, message, readerLabel as label, undoLabel, type ReaderPort } from './ui.js';
 
 interface SaveState {
   entries: Map<string, NotebookInsertion>;
@@ -21,7 +21,7 @@ export class AnswerNotebookAction {
   readonly root = el('div', 'answer-notebook');
   private readonly add = el('button', 'text-btn');
   private readonly feedback = el('span', 'answer-notebook-status');
-  private readonly undo = button(label('Undo', '撤销'), () => this.remove(), 'text-btn');
+  private readonly undo = button(undoLabel(), () => this.remove(), 'text-btn');
   private readonly view = button(label('View', '查看'), () => this.entry()?.reveal(), 'text-btn');
   private excerpt?: string;
   private state: SaveState;

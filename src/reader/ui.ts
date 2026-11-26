@@ -41,6 +41,7 @@ export interface ReaderPort {
 export function readerLabel(english: string, chinese: string): string {
   return /^zh(?:-|$)/i.test(navigator.language) ? chinese : english;
 }
+export const undoLabel = () => readerLabel('Undo', '撤销');
 
 export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -145,14 +146,15 @@ export function zoteroStatusText(detail: string): string {
   return detail;
 }
 let timer: ReturnType<typeof setTimeout> | undefined;
-export function toast(text:string, action?:{label:string; run:()=>unknown}):void {
+export function toast(text:string, action?:{label:string; run:()=>unknown}|readonly {label:string; run:()=>unknown}[]):void {
   const node=byId('toast');
   const openDialog=document.querySelector<HTMLDialogElement>('dialog[open]');
   if(openDialog && node.parentElement!==openDialog) openDialog.addEventListener('close',()=>{if(node.parentElement===openDialog)document.body.append(node);},{once:true});
   (openDialog ?? document.body).append(node);
   clearTimeout(timer); node.textContent=text; node.hidden=false;
-  if(action) node.append(button(action.label,async()=>{node.hidden=true;await action.run();},'toast-action'));
-  timer=setTimeout(()=>{node.hidden=true;},action?10000:5500);
+  const actions=action?(Array.isArray(action)?action:[action]):[];
+  for(const item of actions) node.append(button(item.label,async()=>{node.hidden=true;await item.run();},'toast-action'));
+  timer=setTimeout(()=>{node.hidden=true;},actions.length?10000:5500);
 }
 export function button(label:string, fn:()=>unknown, css='btn', glyph?:Glyph):HTMLButtonElement {
   const node=el('button',css);
@@ -195,7 +197,7 @@ export async function responseJson<T>(response:Response):Promise<T> {
 export async function api<K extends keyof Operations>(op:K, payload:Operations[K][0], keepalive=false, signal?:AbortSignal):Promise<Operations[K][1]> {
   return responseJson(await fetch('../action',{method:'POST',credentials:'same-origin',cache:'no-store',keepalive,signal,headers:{'content-type':'application/json'},body:JSON.stringify({op,payload})}));
 }
-export async function apiStream<K extends 'ai'|'chat.ask'>(op:K, payload:Operations[K][0], onDelta:(delta:string)=>void, signal?:AbortSignal):Promise<Operations[K][1]> {
+export async function apiStream<K extends 'ai'|'chat.ask'|'library.chat'>(op:K, payload:Operations[K][0], onDelta:(delta:string)=>void, signal?:AbortSignal):Promise<Operations[K][1]> {
   const response = await fetch('../action', {
     method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
     headers: { 'content-type': 'application/json', accept: 'application/x-ndjson, application/json' },
@@ -206,7 +208,7 @@ export async function apiStream<K extends 'ai'|'chat.ask'>(op:K, payload:Operati
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '', finalText: string | undefined;
+  let buffer = '', finalResult: Operations[K][1] | undefined;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -216,17 +218,17 @@ export async function apiStream<K extends 'ai'|'chat.ask'>(op:K, payload:Operati
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         if (line) {
-          const frame = JSON.parse(line) as { delta?: string; text?: string; error?: string };
+          const frame = JSON.parse(line) as { delta?: string; text?: string; answer?: string; error?: string };
           if (typeof frame.error === 'string') throw new Error(frame.error);
           if (typeof frame.delta === 'string') onDelta(frame.delta);
-          if (typeof frame.text === 'string') finalText = frame.text;
+          if (typeof frame.text === 'string' || typeof frame.answer === 'string') finalResult = frame as Operations[K][1];
         }
         newline = buffer.indexOf('\n');
       }
       if (done) break;
     }
   } finally { reader.releaseLock(); }
-  if (finalText !== undefined) return { text: finalText };
+  if (finalResult !== undefined) return finalResult;
   throw new Error(readerLabel('The response ended unexpectedly.', '响应意外中断。'));
 }
 export function sourceUrl(id:string,page:number,anchor=''):string {
