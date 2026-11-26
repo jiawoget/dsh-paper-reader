@@ -1,6 +1,7 @@
 import type { DocumentInfo, ZoteroItem } from '../shared/types.js';
 import { buildCitationMetadata, buildCiteKey, formatBibTeX, formatRIS } from '../shared/citation-export.js';
 import { researchViewName } from './research/labels.js';
+import { mountReferenceCitations } from './research/reference-citations.js';
 import { settingsDialog } from './settings-dialog.js';
 import { api, bindTablist, button, byId, copyText, downloadFile, el, icon, inputField, message, readerLabel as label, safeWeb, toast, zoteroStatusText, type ReaderPort } from './ui.js';
 
@@ -81,6 +82,7 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
     }
     graphSection.append(el('h3', '', researchViewName('citation-map')), graphRow);
     parent.append(graphSection);
+    mountReferenceCitations(app, doc, parent);
   }
   const desktop = app.state.settings.zoteroMode === 'desktop';
   const legacyKey = 'reader.zotero.' + app.state.settings.zoteroLibraryType + ':' + app.state.settings.zoteroLibraryId + ':' + doc.id;

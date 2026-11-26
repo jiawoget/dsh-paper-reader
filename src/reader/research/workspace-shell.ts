@@ -1,10 +1,7 @@
-import type { DocPageHit, TopicRecord } from '../../shared/types.js';
-import { api, byId, el, message, toast } from '../ui.js';
+import { byId, el, message, toast } from '../ui.js';
 import { researchIcon } from './icons.js';
 import { RESEARCH_VIEWS, researchText, researchViewMeta, researchViewName, type ResearchViewId } from './labels.js';
 import type { InspectTarget, ResearchOpenContext, ResearchShellContext, ResearchViewModule, ResearchWorkspaceHost, ReturnAnchor, WorkspaceSnapshot } from './state.js';
-
-interface DefaultViewState { query: string; hits: DocPageHit[]; searched: boolean; topic: string }
 
 const COMPACT_BP = 1200;
 
@@ -23,7 +20,6 @@ export class ResearchWorkspace {
   private opened = false; private overlayOpen = false; private activeView: ResearchViewId = 'deep-search'; private activeTopicTag = '';
   private returnAnchor?: ReturnAnchor; private snapshot?: WorkspaceSnapshot; private openCtx?: ResearchOpenContext;
   private activeModule?: ResearchViewModule; private viewSeq = 0;
-  private defaultState: DefaultViewState = { query: '', hits: [], searched: false, topic: '' };
 
   constructor(private readonly host: ResearchWorkspaceHost) {
     this.root.id = 'researchWorkspace'; this.root.hidden = true; this.root.ariaLabel = researchText.workspace();
@@ -88,7 +84,7 @@ export class ResearchWorkspace {
   }
   async inspectInReader(target: InspectTarget): Promise<void> {
     const seq = ++this.viewSeq;
-    const viewState = this.activeModule ? this.activeModule.saveState?.() : { ...this.defaultState, topic: this.activeTopicTag };
+    const viewState = this.activeModule?.saveState?.();
     this.activeModule?.unmount?.(); this.activeModule = undefined;
     this.snapshot = { activeView: this.activeView, viewState, scrollTop: this.main.scrollTop };
     this.opened = this.overlayOpen = false; this.root.hidden = true; byId('reader').hidden = false;
@@ -138,72 +134,17 @@ export class ResearchWorkspace {
     for (const [id, btn] of this.navButtons) { if (id === view) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current'); }
     this.syncRail(); this.main.replaceChildren();
     const mod = this.modules.get(view);
-    if (mod) {
-      this.activeModule = mod;
-      const ctx: ResearchShellContext = {
-        activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
-        openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
-        inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted), refreshNotebook: docId => this.host.refreshNotebook?.(docId)
-      };
-      void Promise.resolve(mod.mount(this.main, ctx)).then(() => {
-        if (seq !== this.viewSeq) return;
-        if (restoredState !== undefined) mod.restoreState?.(restoredState);
-        this.main.scrollTop = scrollTop;
-      }).catch(error => { if (seq === this.viewSeq) toast(message(error)); });
-      return;
-    }
-    this.mountDefaultView(view, seq, restoredState as DefaultViewState | undefined);
-    this.main.scrollTop = scrollTop;
-  }
-
-  private mountDefaultView(view: ResearchViewId, seq: number, restored?: DefaultViewState): void {
-    let activeSearch = 0;
-    if (restored) { this.defaultState = { ...restored }; this.activeTopicTag = restored.topic; }
-    const wrap = el('section', 'rw-shell-view'), head = el('div', 'rw-view-head'), topicBar = el('div', 'rw-topic-bar');
-    const topicLabel = el('label', 'rw-topic-label', researchText.topicLabel()), topicSelect = el('select', 'rw-topic-select');
-    topicSelect.id = 'rwTopicSelect'; topicLabel.htmlFor = topicSelect.id;
-    const newTopicBtn = el('button', 'btn rw-topic-add-btn', '+ ' + researchText.newTopic()); newTopicBtn.type = 'button';
-    const topicForm = el('form', 'rw-topic-form'), topicInput = el('input', 'search rw-topic-input'), topicSave = el('button', 'btn primary', researchText.saveTopic());
-    topicForm.hidden = true; topicInput.type = 'text'; topicInput.required = true; topicInput.placeholder = researchText.topicPlaceholder(); topicInput.ariaLabel = researchText.newTopic(); topicSave.type = 'submit';
-    topicForm.append(topicInput, topicSave); topicBar.append(topicLabel, topicSelect, newTopicBtn); head.append(el('h1', 'rw-view-title', researchViewName(view)), topicBar);
-    const searchForm = el('form', 'rw-search-form'), searchInput = el('input', 'search rw-search-input'), searchBtn = el('button', 'btn primary', researchText.searchAction());
-    searchInput.type = 'search'; searchInput.value = restored ? this.defaultState.query : (this.openCtx?.query ?? this.defaultState.query);
-    searchInput.ariaLabel = researchText.searchLabel(); searchInput.placeholder = researchText.searchPlaceholder(); searchBtn.type = 'submit';
-    searchForm.append(searchInput, searchBtn);
-    const status = el('p', 'rw-status', researchText.searchHint()), results = el('ul', 'rw-results');
-    status.setAttribute('role', 'status'); wrap.append(head, topicForm, searchForm, status, results); this.main.append(wrap);
-    const renderTopics = (topics: TopicRecord[]) => { topicSelect.replaceChildren(new Option(researchText.allTopics(), ''), ...topics.map(t => new Option(t.name, t.tag))); topicSelect.value = this.activeTopicTag; };
-    const renderHits = (hits: DocPageHit[], searched: boolean) => {
-      results.replaceChildren(); status.textContent = searched ? (hits.length ? '' : researchText.searchEmpty()) : researchText.searchHint();
-      for (const hit of hits) {
-        const li = el('li'), btn = el('button', 'rw-hit'), top = el('div', 'rw-hit-head');
-        btn.type = 'button'; top.append(el('strong', 'rw-hit-title', hit.docTitle), el('span', 'rw-hit-page', researchText.pageBadge(hit.page)));
-        btn.append(top, el('p', 'rw-hit-snippet', hit.snippet));
-        btn.addEventListener('click', () => { void this.inspectInReader({ docId: hit.docId, page: hit.page, quote: hit.snippet }).catch(err => toast(message(err))); });
-        li.append(btn); results.append(li);
-      }
+    if (!mod) return;
+    this.activeModule = mod;
+    const ctx: ResearchShellContext = {
+      activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
+      openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
+      inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted), refreshNotebook: docId => this.host.refreshNotebook?.(docId)
     };
-    renderTopics([]); renderHits(this.defaultState.hits, this.defaultState.searched);
-    void api('topics.list', {}).then(({ topics }) => { if (seq === this.viewSeq) renderTopics(topics); }).catch(() => undefined);
-    topicSelect.addEventListener('change', () => { this.activeTopicTag = this.defaultState.topic = topicSelect.value; });
-    searchInput.addEventListener('input', () => { this.defaultState.query = searchInput.value; });
-    newTopicBtn.addEventListener('click', () => { topicForm.hidden = !topicForm.hidden; if (!topicForm.hidden) topicInput.focus(); });
-    topicForm.addEventListener('submit', async event => {
-      event.preventDefault(); const name = topicInput.value.trim(); if (!name) return; topicSave.disabled = true;
-      try { const { topic } = await api('topics.save', { name }), { topics } = await api('topics.list', {}); if (seq !== this.viewSeq) return; this.activeTopicTag = this.defaultState.topic = topic.tag; renderTopics(topics); topicInput.value = ''; topicForm.hidden = true; }
-      catch (err) { if (seq === this.viewSeq) toast(message(err)); } finally { topicSave.disabled = false; }
-    });
-    searchForm.addEventListener('submit', async event => {
-      event.preventDefault(); const query = searchInput.value.trim(), topic = this.activeTopicTag, searchSeq = ++activeSearch; this.defaultState.query = query;
-      if (!query) { searchBtn.disabled = false; this.defaultState.hits = []; this.defaultState.searched = false; renderHits([], false); return; }
-      searchBtn.disabled = true; status.textContent = researchText.searching();
-      try {
-        const docIds = topic ? (await api('library.list', {})).docs.filter(d => d.meta?.tags?.includes(topic)).map(d => d.id) : undefined;
-        const { hits } = await api('pages.search', { query, ...(docIds ? { docIds } : {}), limit: 30 });
-        if (seq !== this.viewSeq || searchSeq !== activeSearch) return;
-        this.defaultState = { query, hits, searched: true, topic }; renderHits(hits, true);
-      } catch (err) { if (seq === this.viewSeq && searchSeq === activeSearch) { toast(message(err)); status.textContent = message(err); } }
-      finally { if (searchSeq === activeSearch) searchBtn.disabled = false; }
-    });
+    void Promise.resolve(mod.mount(this.main, ctx)).then(() => {
+      if (seq !== this.viewSeq) return;
+      if (restoredState !== undefined) mod.restoreState?.(restoredState);
+      this.main.scrollTop = scrollTop;
+    }).catch(error => { if (seq === this.viewSeq) toast(message(error)); });
   }
 }

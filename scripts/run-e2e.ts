@@ -10,7 +10,7 @@ const DEFAULT_SUITES = [
   'test:zotero-desktop', 'test:web-zotero', 'test:book-reading', 'test:sidebar-contents',
   'test:target-language', 'test:citation-export', 'test:dark-theme-a11y',
   'test:shortcuts-i18n', 'test:collections-delete-hygiene', 'test:tier3-cross-feature',
-  'test:tier4-real-world', 'test:research-workspace'
+  'test:tier4-real-world', 'test:research-workspace', 'test:research-citations'
 ];
 
 interface SuiteResult {

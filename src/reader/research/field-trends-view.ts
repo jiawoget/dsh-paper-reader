@@ -4,6 +4,7 @@ import {
 } from '../../shared/research-types.js';
 import { api, el, message, readerLabel as t, toast } from '../ui.js';
 import { FieldTrendsDrilldown, type DrilldownSavedState } from './field-trends-drilldown.js';
+import { researchText } from './labels.js';
 import { formatCachedAt, formatDegradedSources, isAbortError, mkBtn } from './paper-intake.js';
 import type { ResearchShellContext, ResearchViewModule } from './state.js';
 
@@ -203,7 +204,7 @@ export function createFieldTrendsView(): ResearchViewModule {
       form.addEventListener('submit', e => { e.preventDefault(); void runQuery(queryInput?.value ?? ''); }); form.append(queryInput, submitBtn, filtersBtn);
       const filters = el('div', 'ft-filters');
       sourceSelect = el('select', 'ft-select ft-source'); sourceSelect.ariaLabel = t('Data source', '数据源');
-      sourceSelect.append(new Option('OpenAlex', 'openalex'), new Option('Europe PMC', 'europepmc'), new Option(t('All', '全部'), 'all'));
+      sourceSelect.append(new Option('OpenAlex', 'openalex'), new Option('Europe PMC', 'europepmc'), new Option(researchText.all(), 'all'));
       sourceSelect.addEventListener('change', () => { source = sourceSelect!.value as TrendSource; if (query.trim()) void runQuery(query); else syncControls(); });
       const metricGroup = el('div', 'ft-seg'); metricGroup.setAttribute('role', 'group'); metricGroup.setAttribute('aria-label', t('Heatmap metric', '热力图指标')); metricBtns.clear();
       for (const [m, fn] of METRICS) { const b = mkBtn('btn ft-seg-btn', fn(), () => { if (metric !== m) { metric = m; renderMatrix(); } }); b.dataset.metric = m; metricBtns.set(m, b); metricGroup.append(b); }
