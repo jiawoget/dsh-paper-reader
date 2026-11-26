@@ -25,6 +25,7 @@ async function run(): Promise<void> {
       assert.deepEqual((await ws.locator('.rw-nav-btn .rw-label').allTextContents()).map(s => s.trim()), EN_VIEWS);
       assert.equal(await ws.locator('.rw-nav-btn[aria-current="page"]').getAttribute('data-view'), 'deep-search');
       assert.ok(Math.abs((await ws.locator('.rw-rail').boundingBox())!.width - 220) <= 2);
+      assert.ok(await ws.locator('.rw-collapse-btn .rw-label').evaluate(el => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth));
 
       for (const denseId of ['citation-map', 'review-table', 'field-trends']) {
         await ws.locator(`.rw-nav-btn[data-view="${denseId}"]`).click();
@@ -41,11 +42,14 @@ async function run(): Promise<void> {
       assert.equal(await ws.getAttribute('data-rail-overlay'), 'open');
       assert.ok(Math.abs((await ws.locator('.rw-rail').boundingBox())!.width - 220) <= 2);
       assert.ok(Math.abs((await ws.locator('.rw-main').boundingBox())!.width - mainW) <= 1);
+      assert.ok(await ws.locator('.rw-collapse-btn .rw-label').evaluate(el => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth));
       await page.keyboard.press('Escape');
       assert.equal(await ws.getAttribute('data-rail-overlay'), 'closed'); assert.equal(await ws.isVisible(), true);
       await page.keyboard.press('Escape'); await ws.waitFor({ state: 'hidden' });
       assert.equal((await page.locator('#pageCount').innerText()).trim(), '5 / 16');
+      await page.locator('#more').click(); await page.locator('#menu').waitFor({ state: 'visible' });
       await page.keyboard.press('Control+Shift+R'); await ws.waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#menu').isVisible(), false);
       await page.keyboard.press('Control+Shift+R'); await ws.waitFor({ state: 'hidden' });
       await page.locator('#library').click(); await page.locator('.library-workspace-btn').click();
       await ws.waitFor({ state: 'visible' }); assert.equal(await page.locator('#dialog').isVisible(), false);
@@ -84,6 +88,14 @@ async function run(): Promise<void> {
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.rw-mobile-select').selectOption('review-table');
       assert.equal((await ws.locator('.rw-view-title').innerText()).trim(), 'Review Table');
+      await ws.locator('.rw-hit', { hasText: 'p. 6' }).first().click();
+      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      const pillFit = await page.evaluate(() => {
+        const go = document.querySelector('.return-workspace-go')!, pill = document.getElementById('returnWorkspace')!, bar = document.getElementById('mobileBar')!;
+        return { sw: go.scrollWidth, cw: go.clientWidth, h: go.getBoundingClientRect().height, clear: pill.getBoundingClientRect().bottom <= bar.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.ok(pillFit.sw <= pillFit.cw && pillFit.h >= 44 && pillFit.clear && pillFit.ov <= 1, JSON.stringify(pillFit));
+      await page.locator('.return-workspace-go').click(); await ws.waitFor({ state: 'visible' });
       await ws.locator('.rw-mobile-collapse').click(); await ws.waitFor({ state: 'hidden' });
       await assertMobileChromeBudget(page, 844);
       await ctx.close();
@@ -92,6 +104,7 @@ async function run(): Promise<void> {
       const zhPage = await openReaderPage(zhCtx, host, '?doc=pagedattention&page=5', { tag: 'rw-zh', scope: { allowZotero503: true }, pageErrors, consoleErrors });
       await zhPage.keyboard.press('Control+Shift+R'); await zhPage.locator('#researchWorkspace').waitFor({ state: 'visible' });
       assert.deepEqual((await zhPage.locator('.rw-nav-btn .rw-label').allTextContents()).map(s => s.trim()), ZH_VIEWS);
+      assert.ok(await zhPage.locator('.rw-collapse-btn .rw-label').evaluate(el => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth));
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '#rwTopicSelect option:not([value=""])'), 'zh-CN Research Workspace');
       await zhCtx.close();
       assert.deepEqual(pageErrors, []); assert.deepEqual(consoleErrors, []);

@@ -10,7 +10,7 @@ export interface WorkspaceSnapshot { activeView: ResearchViewId; viewState?: unk
 export interface ResearchShellContext {
   activeDocId: () => string; activeTopic: () => string; setActiveTopic: (tag: string) => void;
   openContext: () => ResearchOpenContext | undefined; openView: (view: ResearchViewId, ctx?: ResearchOpenContext) => void;
-  inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string) => void;
+  inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void;
 }
 
 export interface ResearchViewModule {
@@ -20,7 +20,7 @@ export interface ResearchViewModule {
 }
 
 export interface ResearchWorkspaceHost {
-  activeDocId: () => string; capturePosition: () => ReturnAnchor; restorePosition: (anchor: ReturnAnchor) => Promise<void>;
+  activeDocId: () => string; prepareOpen: () => void; capturePosition: () => ReturnAnchor; restorePosition: (anchor: ReturnAnchor) => Promise<void>;
   inspectFromWorkspace: (target: InspectTarget, returnAnchor?: ReturnAnchor) => Promise<void>; focusAfterCollapse: () => void;
 }
 
@@ -32,7 +32,7 @@ export function locateQuoteInView(view: PageView | undefined, quote: string): bo
   if (!needle) return false;
   const direct = view.blocks.find(block => norm(block.text).includes(needle));
   if (direct) return view.locate(direct.id, cleaned) || view.locate(direct.id);
-  const tokens = needle.split(/[^a-z0-9\u4e00-\u9fff]+/i).filter(tok => tok.length >= 3);
+  const tokens = [...new Set(needle.split(/[^a-z0-9\u4e00-\u9fff]+/i).filter(tok => tok.length >= 3))];
   if (!tokens.length) return false;
   let best = view.blocks[0], bestScore = 0;
   for (const block of view.blocks) {
@@ -41,6 +41,6 @@ export function locateQuoteInView(view: PageView | undefined, quote: string): bo
     if (score > bestScore) { bestScore = score; best = block; }
   }
   if (!bestScore) return false;
-  const phrase = cleaned.split(/[.;!?\n]/).map(s => s.trim()).find(s => s.length >= 8 && norm(best.text).includes(norm(s)));
+  const phrase = cleaned.split(/[.;!?。；！？\n]/).map(s => s.trim()).find(s => s.length >= 8 && norm(best.text).includes(norm(s)));
   return (phrase ? view.locate(best.id, phrase) : false) || view.locate(best.id);
 }

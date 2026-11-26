@@ -120,7 +120,8 @@ class Reader implements ReaderPort {
   });
   private readonly research = new ResearchWorkspace({
     activeDocId: () => this.doc.id,
-    capturePosition: () => { this.card.close(); this.closeMenu(); return this.readingPosition(true); },
+    prepareOpen: () => { this.card.close(); this.closeMenu(); this.cancelCapture(false); this.cancelPin(); this.marks.closePageEditor(); },
+    capturePosition: () => this.readingPosition(true),
     restorePosition: anchor => this.restoreReading(anchor),
     inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
     focusAfterCollapse: () => (this.desk.notebookOpen ? byId('expandResearch') : byId('library')).focus({ preventScroll: true })
@@ -280,7 +281,7 @@ class Reader implements ReaderPort {
   }
   discardDocument(docId: string): void {
     discardNotebook(this, docId);
-    this.research.notifyDocumentMutated(docId);
+    this.research.notifyDocumentMutated(docId, true);
     if (this.doc.id === docId) {
       this.jumpHistory.clear(); this.pins.clear(); this.search.reset(); this.leaveBookReading?.(false); this.leaveProgress?.(false);
       this.leaveBookReading = undefined; this.leaveProgress = undefined;
@@ -439,9 +440,8 @@ class Reader implements ReaderPort {
       }
     }catch(error){
       if(version!==this.epoch)return;
-      if(this.view && this.doc.book) {
-        byId('loading').hidden=true;
-      } else byId('loading').textContent=message(error);
+      if(this.view) byId('loading').hidden=true;
+      else byId('loading').textContent=message(error);
       throw error;
     }finally{if(this.navigating===version)this.navigating=undefined;}
   }
@@ -645,7 +645,7 @@ class Reader implements ReaderPort {
     finally { this.attachingPdf = false; }
   }
   private async handleAttachedPdf(upgraded: DocumentInfo): Promise<void> {
-    this.research.notifyDocumentMutated(upgraded.id);
+    this.research.notifyDocumentMutated(upgraded.id, false);
     await this.navigate(upgraded.id, 1, '', '', undefined, undefined, { opened: upgraded, forceReload: true, skipHistory: true });
     toast(label('PDF attached and indexed.', '已附加 PDF 并建立全文索引。'), {
       label: label('Re-extract matrix cells', '重抽该篇矩阵列'),
@@ -779,9 +779,9 @@ class Reader implements ReaderPort {
   openResearchWorkspace(view?: ResearchViewId, ctx?: ResearchOpenContext): void { this.research.open(view, ctx); }
   private toggleResearchWorkspace(): void { if (this.research.isOpen()) void this.research.collapse(); else this.research.open(); }
   private async inspectFromWorkspace(target: InspectTarget, returnAnchor?: ReturnAnchor): Promise<void> {
-    const origin = returnAnchor ?? this.readingPosition(false);
-    if (origin.doc !== target.docId || origin.page !== target.page) this.jumpHistory.push(origin);
+    const origin = returnAnchor ?? this.readingPosition(false); this.desk.dismissDrawer();
     await this.navigate(target.docId, target.page, target.anchor ?? '', target.quote ?? '', undefined, undefined, { keepHistory: true, skipHistory: true });
+    if (this.doc.id === target.docId && (origin.doc !== this.doc.id || origin.page !== this.page)) this.jumpHistory.push(origin);
   }
   private async restoreReading(initial:ReadingPosition):Promise<void> {
     if(initial.doc!==this.doc.id || initial.page!==this.page)await this.navigate(initial.doc,initial.page,'','',undefined,undefined,{skipHistory:true,keepHistory:true});

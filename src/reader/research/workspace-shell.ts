@@ -22,7 +22,7 @@ export class ResearchWorkspace {
   private readonly railPref: Record<'dense' | 'regular', boolean | undefined> = { dense: undefined, regular: undefined };
   private opened = false; private overlayOpen = false; private activeView: ResearchViewId = 'deep-search'; private activeTopicTag = '';
   private returnAnchor?: ReturnAnchor; private snapshot?: WorkspaceSnapshot; private openCtx?: ResearchOpenContext;
-  private activeModule?: ResearchViewModule; private defaultReq = 0;
+  private activeModule?: ResearchViewModule; private viewSeq = 0;
   private defaultState: DefaultViewState = { query: '', hits: [], searched: false, topic: '' };
 
   constructor(private readonly host: ResearchWorkspaceHost) {
@@ -33,7 +33,7 @@ export class ResearchWorkspace {
     mobileCollapse.type = 'button'; mobileCollapse.ariaLabel = mobileCollapse.title = researchText.collapse();
     mobileCollapse.append(researchIcon('collapse', 18)); mobileCollapse.addEventListener('click', () => { void this.collapse(); });
     this.mobileSelect.ariaLabel = researchText.viewsNav();
-    this.mobileSelect.addEventListener('change', () => this.switchView(this.mobileSelect.value as ResearchViewId));
+    this.mobileSelect.addEventListener('change', () => { this.openCtx = undefined; this.switchView(this.mobileSelect.value as ResearchViewId); });
     mobileBar.append(mobileCollapse, this.mobileSelect);
     const railHead = el('div', 'rw-rail-head'), collapseBtn = el('button', 'rw-collapse-btn');
     collapseBtn.type = 'button'; collapseBtn.ariaLabel = collapseBtn.title = collapseBtn.dataset.tooltip = researchText.collapse();
@@ -47,7 +47,7 @@ export class ResearchWorkspace {
       const name = researchViewName(view.id), btn = el('button', 'rw-nav-btn');
       btn.type = 'button'; btn.dataset.view = view.id; btn.ariaLabel = btn.title = btn.dataset.tooltip = name;
       btn.append(researchIcon(view.id, 18), el('span', 'rw-label', name));
-      btn.addEventListener('click', () => { if (this.overlayOpen) this.overlayOpen = false; this.switchView(view.id); });
+      btn.addEventListener('click', () => { this.openCtx = undefined; if (this.overlayOpen) this.overlayOpen = false; this.switchView(view.id); });
       this.navButtons.set(view.id, btn); nav.append(btn); this.mobileSelect.append(new Option(name, view.id));
     }
     this.rail.append(railHead, nav); this.root.append(mobileBar, this.rail, this.backdrop, this.main); byId('reader').after(this.root);
@@ -63,9 +63,13 @@ export class ResearchWorkspace {
 
   registerView(mod: ResearchViewModule): void { this.modules.set(mod.id, mod); }
   isOpen(): boolean { return this.opened; }
-  notifyDocumentMutated(docId: string): void { this.activeModule?.onDocumentMutated?.(docId); }
+  notifyDocumentMutated(docId: string, deleted = false): void {
+    if (deleted && this.returnAnchor?.doc === docId) this.returnAnchor = undefined;
+    this.activeModule?.onDocumentMutated?.(docId);
+  }
   open(view?: ResearchViewId, ctx?: ResearchOpenContext): void {
     if (!this.opened && !view && !ctx && this.snapshot) { this.resumeFromPill(); return; }
+    this.host.prepareOpen();
     if (!this.opened && !this.returnAnchor) this.returnAnchor = this.host.capturePosition();
     this.returnPill.hidden = true; this.opened = true; this.openCtx = ctx;
     if (ctx?.topic !== undefined) this.activeTopicTag = ctx.topic;
@@ -74,20 +78,25 @@ export class ResearchWorkspace {
   }
   async collapse(): Promise<void> {
     if (!this.opened) return;
+    ++this.viewSeq;
     this.activeModule?.unmount?.(); this.activeModule = undefined;
     this.opened = this.overlayOpen = false; this.root.hidden = this.returnPill.hidden = true; this.snapshot = undefined;
     byId('reader').hidden = false;
     const anchor = this.returnAnchor; this.returnAnchor = undefined;
-    if (anchor) await this.host.restorePosition(anchor);
+    if (anchor) { try { await this.host.restorePosition(anchor); } catch (err) { toast(message(err)); } }
     this.host.focusAfterCollapse();
   }
   async inspectInReader(target: InspectTarget): Promise<void> {
+    const seq = ++this.viewSeq;
     const viewState = this.activeModule ? this.activeModule.saveState?.() : { ...this.defaultState, topic: this.activeTopicTag };
+    this.activeModule?.unmount?.(); this.activeModule = undefined;
     this.snapshot = { activeView: this.activeView, viewState, scrollTop: this.main.scrollTop };
     this.opened = this.overlayOpen = false; this.root.hidden = true; byId('reader').hidden = false;
+    try { await this.host.inspectFromWorkspace(target, this.returnAnchor); }
+    catch (error) { if (seq === this.viewSeq && this.snapshot) this.resumeFromPill(); throw error; }
+    if (seq !== this.viewSeq || !this.snapshot) return;
     const text = researchText.returnTo(researchViewName(this.activeView));
     this.returnGo.textContent = '← ' + text; this.returnGo.ariaLabel = text; this.returnPill.hidden = false;
-    await this.host.inspectFromWorkspace(target, this.returnAnchor);
   }
 
   handleEscape(): boolean {
@@ -100,10 +109,10 @@ export class ResearchWorkspace {
   }
 
   private resumeFromPill(): void {
+    this.host.prepareOpen();
     const snap = this.snapshot; this.snapshot = undefined; this.returnPill.hidden = true; this.opened = true;
     byId('reader').hidden = true; this.root.hidden = false;
-    this.switchView(snap?.activeView ?? this.activeView, snap?.viewState);
-    if (snap) this.main.scrollTop = snap.scrollTop;
+    this.switchView(snap?.activeView ?? this.activeView, snap?.viewState, snap?.scrollTop ?? 0);
     this.main.focus({ preventScroll: true });
   }
 
@@ -123,7 +132,8 @@ export class ResearchWorkspace {
     this.railToggle.setAttribute('aria-expanded', String(expanded)); this.railToggle.ariaLabel = this.railToggle.title = this.railToggle.dataset.tooltip = tip;
   }
 
-  private switchView(view: ResearchViewId, restoredState?: unknown): void {
+  private switchView(view: ResearchViewId, restoredState?: unknown, scrollTop = 0): void {
+    const seq = ++this.viewSeq;
     this.activeModule?.unmount?.(); this.activeModule = undefined; this.activeView = view; this.mobileSelect.value = view;
     for (const [id, btn] of this.navButtons) { if (id === view) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current'); }
     this.syncRail(); this.main.replaceChildren();
@@ -133,16 +143,21 @@ export class ResearchWorkspace {
       const ctx: ResearchShellContext = {
         activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
         openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
-        inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: docId => this.notifyDocumentMutated(docId)
+        inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted)
       };
-      void Promise.resolve(mod.mount(this.main, ctx)).then(() => { if (this.activeModule === mod && restoredState !== undefined) mod.restoreState?.(restoredState); }).catch(error => toast(message(error)));
+      void Promise.resolve(mod.mount(this.main, ctx)).then(() => {
+        if (seq !== this.viewSeq) return;
+        if (restoredState !== undefined) mod.restoreState?.(restoredState);
+        this.main.scrollTop = scrollTop;
+      }).catch(error => { if (seq === this.viewSeq) toast(message(error)); });
       return;
     }
-    this.mountDefaultView(view, restoredState as DefaultViewState | undefined);
+    this.mountDefaultView(view, seq, restoredState as DefaultViewState | undefined);
+    this.main.scrollTop = scrollTop;
   }
 
-  private mountDefaultView(view: ResearchViewId, restored?: DefaultViewState): void {
-    const req = ++this.defaultReq;
+  private mountDefaultView(view: ResearchViewId, seq: number, restored?: DefaultViewState): void {
+    let activeSearch = 0;
     if (restored) { this.defaultState = { ...restored }; this.activeTopicTag = restored.topic; }
     const wrap = el('section', 'rw-shell-view'), head = el('div', 'rw-view-head'), topicBar = el('div', 'rw-topic-bar');
     const topicLabel = el('label', 'rw-topic-label', researchText.topicLabel()), topicSelect = el('select', 'rw-topic-select');
@@ -169,25 +184,26 @@ export class ResearchWorkspace {
       }
     };
     renderTopics([]); renderHits(this.defaultState.hits, this.defaultState.searched);
-    void api('topics.list', {}).then(({ topics }) => { if (req === this.defaultReq) renderTopics(topics); }).catch(() => undefined);
+    void api('topics.list', {}).then(({ topics }) => { if (seq === this.viewSeq) renderTopics(topics); }).catch(() => undefined);
     topicSelect.addEventListener('change', () => { this.activeTopicTag = this.defaultState.topic = topicSelect.value; });
     searchInput.addEventListener('input', () => { this.defaultState.query = searchInput.value; });
     newTopicBtn.addEventListener('click', () => { topicForm.hidden = !topicForm.hidden; if (!topicForm.hidden) topicInput.focus(); });
     topicForm.addEventListener('submit', async event => {
       event.preventDefault(); const name = topicInput.value.trim(); if (!name) return; topicSave.disabled = true;
-      try { const { topic } = await api('topics.save', { name }), { topics } = await api('topics.list', {}); if (req !== this.defaultReq) return; this.activeTopicTag = this.defaultState.topic = topic.tag; renderTopics(topics); topicInput.value = ''; topicForm.hidden = true; }
-      catch (err) { toast(message(err)); } finally { topicSave.disabled = false; }
+      try { const { topic } = await api('topics.save', { name }), { topics } = await api('topics.list', {}); if (seq !== this.viewSeq) return; this.activeTopicTag = this.defaultState.topic = topic.tag; renderTopics(topics); topicInput.value = ''; topicForm.hidden = true; }
+      catch (err) { if (seq === this.viewSeq) toast(message(err)); } finally { topicSave.disabled = false; }
     });
     searchForm.addEventListener('submit', async event => {
-      event.preventDefault(); const query = searchInput.value.trim(); this.defaultState.query = query;
-      if (!query) { this.defaultState.hits = []; this.defaultState.searched = false; renderHits([], false); return; }
+      event.preventDefault(); const query = searchInput.value.trim(), topic = this.activeTopicTag, searchSeq = ++activeSearch; this.defaultState.query = query;
+      if (!query) { searchBtn.disabled = false; this.defaultState.hits = []; this.defaultState.searched = false; renderHits([], false); return; }
       searchBtn.disabled = true; status.textContent = researchText.searching();
       try {
-        const docIds = this.activeTopicTag ? (await api('library.list', {})).docs.filter(d => d.meta?.tags?.includes(this.activeTopicTag)).map(d => d.id) : undefined;
+        const docIds = topic ? (await api('library.list', {})).docs.filter(d => d.meta?.tags?.includes(topic)).map(d => d.id) : undefined;
         const { hits } = await api('pages.search', { query, ...(docIds ? { docIds } : {}), limit: 30 });
-        if (req !== this.defaultReq) return;
-        this.defaultState = { query, hits, searched: true, topic: this.activeTopicTag }; renderHits(hits, true);
-      } catch (err) { toast(message(err)); status.textContent = message(err); } finally { searchBtn.disabled = false; }
+        if (seq !== this.viewSeq || searchSeq !== activeSearch) return;
+        this.defaultState = { query, hits, searched: true, topic }; renderHits(hits, true);
+      } catch (err) { if (seq === this.viewSeq && searchSeq === activeSearch) { toast(message(err)); status.textContent = message(err); } }
+      finally { if (searchSeq === activeSearch) searchBtn.disabled = false; }
     });
   }
 }
