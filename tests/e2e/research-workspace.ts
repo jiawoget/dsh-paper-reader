@@ -86,8 +86,8 @@ async function run(): Promise<void> {
       const mob = await ws.evaluate(() => ({ barH: document.querySelector('.rw-mobile-bar')!.getBoundingClientRect().height, ov: document.documentElement.scrollWidth - innerWidth }));
       assert.ok(mob.barH <= 56 && mob.barH / 844 <= 0.18 && mob.ov <= 1, JSON.stringify(mob));
       await assertMobilePanelTargets(page, '#researchWorkspace');
-      await ws.locator('.rw-mobile-select').selectOption('review-table');
-      assert.equal((await ws.locator('.rw-view-title').innerText()).trim(), 'Review Table');
+      await ws.locator('.rw-mobile-select').selectOption('citations');
+      assert.equal((await ws.locator('.rw-view-title').innerText()).trim(), 'Citations');
       await ws.locator('.rw-hit', { hasText: 'p. 6' }).first().click();
       await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
       const pillFit = await page.evaluate(() => {
@@ -322,6 +322,74 @@ async function run(): Promise<void> {
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
       await page.unroute('**/api/paper-reader/action');
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await ws.locator('.rw-nav-btn[data-view="review-table"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
+      assert.equal(await ws.getAttribute('data-rail-collapsed'), 'true'); assert.equal(await ws.locator('.rt-inspector').isVisible(), false);
+      assert.ok(await ws.evaluate(() => document.querySelector('.rt-col-paper')!.getBoundingClientRect().width / document.querySelector('.rt-main-pane')!.getBoundingClientRect().width <= 0.31));
+      assert.ok((await ws.locator('.rt-src-badge.is-pdf').count()) >= 1 && (await ws.locator('.rt-src-badge.is-abstract').count()) >= 1);
+
+      await ws.locator('.rt-step-btn[data-step="screening"]').click();
+      for (const crit of ['LLM serving', 'Open weights']) {
+        await ws.locator('.rt-crit-in').fill(crit); await ws.locator('.rt-crit-add').click();
+        await ws.locator('.rt-crit-chip', { hasText: crit }).waitFor({ state: 'visible' });
+      }
+      await ws.locator('.rt-screen-run').click();
+      await ws.locator('.rt-part[data-part="excluded"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      assert.ok((await ws.locator('.rt-threshold').boundingBox())!.height >= 24);
+      await ws.locator('.rt-threshold').fill('40');
+      await ws.locator('.rt-part[data-part="included"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      await ws.locator('.rt-strict-btn').click();
+      await ws.locator('.rt-part[data-part="excluded"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      await ws.locator('.rt-srow[data-doc-id="pagedattention"] .rt-dec-btn[data-decision="yes"]').click();
+      await ws.locator('.rt-part[data-part="included"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      await ws.locator('.rt-save-next').click();
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('.rt-srow.is-active')?.dataset.docId !== 'pagedattention');
+      await ws.locator('.rt-srow[data-doc-id="pagedattention"] .rt-scrit-cell').first().click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
+      await ws.locator('.rt-crit-chip .rt-crit-del').first().click(); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
+
+      await ws.locator('.rt-step-btn[data-step="extraction"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.rt-inspector').isVisible(), false);
+      await ws.locator('.rt-pilot-btn').click();
+      await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"] .rt-cell-badge.is-verified').waitFor({ state: 'visible' });
+      await ws.locator('.rt-stop-btn').click(); await ws.locator('.rt-stop-btn').waitFor({ state: 'hidden' });
+      assert.match(await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"]').innerText(), /PagedAttention block KV cache/);
+      assert.equal(await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="datasets"] .rt-cell-badge.is-unverified').count(), 1);
+      await ws.locator('.rt-add-col-btn').click(); await ws.locator('.rt-col-picker').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape'); await ws.locator('.rt-col-picker').waitFor({ state: 'hidden' });
+      await ws.locator('.rt-add-col-btn').click(); await ws.locator('.rt-col-picker').waitFor({ state: 'visible' });
+      await ws.locator('.rt-col-name-in').fill('Throughput'); await ws.locator('.rt-col-submit').click();
+      await ws.locator('.rt-col-label', { hasText: 'Throughput' }).waitFor({ state: 'visible' });
+
+      const mCell = ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"]');
+      await mCell.click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.rt-insp-quote').innerText(), /block tables/);
+      await mCell.focus(); await page.keyboard.press('ArrowRight');
+      await page.waitForFunction(() => (document.querySelector('.rt-insp-col')?.textContent ?? '').includes('Datasets'));
+      assert.match(await ws.locator('.rt-insp-status').innerText(), /Unverified/);
+      await ws.locator('.rt-insp-textarea').fill('ShareGPT + LMSYS-Chat-1M'); await ws.locator('.rt-insp-save').click();
+      await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="datasets"] .rt-cell-badge.is-manual').waitFor({ state: 'visible' });
+      await mCell.click(); await ws.locator('.rt-insp-jump').click();
+      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16');
+      assert.match(await page.locator('.return-workspace-go').innerText(), /Review Table/);
+      await page.locator('.return-workspace-go').click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
+
+      const [csvDl] = await Promise.all([page.waitForEvent('download'), ws.locator('.rt-export-csv').click()]);
+      assert.match(csvDl.suggestedFilename(), /\.csv$/);
+      await page.setViewportSize({ width: 1024, height: 768 });
+      const rt1024 = await ws.locator('.rt-inspector').evaluate(el => { const r = el.getBoundingClientRect(); return { w: r.width, l: r.left, r: r.right }; });
+      assert.ok(rt1024.w >= 320 && rt1024.l >= 52 && rt1024.r <= 1024, JSON.stringify(rt1024));
+      await ws.locator('.rt-insp-textarea').focus(); await page.keyboard.press('Escape'); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
+      const rtMob = await ws.evaluate(() => { const eb = document.querySelector('.rt-extract-bar')!, b = document.querySelector('.rt-mcard .rt-src-badge')!; return { top: document.querySelector('.rt-body-scroll')!.getBoundingClientRect().top, cards: document.querySelectorAll('.rt-mcard').length, ov: document.documentElement.scrollWidth - innerWidth, ebOv: eb.scrollWidth - eb.clientWidth, bw: b.getBoundingClientRect().width }; });
+      assert.ok(rtMob.top <= 150 && rtMob.cards >= 3 && rtMob.ov <= 1 && rtMob.ebOv <= 1 && rtMob.bw < 140, JSON.stringify(rtMob));
+      await assertMobilePanelTargets(page, '#researchWorkspace');
+      await ws.locator('.rt-mcard-row').first().click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
+      await assertMobilePanelTargets(page, '.rt-inspector');
+      await page.keyboard.press('Escape'); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
+      await ws.locator('.rt-step-btn[data-step="screening"]').click();
+      assert.ok(await ws.evaluate(() => { const sc = document.querySelector('.rt-screen-ctrls')!; return sc.scrollWidth <= sc.clientWidth + 1 && document.querySelector('.rt-body-scroll')!.getBoundingClientRect().top <= 150; }));
       await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
@@ -343,6 +411,12 @@ async function run(): Promise<void> {
       const zhLc = await collectChromeStrings(zhPage, '.lc-doc-info, .lc-group-name');
       assertNoZhEnglishLeaks(zhLc, 'zh-CN Library Chat');
       assert.equal(zhLc.some(s => /全库\s*Copilot|摘要存根|筛抽矩阵|纳排筛选/.test(s.text)), false);
+      await zhPage.locator('.rw-nav-btn[data-view="review-table"]').click();
+      await zhPage.locator('.rt-grid').waitFor({ state: 'visible' });
+      await zhPage.locator('.rt-add-col-btn').click(); await zhPage.locator('.rt-col-picker').waitFor({ state: 'visible' });
+      const zhRt = await collectChromeStrings(zhPage, '.rt-paper-title, .rt-paper-meta, .rt-cell-val, .rt-mcard-v, .rt-col-label');
+      assertNoZhEnglishLeaks(zhRt, 'zh-CN Review Table', ['screening', 'extraction', 'pico', 'pilot', 'evidence', 'verified', 'unverified', 'throughput']);
+      assert.equal(zhRt.some(s => /纳排筛选|筛抽矩阵|摘要存根|全库\s*Copilot/.test(s.text)), false);
       await zhCtx.close();
       assert.deepEqual(pageErrors, []); assert.deepEqual(consoleErrors, []);
     } finally { await browser.close(); }
