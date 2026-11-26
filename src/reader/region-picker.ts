@@ -17,6 +17,7 @@ interface RegionSurface {
 
 export class RegionPicker {
   private readonly surface = el('div', 'pdf-capture-surface');
+  private readonly cutout = el('div', 'pdf-capture-cutout');
   private readonly cursor = el('i', 'pdf-capture-cursor');
   private readonly marker = el('button', 'pdf-region-marker');
   private readonly actions = el('div', 'pdf-capture-actions');
@@ -24,6 +25,10 @@ export class RegionPicker {
   private readonly follow = button(label('Ask in this discussion', '接着问'), () => this.submit('continue'), 'btn primary');
   private readonly explain = button(label('Explain', '解释'), () => this.submit('explain'), 'btn');
   private readonly note = button(label('Write note', '记笔记'), () => this.submit('note'), 'btn');
+  private readonly pin = button(label('Pin', '钉选'), () => this.submit('pin'), 'btn', 'pin');
+  private readonly copyPng = button(label('Copy PNG', '复制 PNG'), () => this.submit('copy'), 'btn');
+  private readonly savePng = button(label('Save PNG', '保存 PNG'), () => this.submit('save'), 'btn', 'import');
+  private readonly cancelBtn = button(label('Cancel', '取消'), () => this.cancel(), 'btn');
   private startPoint?: Point;
   private keyboard?: { x: number; y: number };
   private pointer?: number;
@@ -34,7 +39,7 @@ export class RegionPicker {
   constructor(private sheet: RegionSurface, private page: number, private signal: AbortSignal,
     private deliver?: RegionAction, private canContinue?: (anchor: string) => boolean) {
     this.marker.type = 'button';
-    this.marker.hidden = this.surface.hidden = this.cursor.hidden = true;
+    this.marker.hidden = this.surface.hidden = this.cutout.hidden = this.cursor.hidden = true;
     this.marker.tabIndex = -1;
     this.marker.ariaLabel = this.marker.title = label('Continue this screenshot discussion', '继续问这张截图');
     this.marker.addEventListener('click', event => {
@@ -46,12 +51,15 @@ export class RegionPicker {
     this.surface.setAttribute('role', 'group');
     this.surface.ariaLabel = label('Screenshot area. Move with the arrow keys and press Enter at two opposite corners.',
       '截图范围。用方向键移动，按回车定下两个对角。');
-    this.surface.append(this.cursor);
+    this.surface.append(this.cutout, this.cursor);
     this.sheet.outer.append(this.surface);
     this.actions.setAttribute('role', 'group');
     this.actions.ariaLabel = label('Screenshot actions', '截图操作');
-    this.actions.append(this.follow, this.explain, this.ask, this.note);
-    for (const control of [this.follow, this.explain, this.ask, this.note]) activateAfterTouchDrag(control);
+    const primaryRow = el('div', 'pdf-capture-row'), toolsRow = el('div', 'pdf-capture-row pdf-capture-tools');
+    primaryRow.append(this.follow, this.explain, this.ask, this.note);
+    toolsRow.append(this.pin, this.copyPng, this.savePng, this.cancelBtn);
+    this.actions.append(primaryRow, toolsRow);
+    for (const control of [this.follow, this.explain, this.ask, this.note, this.pin, this.copyPng, this.savePng, this.cancelBtn]) activateAfterTouchDrag(control);
     this.surface.addEventListener('pointerdown', event => {
       if (!event.isPrimary || event.button !== 0) return;
       event.preventDefault(); event.stopPropagation();
@@ -74,7 +82,7 @@ export class RegionPicker {
     this.surface.addEventListener('lostpointercapture', () => { if (this.pointer !== undefined) this.reset(); }, { signal });
     this.surface.addEventListener('click', event => event.stopPropagation(), { signal });
     this.surface.addEventListener('keydown', event => this.keydown(event), { signal });
-    window.addEventListener('resize', () => this.positionActions(), { signal });
+    window.addEventListener('resize', () => { this.syncCutout(); this.positionActions(); }, { signal });
     document.addEventListener('scroll', () => this.positionActions(), { capture: true, passive: true, signal });
     signal.addEventListener('abort', () => {
       this.end();
@@ -92,6 +100,11 @@ export class RegionPicker {
 
   end(): void { this.reset(); this.attach = false; this.surface.hidden = true; }
 
+  private cancel(): void {
+    this.end();
+    void this.deliver?.({ id: '', text: '', context: '', page: this.page, rect: new DOMRect(), side: 'source', label: '' }, 'cancel');
+  }
+
   async reopen(id: string, receive?: RegionAction): Promise<void> {
     this.mark(id, true);
     await this.submit('reopen', receive);
@@ -104,6 +117,8 @@ export class RegionPicker {
     this.keyboard = undefined;
     this.pointer = undefined;
     this.cursor.hidden = true;
+    this.cutout.hidden = true;
+    delete this.surface.dataset.hasBox;
     this.actions.remove();
     this.mark();
   }
@@ -131,6 +146,7 @@ export class RegionPicker {
   refresh(): void {
     const rect = this.selected && this.rect(this.selected);
     this.marker.hidden = !rect;
+    this.syncCutout(rect || undefined);
     if (!rect) return;
     const plane = this.sheet.plane.getBoundingClientRect();
     Object.assign(this.marker.style, {
@@ -138,6 +154,21 @@ export class RegionPicker {
       width: rect.width / plane.width * 100 + '%', height: rect.height / plane.height * 100 + '%'
     });
     this.positionActions();
+  }
+
+  private syncCutout(rect = this.selected ? this.rect(this.selected) : null): void {
+    if (this.surface.hidden || !rect) {
+      this.cutout.hidden = true;
+      delete this.surface.dataset.hasBox;
+      return;
+    }
+    const outer = this.sheet.outer.getBoundingClientRect();
+    this.surface.dataset.hasBox = 'true';
+    this.cutout.hidden = false;
+    Object.assign(this.cutout.style, {
+      left: rect.x - outer.x + 'px', top: rect.y - outer.y + 'px',
+      width: rect.width + 'px', height: rect.height + 'px'
+    });
   }
 
   private finishBox(): void {
@@ -165,8 +196,8 @@ export class RegionPicker {
     const margin = 6, top = Math.max(margin, frame?.top ?? 0);
     const bottom = Math.min(innerHeight, frame?.bottom ?? innerHeight) - margin;
     const width = this.actions.offsetWidth, height = this.actions.offsetHeight;
-    this.actions.style.left = clamp(r.right - width, margin, innerWidth - width - margin) + 'px';
-    this.actions.style.top = clamp(r.bottom + margin + height <= bottom ? r.bottom + margin : r.top - margin - height, top, bottom - height) + 'px';
+    this.actions.style.left = clamp(r.right - width, margin, Math.max(margin, innerWidth - width - margin)) + 'px';
+    this.actions.style.top = clamp(r.bottom + margin + height <= bottom ? r.bottom + margin : r.top - margin - height, top, Math.max(top, bottom - height)) + 'px';
   }
 
   private keydown(event: KeyboardEvent): void {

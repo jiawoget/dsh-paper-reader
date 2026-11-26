@@ -32,6 +32,8 @@ import { DocSearch } from './doc-search.js';
 import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './jump-history.js';
 import { bindPdfControls, runRetranslate, type PdfControlsHandle, type ZoomSetting } from './pdf-controls.js';
 import { bindPdfDropTarget, importPdfFiles } from './pdf-import.js';
+import { FigurePins } from './figure-pin.js';
+import { copyRegionPng, saveRegionPng } from './region-png.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
 type SidebarTab = typeof sidebarTabs[keyof typeof sidebarTabs];
@@ -54,6 +56,7 @@ class Reader implements ReaderPort {
   private readonly card=new SelectionCard(this);
   private readonly chat=new PaperChat(this);
   private readonly desk=new ReadingDesk();
+  private readonly pins=new FigurePins(byId('reader').querySelector<HTMLElement>('.workspace')!,(docId,page,anchor)=>this.navigate(docId,page,anchor));
   private readonly contents=new ReaderContents(
     destination => this.openContentsEntry(destination),
     () => this.pdfView?.outlineTop() ?? 0,
@@ -263,7 +266,7 @@ class Reader implements ReaderPort {
   discardDocument(docId: string): void {
     discardNotebook(this, docId);
     if (this.doc.id === docId) {
-      this.jumpHistory.clear(); this.search.reset(); this.leaveBookReading?.(false);
+      this.jumpHistory.clear(); this.pins.clear(); this.search.reset(); this.leaveBookReading?.(false);
       this.leaveBookReading = undefined;
       this.notebook = undefined;
       this.notebookError = undefined;
@@ -393,7 +396,7 @@ class Reader implements ReaderPort {
         const previous=this.pdf;this.pdf=pdf;if(previous && previous!==pdf)void previous.destroy().catch(()=>undefined);
         this.doc=doc;this.loadedId=id;this.page=number;
         if(changed){
-          this.jumpHistory.clear(); const last=localStorage.getItem('reader.tab.'+doc.id);
+          this.jumpHistory.clear(); this.pins.clear(); const last=localStorage.getItem('reader.tab.'+doc.id);
           this.tab=Object.values(sidebarTabs).find(tab=>tab===last) ?? (doc.book?'contents':'notes');
         }
         this.desk.setDocument(Boolean(pdf),Boolean(doc.book));
@@ -486,8 +489,10 @@ class Reader implements ReaderPort {
       },
       onRegion:async (hit:SelectionHit,intent:RegionIntent)=>{
         if(version!==this.epoch)return;
+        if(intent==='cancel'){this.cancelCapture(true);return;}
         const sourceAddress=new URL(location.href);
         this.capturing=false;this.updatePageFormat();
+        if(intent==='pin'||intent==='copy'||intent==='save'){this.captureOrigin=this.beforeCapture=undefined;if(intent==='pin')this.pins.pin({docId:doc.id,page:hit.page,anchor:hit.id,image:hit.image!,label:hit.label,isWeb:doc.kind==='web'});else if(intent==='copy')await copyRegionPng(hit.image!);else saveRegionPng(hit.image!,doc.title,hit.page);return;}
         if(intent==='continue' && this.captureOrigin?.returnTo) this.beforeCapture=this.captureOrigin.returnTo;
         this.captureOrigin=undefined;
         await this.card.openRegion(hit,intent);
@@ -905,7 +910,7 @@ class Reader implements ReaderPort {
     document.addEventListener('pointerdown',e=>{
       if(!(e.target instanceof Element))return;
       if(!e.target.closest('#menu,#more,#pdfThemeMenu'))this.closeMenu();
-      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#docSearch,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,#pdfThemeMenu,.citation-preview,dialog'))this.card.dismiss();
+      if(!this.card.hasOpenTool && !e.target.closest('#card,#selectionDock,#docSearch,#rail,#paperScroll,#pageFormat,#returnDiscussion,.headings,.paper-chat,.desk-split,.topbar,#mobileBar,#pdfThemeMenu,.citation-preview,.figure-pin-card,dialog'))this.card.dismiss();
     });
   }
   private selectTab(tab:SidebarTab):void {

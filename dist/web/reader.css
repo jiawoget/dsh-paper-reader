@@ -187,9 +187,10 @@ dialog h2 { font-size: 17px; font-weight: 650; }
 dialog:has(.dialog-footer) #dialogBody { padding-bottom: 0; }
 #dialogBody h3 { font-size: 14px; margin: 11px 0 7px; }
 .dialog-footer { position: sticky; bottom: 0; z-index: 1; display: flex; align-items: center; gap: 8px; margin: 16px -18px 0; padding: 12px 18px; background: var(--paper); border-top: 1px solid var(--line); }
-.settings-advanced { margin: 10px 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-sunken); }
-.settings-advanced > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--purple); }
-.settings-advanced[open] > summary { margin-bottom: 10px; }
+:is(.settings-advanced, .settings-prompts) { margin: 10px 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-sunken); }
+:is(.settings-advanced, .settings-prompts) > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--purple); }
+:is(.settings-advanced, .settings-prompts)[open] > summary { margin-bottom: 10px; }
+.settings-prompts .hint { margin-bottom: 2px; }
 .field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; color: var(--muted); font-size: 12px; }
 .field input, .field select, .field textarea, .search { background: var(--paper); color: var(--desk-ink); border: 1px solid var(--border-strong); border-radius: 5px; padding: 7px 8px; width: 100%; }
 .field textarea { min-height: 84px; resize: vertical; }

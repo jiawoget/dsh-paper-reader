@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { chromium, type Locator, type Page } from 'playwright-core';
@@ -322,8 +322,68 @@ await withHost(async host => {
     priorTurns(resumed, followup, second.answer);
     await matchesCrop(page, resumed.image, firstCrop);
     assert.equal((await history()).exchanges.find(turn => turn.question === afterReopen)?.thread, saved.thread);
+
+    await chat(page).getByRole('button', { name: '收起讨论', exact: true }).click();
+    const actBtn = (name: string) => page.locator('.pdf-capture-actions').getByRole('button', { name, exact: true });
+    await drawCrop(page, firstRegion);
+    assert.equal(await page.locator('.pdf-capture-cutout').isVisible(), true);
+    await actBtn('取消').click();
+    await page.locator('.pdf-capture-surface').waitFor({ state: 'hidden' });
+    assert.equal(model.calls.length, 4);
+    assert.ok(await page.locator('#captureRegion').evaluate(node => node === document.activeElement));
+
+    await drawCrop(page, firstRegion);
+    await actBtn('钉选').click();
+    const pinCard = page.locator('.figure-pin-card').first();
+    await pinCard.waitFor();
+    assert.match(await pinCard.locator('.figure-pin-jump').innerText(), /图 6.*第 6 页/);
+    assert.ok(await pinCard.locator('img').evaluate(img => (img as HTMLImageElement).naturalWidth > 0));
+    await page.locator('#next').click(); await page.waitForURL(url => url.searchParams.get('page') === '7');
+    assert.equal(await pinCard.isVisible(), true);
+    const widthBefore = (await box(pinCard)).width;
+    await pinCard.locator('.figure-pin-zoom').click();
+    assert.ok(await pinCard.getAttribute('data-zoomed') === 'true' && (await box(pinCard)).width > widthBefore);
+    await pinCard.locator('.figure-pin-collapse').click();
+    assert.ok(await pinCard.getAttribute('data-collapsed') === 'true' && !(await pinCard.locator('.figure-pin-body').isVisible()));
+    await pinCard.locator('.figure-pin-collapse').click();
+    const headBox = await box(pinCard.locator('.figure-pin-head')), beforeDrag = await box(pinCard);
+    await page.mouse.move(headBox.x + headBox.width * 0.5, headBox.y + headBox.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(headBox.x + headBox.width * 0.5 - 40, headBox.y + headBox.height * 0.5 + 24, { steps: 5 });
+    await page.mouse.up();
+    assert.ok((await box(pinCard)).x < beforeDrag.x - 10);
+    await pinCard.locator('.figure-pin-jump').click(); await page.waitForURL(url => url.searchParams.get('page') === '6');
+    const pinHead = pinCard.locator('.figure-pin-head'), pinX = (await box(pinCard)).x;
+    await pinHead.focus(); await page.keyboard.press('Alt+ArrowLeft');
+    await page.waitForURL(url => url.searchParams.get('page') === '7');
+    assert.ok(Math.abs((await box(pinCard)).x - pinX) <= 1);
+    await pinHead.focus(); await page.keyboard.press('ArrowLeft');
+    assert.ok((await box(pinCard)).x < pinX - 10);
+    await page.locator('#jumpForward').click(); await page.waitForURL(url => url.searchParams.get('page') === '6');
+    await page.locator('#jumpBack').click(); await page.waitForURL(url => url.searchParams.get('page') === '7');
+    await page.locator('#jumpForward').click(); await page.waitForURL(url => url.searchParams.get('page') === '6');
+    for (const extra of [otherRegion, [.08, .2, .4, .5] as Bounds, [.45, .2, .85, .5] as Bounds]) {
+      await drawCrop(page, extra); await actBtn('钉选').click();
+      await page.locator('.pdf-capture-actions').waitFor({ state: 'hidden' });
+    }
+    await page.locator('#toast').filter({ hasText: '3' }).waitFor();
+    assert.equal(await page.locator('.figure-pin-card').count(), 3);
+
+    await drawCrop(page, firstRegion);
+    const dlPromise = page.waitForEvent('download');
+    await actBtn('保存 PNG').click();
+    const dl = await dlPromise;
+    assert.match(dl.suggestedFilename(), /-p6-region\.png$/);
+    assert.equal((await readFile((await dl.path())!)).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+
+    await page.evaluate(() => { const stub = { write() { return Promise.resolve(); } }; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: stub }); });
+    await drawCrop(page, firstRegion); await actBtn('复制 PNG').click();
+    await page.locator('#toast').filter({ hasText: 'PNG 已复制到剪贴板' }).waitFor();
+    await page.evaluate(() => { const stub = { write() { return Promise.reject(new Error('denied')); } }; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: stub }); });
+    await drawCrop(page, firstRegion); await actBtn('复制 PNG').click();
+    await page.locator('#toast').filter({ hasText: '保存 PNG' }).waitFor();
     assert.deepEqual(errors, []);
-    console.log('PASS desktop drag, cancellation, cropped PDF pixels, repeated image and history, isolated crops, and saved source reopen.');
+    console.log('PASS desktop drag, scrim/cancel, pin/zoom/collapse/drag/jump-back/FIFO, Save/Copy PNG, and saved source reopen.');
 
     const phone = await browser.newPage({ locale: 'en-US', viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     phone.setDefaultTimeout(10_000);
@@ -368,6 +428,21 @@ await withHost(async host => {
     await screenshot(phone, '03-触屏截图追问');
     await chat(phone).getByRole('button', { name: 'Close chat', exact: true }).tap();
     await pageText.waitFor();
+    await drawCrop(phone, phoneRegion, true);
+    for (const btn of await phone.locator('.pdf-capture-actions .btn:visible').all()) {
+      const b = await box(btn);
+      assert.ok(b.width >= 44 && b.height >= 44, 'Mobile capture action must be >= 44x44px');
+    }
+    await phone.locator('.pdf-capture-actions').getByRole('button', { name: 'Pin', exact: true }).tap();
+    const phonePin = phone.locator('.figure-pin-card').first();
+    await phonePin.waitFor();
+    const pinRect = await box(phonePin), barRect = await box(phone.locator('#mobileBar'));
+    assert.ok(pinRect.x >= 0 && pinRect.x + pinRect.width <= 391 && pinRect.y + pinRect.height <= barRect.y + 1);
+    assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    for (const btn of await phonePin.locator('button:visible').all()) {
+      const b = await box(btn);
+      assert.ok(b.width >= 44 && b.height >= 44, 'Mobile pin button must be >= 44x44px');
+    }
     assert.deepEqual(phoneErrors, []);
     console.log('PASS compact translation and reflow restoration, touch crop, automatic explanation, and repeated attachment.');
   } finally {

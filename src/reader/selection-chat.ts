@@ -7,6 +7,7 @@ import {
   bindChatComposer, createChatLog, createSendStopPair, createStreamSlot,
   renderAnswerRow, renderChatNotice, renderQuestionRow, renderStoppedReply, settleStreamFailure
 } from './chat-stream.js';
+import { createPromptBar } from './chat-prompts.js';
 import { readQuestions, saveQuestions, type AnswerQuote, type MessageDraft } from './discussion-drafts.js';
 import { compactReader } from './reading-desk.js';
 import { settingsDialog } from './settings-dialog.js';
@@ -44,6 +45,7 @@ export class SelectionChat {
   private connection = el('div', 'chat-notice');
   private form = el('form', 'chat-composer');
   private starters = el('div', 'chat-starters');
+  private prompts = createPromptBar('selection', prompt => { void this.ask({ mode: 'followup', prompt }); });
   private events = new AbortController();
   private selected?: AnswerQuote;
   private draftExcerpt?: AnswerQuote;
@@ -107,7 +109,7 @@ export class SelectionChat {
     }
     const modelBar = el('div', 'chat-model-bar');
     modelBar.append(this.starters, this.modelPicker.button);
-    content.append(this.log, this.quoteBar, this.connection, modelBar, this.form);
+    content.append(this.prompts.root, this.log, this.quoteBar, this.connection, modelBar, this.form);
     const signal = this.events.signal;
     this.log.addEventListener('pointerdown', () => { this.dragging = true; }, { signal });
     document.addEventListener('pointerup', () => {
@@ -247,6 +249,10 @@ export class SelectionChat {
     if (this.root.hidden) return;
     this.modelPicker.refresh();
     if (this.disconnected !== !questionConnected(this.app.state.settings)) this.render();
+    else this.syncPrompts();
+  }
+  private syncPrompts(): void {
+    this.prompts.sync(this.app.state.settings.customPrompts, !this.state.turns.length && !this.state.pending && !this.state.stopped, Boolean(this.state.pending || this.disconnected));
   }
   render(): void {
     if (this.root.hidden) return;
@@ -265,7 +271,7 @@ export class SelectionChat {
       onRetry: failure ? () => this.ask(failure.request) : undefined,
       onConnect: this.disconnected || !failure?.request.savingNotes ? connect : undefined
     });
-    this.renderLog(); this.renderComposer(); this.renderQuote();
+    this.syncPrompts(); this.renderLog(); this.renderComposer(); this.renderQuote();
   }
   private renderLog(): void {
     const { turns, pending, stopped } = this.state;

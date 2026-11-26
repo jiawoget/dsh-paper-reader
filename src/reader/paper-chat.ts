@@ -5,6 +5,8 @@ import {
   bindChatComposer, createChatLog, createClearChatControl, createSendStopPair, createStreamSlot,
   renderAnswerRow, renderChatNotice, renderQuestionRow, renderStoppedReply, settleStreamFailure
 } from './chat-stream.js';
+import { createPromptBar } from './chat-prompts.js';
+import { bindSplitter } from './desk-gestures.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import { isScreenshotAnchor, materialKey } from './selection-context.js';
 import { paperQuestions, type DiscussionRef } from './discussion-drafts.js';
@@ -28,6 +30,10 @@ export class PaperChat {
   private readonly detail = el('span', 'paper-chat-summary');
   private readonly content = el('div', 'paper-chat-content');
   private readonly log = createChatLog('paper-chat-log', label('Paper chat history','全文问答记录'), p => { void this.app.navigate(this.app.doc.id, p).catch(e => toast(message(e))); });
+  private readonly prompts = createPromptBar('paper', prompt => {
+    const state = this.current();
+    if (state && this.doc) void this.send({ docId: this.doc.id, requestId: crypto.randomUUID(), question: prompt, source: state.source });
+  });
   private readonly stream = createStreamSlot(this.log, () => this.app.pageCount);
   private readonly notice = el('div', 'paper-chat-notice');
   private readonly drafts = el('details', 'paper-chat-drafts');
@@ -188,6 +194,7 @@ export class PaperChat {
     if (this.input.value !== state.draft) this.input.value = state.draft;
     this.controls(state);
     this.renderLog(state);
+    this.prompts.sync(this.app.state.settings.customPrompts, Boolean(state.loaded && !state.exchanges.length && !state.pending && !state.stopped), Boolean(state.pending || !questionConnected(this.app.state.settings)));
     if (this.notebookRevision !== this.app.notebook?.revision) {
       this.notebookRevision = this.app.notebook?.revision;
       for (const action of this.noteActions.values()) action.refresh();
@@ -221,8 +228,10 @@ export class PaperChat {
     this.stream.cancel();
     this.log.replaceChildren();
     if (archive.length) this.legacyLookups(archive);
-    if (!state.exchanges.length && !state.pending && !state.stopped)
+    if (!state.exchanges.length && !state.pending && !state.stopped) {
       this.log.append(el('p', 'paper-chat-empty', state.loaded ? label('Ask a question about this paper.','向本文提问。') : label('Loading chat…','正在加载问答记录…')));
+      if (state.loaded) this.log.append(this.prompts.root);
+    }
     const materials = new Map<string, Set<string>>();
     for (const {thread, source} of state.exchanges) {
       if (!source || thread === 'paper') continue;
@@ -377,17 +386,10 @@ export class PaperChat {
     };
     apply(this.ratio, false);
     window.addEventListener('reader-layout-reset', () => apply(0.36, true));
-    grip.onpointerdown = event => {
-      if (event.button !== 0) return;
-      event.preventDefault(); grip.setPointerCapture(event.pointerId);
-      const origin = event.clientY, height = this.root.getBoundingClientRect().height;
-      grip.onpointermove = next => apply((height + origin - next.clientY) / window.innerHeight, false);
-      grip.onlostpointercapture = () => { grip.onpointermove = null; apply(this.ratio, true); };
-    };
-    grip.onkeydown = event => {
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-        event.preventDefault(); apply(this.ratio + (event.key === 'ArrowUp' ? 0.04 : -0.04), true);
-      }
-    };
+    bindSplitter({
+      grip, reversed: () => true, step: 36,
+      onAdjust: (delta, reset) => apply(reset ? 0.36 : this.ratio - delta / Math.max(1, window.innerHeight), false),
+      onCommit: () => apply(this.ratio, true)
+    });
   }
 }

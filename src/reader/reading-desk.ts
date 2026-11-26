@@ -1,4 +1,5 @@
 import type { TranslationFocus } from './pdf/focus.js';
+import { bindSplitter, clampFloat, connectFloat } from './desk-gestures.js';
 import { parseZoom, type ZoomSetting } from './pdf-controls.js';
 import { byId, el, readerLabel as label } from './ui.js';
 
@@ -221,7 +222,7 @@ export class ReadingDesk {
     handle.after(select);
     this.discussion = { select, handle };
     this.bindPosition(select, label('Discussion position', '讨论栏位置'), signal);
-    this.connectFloat(handle, byId('selectionDock'), signal);
+    this.bindFloat(handle, byId('selectionDock'), signal);
     signal.addEventListener('abort', () => { if (this.discussion?.select === select) this.discussion = undefined; }, { once: true });
     this.applyNotebook();
   }
@@ -238,8 +239,10 @@ export class ReadingDesk {
       previewGrip.setAttribute('aria-valuemax', String(maxPreviewHeight()));
       previewGrip.setAttribute('aria-valuenow', String(dock.offsetHeight));
     }).observe(dock);
-    this.split(previewGrip, (change, reset) => {
-      this.settings.previewHeight = reset ? undefined : clamp(dock.offsetHeight - change, 64, maxPreviewHeight());
+    bindSplitter({
+      grip: previewGrip, root: this.root, reversed: () => true,
+      onAdjust: (change, reset) => { this.settings.previewHeight = reset ? undefined : clamp(dock.offsetHeight - change, 64, maxPreviewHeight()); },
+      onApply: () => this.applyKeepingPage(), onCommit: () => this.save()
     });
     window.addEventListener('resize', () => this.apply()); this.mobileBar.addEventListener('change', () => this.apply());
     const viewport = window.visualViewport;
@@ -265,17 +268,25 @@ export class ReadingDesk {
       this.settings.highlightDisplay = display.value === 'separate' ? 'separate' : 'inline';
       this.save(); onHighlightDisplay();
     });
-    this.connectFloat(byId('notebookHandle'), byId('rail'));
-    this.split(byId('pageSplit'), (change, reset) => {
-      const grid = paper.querySelector<HTMLElement>('.pages')!;
-      const total = grid.clientWidth - byId('pageSplit').offsetWidth;
-      const width = byId('original').getBoundingClientRect().width;
-      const min = Math.min(.43, Math.max(.25, 200 / Math.max(total, 1)));
-      this.settings.proportion = reset ? undefined : clamp((width + change) / total, min, 1 - min);
+    this.bindFloat(byId('notebookHandle'), byId('rail'));
+    bindSplitter({
+      grip: byId('pageSplit'), root: this.root,
+      onAdjust: (change, reset) => {
+        const grid = paper.querySelector<HTMLElement>('.pages')!;
+        const total = grid.clientWidth - byId('pageSplit').offsetWidth;
+        const width = byId('original').getBoundingClientRect().width;
+        const min = Math.min(.43, Math.max(.25, 200 / Math.max(total, 1)));
+        this.settings.proportion = reset ? undefined : clamp((width + change) / total, min, 1 - min);
+      },
+      onApply: () => this.applyKeepingPage(), onCommit: () => this.save()
     });
-    this.split(byId('notesSplit'), (change, reset) => {
-      const width = byId('rail').getBoundingClientRect().width;
-      this.settings.notebookWidth = reset ? undefined : clamp(width + (this.pose === 'left' ? change : -change), ...this.notebookLimits());
+    bindSplitter({
+      grip: byId('notesSplit'), root: this.root, reversed: () => this.pose === 'right',
+      onAdjust: (change, reset) => {
+        const width = byId('rail').getBoundingClientRect().width;
+        this.settings.notebookWidth = reset ? undefined : clamp(width + (this.pose === 'left' ? change : -change), ...this.notebookLimits());
+      },
+      onApply: () => this.applyKeepingPage(), onCommit: () => this.save()
     });
     this.apply();
   }
@@ -295,74 +306,26 @@ export class ReadingDesk {
       (event.shiftKey ? last : first)?.focus({ preventScroll: true });
     }
   }
+  private setFloatVars(x: number, y: number): void {
+    this.root.style.setProperty('--float-x', x + 'px');
+    this.root.style.setProperty('--float-y', y + 'px');
+  }
+  private floatBounds() {
+    return { minX: 0, minY: 0, maxX: this.root.clientWidth, maxY: this.root.clientHeight };
+  }
   private placeFloat(): void {
     if (this.pose !== 'float') return;
     const panel = byId(this.notebookOpen ? 'rail' : 'selectionDock');
     if (!panel.offsetWidth) return;
     const at = this.settings.notebookPosition;
-    this.positionFloat(panel, at?.x ?? this.root.clientWidth - panel.offsetWidth - 20, at?.y ?? 64);
+    const pos = clampFloat(panel, at?.x ?? this.root.clientWidth - panel.offsetWidth - 20, at?.y ?? 64, this.floatBounds());
+    this.setFloatVars(pos.x, pos.y);
   }
-  private positionFloat(rail: HTMLElement, x: number, y: number): void {
-    const left = clamp(Number.isFinite(x) ? x : 0, 0, this.root.clientWidth - rail.offsetWidth);
-    const top = clamp(Number.isFinite(y) ? y : 0, 0, this.root.clientHeight - rail.offsetHeight);
-    this.root.style.setProperty('--float-x', left + 'px');
-    this.root.style.setProperty('--float-y', top + 'px');
-  }
-  private connectFloat(handle: HTMLElement, rail: HTMLElement, signal?: AbortSignal): void {
-    let held: { id: number; dx: number; dy: number } | undefined;
-    const remember = () => {
-      this.settings.notebookPosition = { x: rail.offsetLeft, y: rail.offsetTop };
-      this.save();
-    };
-    handle.addEventListener('pointerdown', event => {
-      if (this.pose !== 'float' || event.button !== 0 || !event.isPrimary) return;
-      event.preventDefault();
-      held = { id: event.pointerId, dx: event.clientX - rail.offsetLeft, dy: event.clientY - rail.offsetTop };
-      handle.setPointerCapture(event.pointerId);
-    }, { signal });
-    handle.addEventListener('pointermove', event => {
-      if (held?.id === event.pointerId && this.pose === 'float') this.positionFloat(rail, event.clientX - held.dx, event.clientY - held.dy);
-    }, { signal });
-    handle.addEventListener('lostpointercapture', () => { if (held && this.pose === 'float') remember(); held = undefined; }, { signal });
-    handle.addEventListener('keydown', event => {
-      if (this.pose !== 'float') return;
-      const distance = event.shiftKey ? 60 : 20;
-      const dx = event.key === 'ArrowLeft' ? -distance : event.key === 'ArrowRight' ? distance : 0;
-      const dy = event.key === 'ArrowUp' ? -distance : event.key === 'ArrowDown' ? distance : 0;
-      if (!dx && !dy) return;
-      event.preventDefault();
-      event.stopPropagation();
-      this.positionFloat(rail, rail.offsetLeft + dx, rail.offsetTop + dy);
-      remember();
-    }, { signal });
-  }
-  private split(grip: HTMLElement, adjust: (delta: number, reset: boolean) => void): void {
-    let pointer: number | undefined, last = 0;
-    const horizontal = () => grip.getAttribute('aria-orientation') === 'horizontal';
-    const coordinate = (event: PointerEvent) => horizontal() ? event.clientY : event.clientX;
-    grip.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || !event.isPrimary) return;
-      event.preventDefault(); grip.focus({ preventScroll: true });
-      pointer = event.pointerId; last = coordinate(event);
-      grip.setPointerCapture(pointer);
-      this.root.classList.add('is-resizing');
+  private bindFloat(handle: HTMLElement, panel: HTMLElement, signal?: AbortSignal): void {
+    connectFloat({
+      handle, panel, signal, enabled: () => this.pose === 'float', bounds: () => this.floatBounds(),
+      onMove: (x, y) => this.setFloatVars(x, y),
+      onCommit: (x, y) => { this.settings.notebookPosition = { x, y }; this.save(); }
     });
-    grip.addEventListener('pointermove', event => {
-      if (pointer !== event.pointerId) return;
-      adjust(coordinate(event) - last, false); last = coordinate(event); this.applyKeepingPage();
-    });
-    grip.addEventListener('lostpointercapture', () => {
-      pointer = undefined; this.root.classList.remove('is-resizing'); this.save();
-    });
-    grip.addEventListener('keydown', event => {
-      const [decrease, increase] = horizontal() ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight'];
-      if (![decrease, increase, 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault(); event.stopPropagation();
-      const distance = event.key === 'Home' || event.key === 'End' ? (horizontal() ? innerHeight : innerWidth) : event.shiftKey ? 60 : 20;
-      const reversed = grip.id === 'passageSplit' || (grip.id === 'notesSplit' && this.pose === 'right');
-      adjust(event.key === decrease || event.key === (reversed ? 'End' : 'Home') ? -distance : distance, false);
-      this.applyKeepingPage(); this.save();
-    });
-    grip.addEventListener('dblclick', () => { adjust(0, true); this.applyKeepingPage(); this.save(); });
   }
 }

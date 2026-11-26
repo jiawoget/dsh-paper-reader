@@ -35,7 +35,9 @@ export function apply(ctx) {
           yield { type: 'finish', reason: { kind: 'stop' } };
           return;
         }
-        const text = [provider, model, reasoningEffort || 'default'].join(' / ');
+        const text = prompt.includes('Cite exact page numbers as (p. N)')
+          ? '### Structured Brief\n\nPagedAttention manages KV blocks efficiently (p. 2).'
+          : [provider, model, reasoningEffort || 'default'].join(' / ');
         yield { type: 'block-start', index: 0, blockType: 'text' };
         yield { type: 'text-delta', index: 0, text };
         yield { type: 'block-end', index: 0, block: { type: 'text', text } };

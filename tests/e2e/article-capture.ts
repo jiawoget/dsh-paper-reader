@@ -176,6 +176,19 @@ async function run(host: HostFixture) {
     assert.equal(await chat(page).isVisible(), false);
     assert.equal(model.calls.length, 0, 'Canceling a book screenshot must not send a model request.');
 
+    await drawCrop(page, diagram, area);
+    assert.equal(await page.locator('.pdf-capture-cutout').isVisible(), true);
+    await cropActions(page).getByRole('button', { name: '取消', exact: true }).click();
+    await cropActions(page).waitFor({ state: 'hidden' });
+    assert.equal(model.calls.length, 0);
+    await drawCrop(page, diagram, area);
+    await cropActions(page).getByRole('button', { name: '钉选', exact: true }).click();
+    const bookPin = page.locator('.figure-pin-card').first();
+    await bookPin.waitFor();
+    assert.ok(await bookPin.locator('img').evaluate(node => (node as HTMLImageElement).naturalWidth > 0));
+    await bookPin.locator('.figure-pin-close').click();
+    await bookPin.waitFor({ state: 'hidden' });
+
     const crop = await drawCrop(page, diagram, area);
     await screenshot(page, host, '01-book-bilingual-selection');
     await explain(page, 0);

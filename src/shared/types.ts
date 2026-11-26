@@ -64,7 +64,7 @@ export interface SelectionSegment {
   ranges: Range[];
 }
 export interface ReaderBlock { id: string; text: string; label?: string; translation?: string }
-export type RegionIntent = 'ask' | 'explain' | 'note' | 'continue' | 'reopen';
+export type RegionIntent = 'ask' | 'explain' | 'note' | 'continue' | 'reopen' | 'pin' | 'copy' | 'save' | 'cancel';
 export type RegionAction = (hit: SelectionHit, intent: RegionIntent) => void | Promise<void>;
 export interface PageView {
   blocks: ReaderBlock[];
@@ -118,6 +118,7 @@ export interface Settings {
   baseUrl: string; model: string; hasApiKey: boolean; aiMode: 'api' | 'dsh' | 'unconfigured';
   targetLanguage: string;
   glossary?: string;
+  customPrompts?: string;
   localTranslationAvailable?: boolean;
   questionModel?: QuestionModel;
   hostProvider?: string; hostModel?: string; vaultPath: string; zoteroLibraryType: 'user' | 'group';
@@ -173,7 +174,7 @@ export interface Operations {
   'vocab.save': [SourceRecord & { text: string; meaning: string; context: string }, { word: WordRecord }];
   'vocab.delete': [{ id: string }, unknown];
   'history.add': [SourceRecord & { text: string; meaning: string; context?: string }, unknown];
-  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'>> & { apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean }, { settings: Settings }];
+  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'customPrompts'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'>> & { apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean }, { settings: Settings }];
   'obsidian.export': [NotebookRequest, { path: string; notes?: number; words?: number; annotations?: number }];
   'zotero.collections': [{library?: string}, { collections: Collection[]; library: string }];
   'zotero.browse': [{query?: string; collection?: string; start?: number; library?: string},
