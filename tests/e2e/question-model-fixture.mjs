@@ -8,6 +8,11 @@ export function apply(ctx) {
       reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'low' } }
   ];
   const resolveModel = (_, id) => models.find(model => model.id === id);
+  const delay = (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('Aborted')); return; }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Aborted')); }, { once: true });
+  });
   ctx.llm.registerAdapter([provider], {
     providerInfo: () => ({ id: provider, name: 'Offline test models' }),
     providerRetryPolicy: () => undefined,
@@ -21,13 +26,7 @@ export function apply(ctx) {
           let full = '';
           yield { type: 'block-start', index: 0, blockType: 'text' };
           for (let i = 0; i < chunks.length; i++) {
-            if (i > 0) {
-              await new Promise((resolve, reject) => {
-                if (signal?.aborted) { reject(new Error('Aborted')); return; }
-                const timer = setTimeout(resolve, 450);
-                signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Aborted')); }, { once: true });
-              });
-            }
+            if (i > 0) await delay(450, signal);
             full += chunks[i];
             yield { type: 'text-delta', index: 0, text: chunks[i] };
           }
@@ -37,11 +36,7 @@ export function apply(ctx) {
         }
         if (prompt.includes('Extract structured review-table cells') || prompt.includes('Screen the supplied paper')) {
           const isPaged = prompt.includes('PagedAttention'), isExt = prompt.includes('Extract structured review-table cells');
-          if (isExt && !isPaged) await new Promise((resolve, reject) => {
-            if (signal?.aborted) { reject(new Error('Aborted')); return; }
-            const timer = setTimeout(resolve, 650);
-            signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Aborted')); }, { once: true });
-          });
+          if (isExt && !isPaged) await delay(650, signal);
           const text = isExt ? JSON.stringify({ cells: {
             method: { value: isPaged ? 'PagedAttention block KV cache' : 'Abstract method', quote: isPaged ? 'The KV block manager also maintains block tables' : 'IO-aware exact attention', page: isPaged ? 6 : null, reasoning: 'Extracted from source.' },
             datasets: { value: 'ShareGPT, Alpaca', quote: 'fabricated unverified quote string', page: isPaged ? 6 : null, reasoning: 'Datasets listed.' },

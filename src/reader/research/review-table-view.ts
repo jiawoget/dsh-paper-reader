@@ -17,8 +17,8 @@ export function createReviewTableView(): ResearchViewModule {
   let shell: ResearchShellContext | undefined, table: ReviewTable | null = null, docs: DocumentInfo[] = [];
   let cells = new Map<string, ExtractionCell>(), selected: { docId: string; colId: string } | null = null;
   let activeScreenDocId = '', statusMsg = '', abortCtrl: AbortController | null = null;
-  let splitEl: HTMLElement | null = null, subBarEl: HTMLElement | null = null, bodyEl: HTMLElement | null = null;
-  let presetSel: HTMLSelectElement | null = null, progressEl: HTMLElement | null = null, stopBtn: HTMLButtonElement | null = null;
+  let splitEl: HTMLElement | null = null, topEl: HTMLElement | null = null, subBarEl: HTMLElement | null = null, bodyEl: HTMLElement | null = null;
+  let presetSel: HTMLSelectElement | null = null, progressEl: HTMLElement | null = null, stopBtn: HTMLButtonElement | null = null, toolsToggleEl: HTMLButtonElement | null = null;
   let stepBtns = new Map<ReviewStep, HTMLButtonElement>(), actionBtns: HTMLButtonElement[] = [];
   let inspector: ReviewTableInspector | null = null, colPicker: ReviewColumnPicker | null = null;
 
@@ -26,7 +26,13 @@ export function createReviewTableView(): ResearchViewModule {
   const docCells = (docId: string) => { const m = new Map<string, ExtractionCell>(); for (const c of cells.values()) if (c.docId === docId) m.set(c.colId, c); return m; };
   const mergeCells = (list: readonly ExtractionCell[]) => { for (const c of list) cells.set(cellKey(c.docId, c.colId), c); };
   const setStatus = (text: string) => { statusMsg = text; if (progressEl) progressEl.textContent = text; };
-  const syncRunning = () => { if (stopBtn) stopBtn.hidden = !running; for (const b of actionBtns) b.disabled = running; inspector?.setBusy(running); };
+  const setBody = (...nodes: Node[]) => { bodyEl?.replaceChildren(...(progressEl ? [progressEl] : []), ...nodes); };
+  const hasCol = (colId: string) => colId === '__screen__' || Boolean(table && (colId.startsWith('screen:') ? table.criteria.some(c => `screen:${c.id}` === colId) : table.columns.some(c => c.id === colId)));
+  const syncRunning = () => {
+    if (stopBtn) stopBtn.hidden = !running; if (presetSel) presetSel.disabled = running; for (const b of actionBtns) b.disabled = running;
+    for (const host of [subBarEl, bodyEl]) for (const b of host?.querySelectorAll<HTMLButtonElement>('.rt-add-col-btn, .rt-add-col-m, .rt-col-del, .rt-cell-retry, .rt-crit-req, .rt-crit-del, .rt-crit-add, .rt-strict-btn') ?? []) b.disabled = running;
+    inspector?.setBusy(running);
+  };
   const syncSplitAttr = () => { if (splitEl) splitEl.dataset.inspectorOpen = String(Boolean(inspector?.isOpen())); };
   const colLabelFor = (colId: string) => colId === '__screen__' ? { label: t('Overall Screening', '综合筛选结论'), isScreening: true }
     : colId.startsWith('screen:') ? { label: table?.criteria.find(c => `screen:${c.id}` === colId)?.label ?? colId.slice(7), isScreening: true }
@@ -46,13 +52,13 @@ export function createReviewTableView(): ResearchViewModule {
     inspector.show({ doc, colId, colLabel: meta.label, isScreening: meta.isScreening, cell: cells.get(cellKey(docId, colId)) });
     syncSplitAttr(); syncGridSelection();
   };
-  const syncInspector = () => { if (inspector?.isOpen() && selected) { if (!docs.some(d => d.id === selected!.docId)) inspector.close(); else openInspector(selected.docId, selected.colId); } };
+  const syncInspector = () => { if (inspector?.isOpen() && selected) { if (!docs.some(d => d.id === selected!.docId) || !hasCol(selected.colId)) { inspector.close(); selected = null; } else openInspector(selected.docId, selected.colId); } };
   const partitionDocs = (list: readonly DocumentInfo[]) => {
     const included: { doc: DocumentInfo; status: ReturnType<typeof computeScreeningStatus> }[] = [], excluded: typeof included = [];
     for (const doc of list) { const status = computeScreeningStatus(table?.criteria ?? [], docCells(doc.id), Boolean(table?.strictCriterion), table?.threshold ?? 0.6); (status.included ? included : excluded).push({ doc, status }); }
     return { included, excluded };
   };
-  const reloadCells = async () => { if (!table) return; const got = await api('review.get', { tableId: table.id }); if (mounted) { table = got.table; cells = new Map(got.cells.map(c => [cellKey(c.docId, c.colId), c])); } };
+  const reloadCells = async () => { if (!table) return; const seq = mountSeq, got = await api('review.get', { tableId: table.id }); if (mounted && seq === mountSeq) { table = got.table; cells = new Map(got.cells.map(c => [cellKey(c.docId, c.colId), c])); } };
 
   async function loadData(keepStatus = false): Promise<void> {
     const seq = mountSeq, [libRes, revRes] = await Promise.all([api('library.list', {}), api('review.get', table ? { tableId: table.id } : {})]);
@@ -60,27 +66,28 @@ export function createReviewTableView(): ResearchViewModule {
     docs = libRes.docs; table = revRes.table; cells = new Map(revRes.cells.map(c => [cellKey(c.docId, c.colId), c]));
     if (!keepStatus) setStatus(''); renderAll(); syncInspector();
   }
-  async function saveTablePatch(patch: Partial<Pick<ReviewTable, 'preset' | 'columns' | 'criteria' | 'strictCriterion' | 'threshold'>>, reload = false): Promise<void> {
-    if (!table) return;
+  async function saveTablePatch(patch: Partial<Pick<ReviewTable, 'preset' | 'columns' | 'criteria' | 'strictCriterion' | 'threshold'>>, reload = false): Promise<boolean> {
+    if (!table || running) return false; const seq = mountSeq;
     try {
-      table = (await api('review.saveTable', { id: table.id, ...patch })).table; if (!mounted) return;
-      if (reload) { await reloadCells(); if (!mounted) return; if (selected && !selected.colId.startsWith('screen:') && selected.colId !== '__screen__' && !table.columns.some(c => c.id === selected!.colId)) inspector?.close(); }
-      renderAll(); syncInspector();
-    } catch (e) { if (mounted) toast(message(e)); }
+      table = (await api('review.saveTable', { id: table.id, ...patch })).table; if (!mounted || seq !== mountSeq) return false;
+      if (reload) { await reloadCells(); if (!mounted || seq !== mountSeq) return false; }
+      renderAll(); syncInspector(); return true;
+    } catch (e) { if (mounted && seq === mountSeq) toast(message(e)); return false; }
   }
   async function setManualCell(docId: string, colId: string, value: string, reasoning?: string): Promise<void> {
-    if (!table) return;
-    const res = await api('review.setCell', { tableId: table.id, docId, colId, value, ...(reasoning !== undefined ? { reasoning } : {}) }); if (!mounted) return;
-    cells.set(cellKey(docId, colId), res.cell); if (colId.startsWith('screen:')) await reloadCells(); if (mounted) { renderBody(); syncInspector(); }
+    if (!table) return; const seq = mountSeq, res = await api('review.setCell', { tableId: table.id, docId, colId, value, ...(reasoning !== undefined ? { reasoning } : {}) });
+    if (!mounted || seq !== mountSeq) return;
+    cells.set(cellKey(docId, colId), res.cell); if (colId.startsWith('screen:')) await reloadCells(); if (mounted && seq === mountSeq) { renderBody(); syncInspector(); }
   }
   async function runBatch(kind: 'screen' | 'extract', mode: ReviewExtractMode = 'all', extra: { docId?: string; colId?: string; docIds?: string[]; force?: boolean } = {}): Promise<void> {
     if (!table || running) return;
     const list = extra.docIds ?? visibleDocs().map(d => d.id);
     if (!list.length) { toast(t('No papers in library to process.', '文献库中暂无可处理的文献。')); return; }
-    if (kind === 'screen' && !table.criteria.length) { toast(t('Add at least one screening criterion first.', '请先添加至少一条筛选条件。')); return; }
-    running = true; abortCtrl = new AbortController(); syncRunning();
+    if (kind === 'screen' && !table.criteria.length) { if (topEl) { topEl.dataset.toolsOpen = 'true'; toolsToggleEl?.setAttribute('aria-expanded', 'true'); } toast(t('Add at least one screening criterion first.', '请先添加至少一条筛选条件。')); return; }
+    const seq = mountSeq, ctrl = new AbortController(); running = true; abortCtrl = ctrl; colPicker?.close(); syncRunning();
     setStatus(kind === 'screen' ? t(`Screening 0 / ${list.length} papers…`, `正在筛选 0 / ${list.length} 篇…`) : t('Extracting…', '正在提取…'));
     const onDelta = (raw: string) => {
+      if (!mounted || seq !== mountSeq || abortCtrl !== ctrl) return;
       try {
         const d = JSON.parse(raw) as { processedDocs?: number; totalDocs?: number; cells?: ExtractionCell[] };
         if (Array.isArray(d.cells)) mergeCells(d.cells);
@@ -90,23 +97,23 @@ export function createReviewTableView(): ResearchViewModule {
     };
     try {
       const res: ReviewBatchResult = kind === 'screen'
-        ? await apiStream('review.screen', { tableId: table.id, docIds: list, ...(extra.force ? { force: true } : {}) }, onDelta, abortCtrl.signal)
-        : await apiStream('review.extract', { tableId: table.id, mode, ...(extra.docId ? { docId: extra.docId } : { docIds: list }), ...(extra.colId ? { colId: extra.colId } : {}), ...(extra.force ? { force: true } : {}) }, onDelta, abortCtrl.signal);
-      if (!mounted) return;
+        ? await apiStream('review.screen', { tableId: table.id, docIds: list, ...(extra.force ? { force: true } : {}) }, onDelta, ctrl.signal)
+        : await apiStream('review.extract', { tableId: table.id, mode, ...(extra.docId ? { docId: extra.docId } : { docIds: list }), ...(extra.colId ? { colId: extra.colId } : {}), ...(extra.force ? { force: true } : {}) }, onDelta, ctrl.signal);
+      if (!mounted || seq !== mountSeq || abortCtrl !== ctrl) return;
       mergeCells(res.cells);
       setStatus(res.processedDocs === 0 && res.skippedDocs > 0 ? t('All target cells already extracted.', '目标单元格已全部完成。') : res.failedDocs ? t(`Done: ${res.processedDocs} ok, ${res.failedDocs} failed.`, `完成：${res.processedDocs} 篇成功，${res.failedDocs} 篇失败。`) : t(`Completed ${res.processedDocs} paper(s).`, `已完成 ${res.processedDocs} 篇文献处理。`));
       renderBody(); syncInspector();
     } catch (err) {
-      if (!mounted) return;
-      if (isAbortError(err)) { setStatus(t('Stopped — completed results kept.', '已停止，已保留已完成结果。')); void reloadCells().then(() => { if (mounted) { renderBody(); syncInspector(); } }).catch(() => undefined); }
+      if (!mounted || seq !== mountSeq || abortCtrl !== ctrl) return;
+      if (isAbortError(err)) { setStatus(t('Stopped — completed results kept.', '已停止，已保留已完成结果。')); void reloadCells().then(() => { if (mounted && seq === mountSeq) { renderBody(); syncInspector(); } }).catch(() => undefined); }
       else { setStatus(message(err)); toast(message(err)); }
-    } finally { abortCtrl = null; running = false; if (mounted) syncRunning(); }
+    } finally { if (abortCtrl === ctrl) { abortCtrl = null; running = false; if (mounted) syncRunning(); } }
   }
   async function saveAndNext(): Promise<void> {
     if (!table) return;
-    const p = partitionDocs(visibleDocs()), ordered = [...p.included, ...p.excluded]; if (!ordered.length) return;
+    const seq = mountSeq, p = partitionDocs(visibleDocs()), ordered = [...p.included, ...p.excluded]; if (!ordered.length) return;
     const cur = ordered.find(x => x.doc.id === activeScreenDocId) ?? ordered.find(x => !x.status.manualOverride) ?? ordered[0];
-    if (!cur.status.manualOverride) await setManualCell(cur.doc.id, '__screen__', cur.status.decision); if (!mounted) return;
+    if (!cur.status.manualOverride) await setManualCell(cur.doc.id, '__screen__', cur.status.decision); if (!mounted || seq !== mountSeq) return;
     const r = partitionDocs(visibleDocs()), all = [...r.included, ...r.excluded], idx = all.findIndex(x => x.doc.id === cur.doc.id);
     const next = [...all.slice(idx + 1), ...all.slice(0, Math.max(0, idx))].find(x => x.doc.id !== cur.doc.id && !x.status.manualOverride);
     if (!next) { activeScreenDocId = ''; renderBody(); toast(t('All papers reviewed.', '已审阅全部文献。')); return; }
@@ -118,7 +125,6 @@ export function createReviewTableView(): ResearchViewModule {
   function renderSubBar(): void {
     if (!subBarEl || !table) return;
     subBarEl.replaceChildren(); actionBtns = [];
-    progressEl = el('span', 'rt-progress', statusMsg); progressEl.setAttribute('role', 'status');
     stopBtn = mkBtn('btn rt-stop-btn', t('Stop', '停止'), () => abortCtrl?.abort()); stopBtn.hidden = !running;
     if (step === 'screening') {
       const topRow = el('div', 'rt-screen-row'), chips = el('div', 'rt-crit-list'), addForm = el('form', 'rt-crit-form'), critIn = el('input', 'search rt-crit-in'), addBtn = el('button', 'btn rt-crit-add', t('+ Add Criterion', '+ 添加条件'));
@@ -130,7 +136,7 @@ export function createReviewTableView(): ResearchViewModule {
       }
       critIn.type = 'text'; critIn.maxLength = 160; critIn.placeholder = t('Add screening criterion…', '输入筛选条件…'); critIn.ariaLabel = t('New screening criterion', '新建筛选条件'); addBtn.type = 'submit';
       addForm.append(critIn, addBtn);
-      addForm.addEventListener('submit', e => { e.preventDefault(); const lbl = critIn.value.trim(); if (!lbl || !table) return; critIn.value = ''; void saveTablePatch({ criteria: [...table.criteria, { id: slugColumnId(lbl, new Set(table.criteria.map(c => c.id))), label: lbl }] }); });
+      addForm.addEventListener('submit', e => { e.preventDefault(); const lbl = critIn.value.trim(); if (!lbl || !table || running) return; critIn.value = ''; void saveTablePatch({ criteria: [...table.criteria, { id: slugColumnId(lbl, new Set(table.criteria.map(c => c.id))), label: lbl }] }); });
       topRow.append(chips, addForm);
       const ctrlRow = el('div', 'rt-screen-ctrls'), strictBtn = mkBtn('btn rt-strict-btn', t('Strict Criterion', '严格条件'), () => { void saveTablePatch({ strictCriterion: !table!.strictCriterion }); });
       strictBtn.setAttribute('aria-pressed', String(table.strictCriterion));
@@ -140,11 +146,11 @@ export function createReviewTableView(): ResearchViewModule {
       thSlider.addEventListener('change', () => { if (table) void saveTablePatch({ threshold: table.threshold }); });
       thWrap.append(el('span', 'rt-th-lbl', t('Threshold', '阈值')), thSlider, thVal);
       const runBtn = mkBtn('btn primary rt-screen-run', t('Screen all', '开始筛选'), () => { void runBatch('screen'); }), nextBtn = mkBtn('btn rt-save-next', t('Save & next', '保存并下一篇'), () => { void saveAndNext().catch(e => toast(message(e))); });
-      actionBtns.push(runBtn, nextBtn); ctrlRow.append(strictBtn, thWrap, runBtn, stopBtn, nextBtn, progressEl); subBarEl.append(topRow, ctrlRow);
+      actionBtns.push(runBtn, nextBtn); ctrlRow.append(strictBtn, thWrap, runBtn, stopBtn, nextBtn); subBarEl.append(topRow, ctrlRow);
     } else {
       const row = el('div', 'rt-extract-bar'), pilotBtn = mkBtn('btn primary rt-pilot-btn', t('Pilot (3 papers)', 'Pilot 试跑 3 篇'), () => { void runBatch('extract', 'pilot'); });
       const allBtn = mkBtn('btn rt-run-all-btn', t('Run all', '全量提取'), () => { void runBatch('extract', 'all'); }), addColM = mkBtn('btn rt-add-col-m', t('+ Add Column', '+ 添加列'), () => colPicker?.open(table!.columns.map(c => c.id)));
-      actionBtns.push(pilotBtn, allBtn); row.append(pilotBtn, allBtn, stopBtn, addColM, progressEl); subBarEl.append(row);
+      actionBtns.push(pilotBtn, allBtn); row.append(pilotBtn, allBtn, stopBtn, addColM); subBarEl.append(row);
     }
     syncRunning();
   }
@@ -152,7 +158,7 @@ export function createReviewTableView(): ResearchViewModule {
   function renderScreening(): void {
     if (!bodyEl || !table) return;
     const list = visibleDocs();
-    if (!list.length) { bodyEl.replaceChildren(el('p', 'rt-empty', t('Import papers into your library to start screening.', '请先向文献库导入论文以开始筛选。'))); return; }
+    if (!list.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to start screening.', '请先向文献库导入论文以开始筛选。'))); return; }
     const { included, excluded } = partitionDocs(list), wrap = el('div', 'rt-screen-wrap');
     if (!activeScreenDocId || !list.some(d => d.id === activeScreenDocId)) activeScreenDocId = [...included, ...excluded].find(x => !x.status.manualOverride)?.doc.id ?? list[0].id;
     const buildPart = (part: 'included' | 'excluded', title: string, items: typeof included) => {
@@ -182,13 +188,13 @@ export function createReviewTableView(): ResearchViewModule {
       }
       return sec;
     };
-    wrap.append(buildPart('included', t('Included', '纳入'), included), buildPart('excluded', t('Excluded', '排除'), excluded)); bodyEl.replaceChildren(wrap);
+    wrap.append(buildPart('included', t('Included', '纳入'), included), buildPart('excluded', t('Excluded', '排除'), excluded)); setBody(wrap);
   }
 
   function renderExtraction(): void {
     if (!bodyEl || !table) return;
     const list = visibleDocs(), cols = table.columns;
-    if (!list.length) { bodyEl.replaceChildren(el('p', 'rt-empty', t('Import papers into your library to extract structured columns.', '请先向文献库导入论文以提取结构化表格。'))); return; }
+    if (!list.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to extract structured columns.', '请先向文献库导入论文以提取结构化表格。'))); return; }
     const tableWrap = el('div', 'rt-table-wrap'), grid = el('table', 'rt-grid'), thead = el('thead'), hr = el('tr'), tbody = el('tbody'), cards = el('div', 'rt-mobile-cards');
     grid.setAttribute('role', 'grid'); grid.setAttribute('aria-label', t('Extraction Matrix', '文献提取矩阵')); hr.setAttribute('role', 'row');
     const paperTh = el('th', 'rt-col-paper', t('Paper', '文献')); paperTh.setAttribute('role', 'columnheader'); hr.append(paperTh);
@@ -221,22 +227,22 @@ export function createReviewTableView(): ResearchViewModule {
       e.preventDefault(); next.focus({ preventScroll: true }); selected = { docId: next.dataset.docId!, colId: next.dataset.colId! }; syncGridSelection();
       if (inspector?.isOpen()) openInspector(selected.docId, selected.colId);
     });
-    grid.append(thead, tbody); tableWrap.append(grid); bodyEl.replaceChildren(tableWrap, cards); syncGridSelection();
+    grid.append(thead, tbody); tableWrap.append(grid); setBody(tableWrap, cards); syncGridSelection();
   }
 
-  const renderBody = () => { if (step === 'screening') renderScreening(); else renderExtraction(); };
+  const renderBody = () => { if (step === 'screening') renderScreening(); else renderExtraction(); syncRunning(); };
   const renderAll = () => { for (const [k, b] of stepBtns) b.setAttribute('aria-pressed', String(k === step)); if (presetSel && table) presetSel.value = table.preset; renderSubBar(); renderBody(); syncSplitAttr(); };
   return {
     id: 'review-table',
     async mount(host, ctx) {
-      mounted = true; ++mountSeq; shell = ctx; stepBtns = new Map();
+      mounted = true; const seq = ++mountSeq; shell = ctx; stepBtns = new Map();
       const root = el('section', 'rt-view'), top = el('header', 'rt-top'), head = el('div', 'rt-head'), steps = el('div', 'rt-steps'), tools = el('div', 'rt-head-tools');
-      steps.setAttribute('role', 'group'); steps.ariaLabel = t('Review steps', '筛选与提取步骤');
+      topEl = top; steps.setAttribute('role', 'group'); steps.ariaLabel = t('Review steps', '筛选与提取步骤');
       for (const [id, en, zh] of [['screening', '1. Screening', '1. Screening 筛选'], ['extraction', '2. Extraction', '2. Extraction 提取']] as const) {
-        const b = mkBtn('btn rt-step-btn', t(en, zh), () => { if (step !== id) { step = id; renderAll(); } }); b.dataset.step = id; stepBtns.set(id, b); steps.append(b);
+        const b = mkBtn('btn rt-step-btn', t(en, zh), () => { if (step !== id) { step = id; inspector?.close(); renderAll(); } }); b.dataset.step = id; stepBtns.set(id, b); steps.append(b);
       }
       const toolsToggle = mkBtn('btn rt-tools-toggle', t('Tools', '工具'), () => { const open = top.dataset.toolsOpen === 'true'; top.dataset.toolsOpen = String(!open); toolsToggle.setAttribute('aria-expanded', String(!open)); });
-      toolsToggle.setAttribute('aria-expanded', 'false');
+      toolsToggleEl = toolsToggle; toolsToggle.setAttribute('aria-expanded', 'false');
       presetSel = el('select', 'rt-select rt-preset-select'); presetSel.ariaLabel = t('Review preset', '预设模板');
       presetSel.append(new Option('CS / AI', 'cs_ai'), new Option(t('Medicine / Pharmacy PICO', '医学 / 药学 PICO'), 'pico'));
       presetSel.addEventListener('change', () => { void saveTablePatch({ preset: presetSel!.value as ReviewPresetId }, true); });
@@ -244,24 +250,24 @@ export function createReviewTableView(): ResearchViewModule {
       tools.append(presetSel, mkBtn('btn rt-export-csv', 'CSV', () => doExport('csv')), mkBtn('btn rt-export-md', 'Markdown', () => doExport('markdown')));
       head.append(steps, toolsToggle, tools); subBarEl = el('div', 'rt-subbar'); top.append(head, subBarEl);
       splitEl = el('div', 'rt-split'); splitEl.dataset.inspectorOpen = 'false';
-      const mainPane = el('div', 'rt-main-pane'); bodyEl = el('div', 'rt-body-scroll'); mainPane.append(bodyEl);
+      const mainPane = el('div', 'rt-main-pane'); bodyEl = el('div', 'rt-body-scroll'); progressEl = el('div', 'rt-progress', statusMsg); progressEl.setAttribute('role', 'status'); mainPane.append(bodyEl);
       inspector = new ReviewTableInspector({
         onClose: syncSplitAttr, onRetry: (docId, colId) => runBatch('extract', 'cell', { docId, colId, force: true }),
         onSaveOverride: async (docId, colId, val, reason) => { try { await setManualCell(docId, colId, val, reason); toast(t('Saved manual override.', '已保存人工覆写。')); } catch (e) { toast(message(e)); } },
         onJump: (docId, page, quote) => { void shell?.inspectInReader({ docId, page, ...(quote ? { quote } : {}) }).catch(e => toast(message(e))); }
       });
-      colPicker = new ReviewColumnPicker(async col => { if (table) await saveTablePatch({ columns: [...table.columns, col] }); });
+      colPicker = new ReviewColumnPicker(col => table ? saveTablePatch({ columns: [...table.columns, col] }) : Promise.resolve(false));
       splitEl.append(mainPane, inspector.backdrop, inspector.root); root.append(top, splitEl, colPicker.backdrop, colPicker.root); host.replaceChildren(root);
-      try { await loadData(); } catch (e) { if (mounted) { setStatus(message(e)); toast(message(e)); } }
+      try { await loadData(); } catch (e) { if (mounted && seq === mountSeq) { setStatus(message(e)); toast(message(e)); } }
       const openCtx = ctx.openContext();
-      if (mounted && openCtx?.docId && openCtx !== lastOpenCtx) { lastOpenCtx = openCtx; step = 'extraction'; renderAll(); void runBatch('extract', 'reextract', { docId: openCtx.docId, docIds: [openCtx.docId] }); }
+      if (mounted && seq === mountSeq && openCtx?.docId && openCtx !== lastOpenCtx) { lastOpenCtx = openCtx; step = 'extraction'; renderAll(); void runBatch('extract', 'reextract', { docId: openCtx.docId, docIds: [openCtx.docId] }); }
     },
-    unmount() { mounted = false; ++mountSeq; abortCtrl?.abort(); abortCtrl = null; running = false; inspector = null; colPicker = null; splitEl = subBarEl = bodyEl = presetSel = progressEl = stopBtn = null; },
+    unmount() { mounted = false; ++mountSeq; abortCtrl?.abort(); abortCtrl = null; running = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = presetSel = progressEl = stopBtn = toolsToggleEl = null; },
     saveState(): SavedReviewState { return { step, selected: selected ? { ...selected } : null, inspectorOpen: Boolean(inspector?.isOpen()), activeScreenDocId, scrollTop: bodyEl?.scrollTop ?? 0, scrollLeft: bodyEl?.querySelector('.rt-table-wrap')?.scrollLeft ?? 0 }; },
     restoreState(raw) {
       const s = raw as SavedReviewState | undefined; if (!s || !mounted) return;
       step = s.step ?? 'extraction'; selected = s.selected ? { ...s.selected } : null; activeScreenDocId = s.activeScreenDocId ?? ''; renderAll();
-      if (s.inspectorOpen && selected) openInspector(selected.docId, selected.colId);
+      if (s.inspectorOpen && selected && hasCol(selected.colId)) openInspector(selected.docId, selected.colId);
       if (bodyEl) { bodyEl.scrollTop = s.scrollTop ?? 0; const tw = bodyEl.querySelector('.rt-table-wrap'); if (tw) tw.scrollLeft = s.scrollLeft ?? 0; }
     },
     handleEscape() { return colPicker?.isOpen() ? (colPicker.close(), true) : inspector?.isOpen() ? (inspector.close(), true) : false; },

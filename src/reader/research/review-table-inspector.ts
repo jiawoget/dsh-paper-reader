@@ -12,6 +12,7 @@ const COL_ZH: Readonly<Record<string, string>> = {
   population: '研究人群 (P)', intervention: '干预措施 (I)', comparator: '对照组 (C)', outcome: '结局指标 (O)', study_design: '研究设计',
   sample_size: '样本量', code_repo: '代码仓库', primary_endpoint: '主要终点', adverse_events: '不良事件'
 };
+const SUG_HINT_ZH: Readonly<Record<string, string>> = { sample_size: '参与者或评测样本总量。', code_repo: '公开代码仓库或复现资源链接。', primary_endpoint: '预设的主要临床或实验终点指标。', adverse_events: '报告的安全性表现与主要不良事件。' };
 export const reviewColLabel = (col: Pick<ReviewColumn, 'id' | 'name'>): string => Object.hasOwn(COL_ZH, col.id) ? t(col.name, COL_ZH[col.id]) : col.name;
 export const coverageLabel = (kind: DocumentInfo['kind']): string => kind === 'abstract' ? abstractOnlyLabel() : t('Full text', '全文');
 export const decisionLabel = (d: ReviewDecision): string => d === 'yes' ? t('Yes', '纳入') : d === 'no' ? t('No', '排除') : t('Maybe', '待定');
@@ -28,6 +29,7 @@ export function slugColumnId(name: string, existing: ReadonlySet<string>): strin
   if (!existing.has(safe)) return safe;
   let i = 2; while (existing.has(`${safe}_${i}`)) i++; return `${safe}_${i}`;
 }
+const bindEsc = (node: HTMLElement, close: () => void) => node.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); close(); } });
 const closeIconBtn = (cls: string, label: string, onClick: () => void) => {
   const b = el('button', `icon-btn ${cls}`); b.type = 'button'; b.ariaLabel = b.title = label; b.append(researchIcon('close', 16)); b.addEventListener('click', onClick); return b;
 };
@@ -46,7 +48,7 @@ export class ReviewTableInspector {
 
   constructor(private readonly cb: InspectorCallbacks) {
     this.backdrop.hidden = this.root.hidden = true;
-    this.backdrop.addEventListener('click', () => this.close());
+    this.backdrop.addEventListener('click', () => this.close()); bindEsc(this.root, () => this.close());
     this.root.setAttribute('aria-label', t('Evidence Inspector', 'Evidence 证据核验'));
     const head = el('div', 'rt-insp-head'), headText = el('div', 'rt-insp-head-text');
     headText.append(this.titleEl, this.subEl);
@@ -98,10 +100,11 @@ export class ReviewColumnPicker {
   readonly backdrop = el('div', 'rt-col-backdrop'); readonly root = el('section', 'rt-col-picker');
   private readonly sugList = el('div', 'rt-col-sug'); private readonly nameIn = el('input', 'search rt-col-name-in');
   private readonly promptIn = el('textarea', 'rt-col-prompt-in'); private readonly typeSel = el('select', 'rt-select rt-col-type-in');
-  private existing = new Set<string>();
+  private readonly addBtn = el('button', 'btn primary rt-col-submit', t('Add column', '添加列'));
+  private existing = new Set<string>(); private busy = false; private prevFocus: HTMLElement | null = null;
 
-  constructor(private readonly onAdd: (col: ReviewColumn) => Promise<void>) {
-    this.backdrop.hidden = this.root.hidden = true; this.backdrop.addEventListener('click', () => this.close());
+  constructor(private readonly onAdd: (col: ReviewColumn) => Promise<boolean>) {
+    this.backdrop.hidden = this.root.hidden = true; this.backdrop.addEventListener('click', () => this.close()); bindEsc(this.root, () => this.close());
     this.root.setAttribute('role', 'dialog'); this.root.setAttribute('aria-modal', 'true'); this.root.setAttribute('aria-label', t('Add Column', '添加提取列'));
     const head = el('div', 'rt-picker-head'), body = el('div', 'rt-col-body'), form = el('form', 'rt-col-form'), foot = el('div', 'rt-col-foot');
     head.append(el('h2', 'rt-col-title', t('Add Column', '添加提取列')), closeIconBtn('rt-col-close', t('Close column picker', '关闭添加列窗口'), () => this.close()));
@@ -113,21 +116,24 @@ export class ReviewColumnPicker {
     form.append(field(t('Column name', '列名称'), this.nameIn), field(t('Extraction prompt', '提取指令'), this.promptIn), field(t('Output type', '输出类型'), this.typeSel));
     form.addEventListener('submit', e => {
       e.preventDefault(); const name = this.nameIn.value.trim(); if (!name) return;
-      void this.onAdd({ id: slugColumnId(name, this.existing), name, prompt: this.promptIn.value.trim() || name, type: this.typeSel.value as ReviewColumnType }).then(() => this.close());
+      void this.submit({ id: slugColumnId(name, this.existing), name, prompt: this.promptIn.value.trim() || name, type: this.typeSel.value as ReviewColumnType });
     });
     body.append(el('span', 'rt-insp-label', t('Suggested columns', '推荐列')), this.sugList, el('span', 'rt-insp-label', t('Custom column', '自定义列')), form);
-    const addBtn = el('button', 'btn primary rt-col-submit', t('Add column', '添加列')); addBtn.type = 'submit'; addBtn.setAttribute('form', 'rtAddColForm');
-    foot.append(mkBtn('btn', t('Cancel', '取消'), () => this.close()), addBtn); this.root.append(head, body, foot);
+    this.addBtn.type = 'submit'; this.addBtn.setAttribute('form', 'rtAddColForm');
+    foot.append(mkBtn('btn', t('Cancel', '取消'), () => this.close()), this.addBtn); this.root.append(head, body, foot);
   }
 
+  private syncBusy(): void { this.addBtn.disabled = this.busy; for (const b of this.sugList.querySelectorAll<HTMLButtonElement>('.rt-sug-btn')) b.disabled = this.busy || this.existing.has(b.dataset.colId!); }
+  private async submit(col: ReviewColumn): Promise<void> { if (this.busy) return; this.busy = true; this.syncBusy(); try { if (await this.onAdd(col)) this.close(); } finally { this.busy = false; this.syncBusy(); } }
   isOpen(): boolean { return !this.root.hidden; }
-  close(): void { this.backdrop.hidden = this.root.hidden = true; }
+  close(): void { this.backdrop.hidden = this.root.hidden = true; if (this.prevFocus?.isConnected) this.prevFocus.focus({ preventScroll: true }); this.prevFocus = null; }
   open(existingIds: readonly string[]): void {
-    this.existing = new Set(existingIds); this.nameIn.value = this.promptIn.value = ''; this.typeSel.value = 'text'; this.sugList.replaceChildren();
+    this.prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null; this.existing = new Set(existingIds); this.busy = false;
+    this.nameIn.value = this.promptIn.value = ''; this.typeSel.value = 'text'; this.sugList.replaceChildren();
     for (const col of SUGGESTED_REVIEW_COLUMNS) {
-      const added = this.existing.has(col.id), btn = mkBtn('btn rt-sug-btn', (added ? '✓ ' : '+ ') + reviewColLabel(col), () => { if (!added) void this.onAdd({ ...col }).then(() => this.close()); });
-      btn.disabled = added; btn.dataset.colId = col.id; btn.title = col.prompt; this.sugList.append(btn);
+      const added = this.existing.has(col.id), btn = mkBtn('btn rt-sug-btn', (added ? '✓ ' : '+ ') + reviewColLabel(col), () => { if (!added) void this.submit({ ...col }); });
+      btn.disabled = added; btn.dataset.colId = col.id; btn.title = Object.hasOwn(SUG_HINT_ZH, col.id) ? t(col.prompt, SUG_HINT_ZH[col.id]) : t(col.prompt, ''); this.sugList.append(btn);
     }
-    this.backdrop.hidden = this.root.hidden = false; this.nameIn.focus({ preventScroll: true });
+    this.syncBusy(); this.backdrop.hidden = this.root.hidden = false; this.nameIn.focus({ preventScroll: true });
   }
 }
