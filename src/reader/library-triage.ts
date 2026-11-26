@@ -127,7 +127,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           details.push(section ? t('Continue at ', '续读 · ') + section.title : t('OpenStax book', 'OpenStax 图书'));
         } else if (doc.kind === 'pdf') {
           const total = doc.meta?.pageCount || Number(localStorage.getItem('reader.pdf-pages.' + doc.id)) || 0;
-          if (doc.meta?.lastPage && total > 0) details.push(t('p. ' + doc.meta.lastPage + ' / ' + total, '第 ' + doc.meta.lastPage + ' / ' + total + ' 页'));
+          if (doc.meta?.lastPage && doc.meta.lastPage > 1 && total > 1) details.push(t('p. ' + doc.meta.lastPage + ' / ' + total, '第 ' + doc.meta.lastPage + ' / ' + total + ' 页'));
           else details.push(total > 0 ? t(total + (total === 1 ? ' page' : ' pages'), total + ' 页') : 'PDF');
         } else {
           if (doc.url) details.push(new URL(doc.url).hostname);
