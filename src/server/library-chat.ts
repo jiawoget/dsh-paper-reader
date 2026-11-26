@@ -49,8 +49,8 @@ const surnameFromAuthor = (raw: string): string => {
   const cleaned = raw.replace(/\bet\s+al\.?/gi, '').trim();
   return !cleaned ? '' : cleaned.includes(',') ? (cleaned.split(',')[0].trim() || cleaned) : (cleaned.split(/\s+/).filter(Boolean).at(-1) ?? '');
 };
-async function completeWithBackoff(
-  deps: LibraryChatDeps, system: string, data: Input, opts?: StreamOptions & { questionModel?: unknown }
+export async function completeWithBackoff(
+  deps: { store: ReaderStore; model: ReaderModel }, system: string, data: Input, opts?: StreamOptions & { questionModel?: unknown }
 ): Promise<{ text: string }> {
   const settings = deps.store.settings();
   for (let attempt = 0; ; attempt++) {

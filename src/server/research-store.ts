@@ -8,8 +8,8 @@ type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
 
 export function hasResearchSchema(db: DatabaseSync): boolean {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards')").get();
-  return Number(row?.n ?? 0) === 5;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells')").get();
+  return Number(row?.n ?? 0) === 7;
 }
 
 export function ensureResearchSchema(db: DatabaseSync): void {
@@ -18,12 +18,15 @@ export function ensureResearchSchema(db: DatabaseSync): void {
   db.exec("CREATE TABLE IF NOT EXISTS topics(id TEXT PRIMARY KEY, name TEXT NOT NULL, tag TEXT NOT NULL, zoteroCollection TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL) STRICT");
   db.exec('CREATE TABLE IF NOT EXISTS graph_cache(cacheKey TEXT PRIMARY KEY, source TEXT NOT NULL, payload TEXT NOT NULL, fetchedAt INTEGER NOT NULL, ttlMs INTEGER NOT NULL) STRICT');
   db.exec('CREATE TABLE IF NOT EXISTS paper_cards(doc_id TEXT PRIMARY KEY, card_json TEXT NOT NULL, source_hash TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT');
+  db.exec('CREATE TABLE IF NOT EXISTS extraction_tables(id TEXT PRIMARY KEY, name TEXT NOT NULL, preset TEXT NOT NULL, criteria_json TEXT NOT NULL, columns_json TEXT NOT NULL, strict_criterion INTEGER NOT NULL DEFAULT 0, threshold REAL NOT NULL DEFAULT 0.6, updated_at INTEGER NOT NULL) STRICT');
+  db.exec("CREATE TABLE IF NOT EXISTS extraction_cells(table_id TEXT NOT NULL, doc_id TEXT NOT NULL, col_id TEXT NOT NULL, value TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', page INTEGER, reasoning TEXT NOT NULL DEFAULT '', verified INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, source_kind TEXT NOT NULL DEFAULT 'pdf', status TEXT NOT NULL DEFAULT 'done', updated_at INTEGER NOT NULL, PRIMARY KEY(table_id, doc_id, col_id)) STRICT");
 }
 
 export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
   db.prepare('DELETE FROM doc_pages WHERE docId=?').run(docId);
   db.prepare('DELETE FROM doc_pages_fts WHERE docId=?').run(docId);
   db.prepare('DELETE FROM paper_cards WHERE doc_id=?').run(docId);
+  db.prepare('DELETE FROM extraction_cells WHERE doc_id=?').run(docId);
 }
 
 export function segmentFtsText(text: string): string {

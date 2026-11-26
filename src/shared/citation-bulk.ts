@@ -155,7 +155,7 @@ export function parseBulkRefs(text: string, format: BulkRefFormat | 'auto' = 'au
     : /^\s*@[a-z]+\s*[{(]/im.test(trimmed) ? 'bibtex' : /^\s*TY\s{1,2}-/m.test(trimmed) ? 'ris' : 'csv';
   return resolved === 'bibtex' ? parseBibTeX(trimmed) : resolved === 'ris' ? parseRIS(trimmed) : parseCsv(trimmed);
 }
-const csvCell = (v: string) => { const s = /^(?:[\t\r\n]|\s*[=+\-@])/.test(v) ? "'" + v : v; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+export const csvCell = (v: string) => { const s = /^(?:[\t\r\n]|\s*[=+\-@])/.test(v) ? "'" + v : v; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 export function exportBulkRefs(docs: readonly DocumentInfo[], format: BulkRefFormat): string {
   if (format === 'bibtex') return docs.map(d => formatBibTeX(buildCitationMetadata(d))).join('\n\n') + (docs.length ? '\n' : '');
   if (format === 'ris') return docs.map(d => formatRIS(buildCitationMetadata(d))).join('\n\n') + (docs.length ? '\n' : '');

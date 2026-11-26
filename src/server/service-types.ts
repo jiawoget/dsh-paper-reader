@@ -190,6 +190,12 @@ export interface ServiceResults {
   'trends.papers': Operations['trends.papers'][1];
   'library.cards': Operations['library.cards'][1];
   'library.chat': Operations['library.chat'][1];
+  'review.get': Operations['review.get'][1];
+  'review.saveTable': Operations['review.saveTable'][1];
+  'review.screen': Operations['review.screen'][1];
+  'review.extract': Operations['review.extract'][1];
+  'review.setCell': Operations['review.setCell'][1];
+  'review.export': Operations['review.export'][1];
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];
