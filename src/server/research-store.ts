@@ -261,11 +261,13 @@ export function upsertCitationStances(db: DatabaseSync, rows: readonly CitationS
     stmt.run(s.targetKey, s.direction, s.citingKey, s.docId ?? null, s.source, s.citingDocId ?? null, s.citingPage ?? null, s.citingTitle, JSON.stringify(s.citingAuthors), s.citingYear ?? null, s.citingDoi ?? null, s.citingArxiv ?? null, s.citingUrl ?? null, s.section, s.context, s.stance, s.rationale, s.isInfluential ? 1 : 0, s.isSelfCitation ? 1 : 0, s.manualOverride ? 1 : 0, s.updatedAt);
   }
 }
+export function pruneCitationStances(db: DatabaseSync, targetKey: string, direction: CitationDirection, scope: 'local' | 'external', keepKeys: ReadonlySet<string>): void {
+  const srcSql = scope === 'local' ? "source='local'" : "source!='local'", keys = [...keepKeys];
+  if (!keys.length) db.prepare(`DELETE FROM citation_stances WHERE target_key=? AND direction=? AND ${srcSql} AND manual_override=0`).run(targetKey, direction);
+  else db.prepare(`DELETE FROM citation_stances WHERE target_key=? AND direction=? AND ${srcSql} AND manual_override=0 AND citing_key NOT IN (${keys.map(() => '?').join(',')})`).run(targetKey, direction, ...keys);
+}
 export function reclassifyCitationStance(db: DatabaseSync, targetKey: string, direction: CitationDirection, citingKey: string, stance: CitationStance, rationale?: string): CitationStatement | undefined {
-  const now = new Date().toISOString();
-  const res = rationale !== undefined
-    ? db.prepare('UPDATE citation_stances SET stance=?, rationale=?, manual_override=1, updated_at=? WHERE target_key=? AND direction=? AND citing_key=?').run(stance, rationale, now, targetKey, direction, citingKey)
-    : db.prepare('UPDATE citation_stances SET stance=?, manual_override=1, updated_at=? WHERE target_key=? AND direction=? AND citing_key=?').run(stance, now, targetKey, direction, citingKey);
+  const res = db.prepare('UPDATE citation_stances SET stance=?, rationale=COALESCE(?, rationale), manual_override=1, updated_at=? WHERE target_key=? AND direction=? AND citing_key=?').run(stance, rationale ?? null, new Date().toISOString(), targetKey, direction, citingKey);
   if (!res.changes) return undefined;
   const row = db.prepare('SELECT * FROM citation_stances WHERE target_key=? AND direction=? AND citing_key=?').get(targetKey, direction, citingKey);
   return row ? decodeCitationStance(row) : undefined;

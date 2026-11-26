@@ -7,7 +7,7 @@ import type { Library } from './library.js';
 import { completeWithBackoff } from './library-chat.js';
 import type { ReaderModel, StreamOptions } from './reader-model.js';
 import type { ReaderStore } from './reader-store.js';
-import { getDocPages, listCitationStances, reclassifyCitationStance, upsertCitationStances } from './research-store.js';
+import { getDocPages, listCitationStances, pruneCitationStances, reclassifyCitationStance, upsertCitationStances } from './research-store.js';
 import { isObject, readQuestionModel, ServiceError, single, type Input } from './service-types.js';
 
 interface CitationClassifyItem { id: string; targetTitle: string; citingTitle: string; context: string; section?: CitationSection }
@@ -15,7 +15,7 @@ interface CitationClassifyResult { id: string; stance: CitationStance; rationale
 interface CitationDeps { store: ReaderStore; library: Library; model: ReaderModel; fetchFn?: typeof fetch; sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void> }
 type TargetMeta = CitationTargetInfo & { s2Id?: string };
 
-const TTL_CITATIONS = 43_200_000, MIN_CONTEXT_LEN = 20, BATCH_SIZE = 8;
+const TTL_CITATIONS = 43_200_000, MIN_CONTEXT_LEN = 20, BATCH_SIZE = 8, MAX_EPMC_XML = 2_000_000, PMCID_RE = /^PMC\d+$/i;
 const STANCE_SET = new Set<string>(VALID_CITATION_STANCES), SECTION_SET = new Set<string>(VALID_CITATION_SECTIONS);
 const CLASSIFIED_STANCES = new Set<CitationStance>(['supporting', 'extending', 'contrasting', 'mentioning']);
 const TITLE_STOP = new Set(['about', 'after', 'based', 'between', 'clinical', 'comparison', 'double', 'effect', 'effects', 'evaluation', 'framework', 'from', 'large', 'learning', 'method', 'methods', 'model', 'models', 'neural', 'paper', 'patients', 'results', 'study', 'system', 'their', 'these', 'through', 'toward', 'towards', 'trial', 'using', 'with']);
@@ -82,10 +82,26 @@ function findCitationMatch(clean: string, target: { title: string; authors: read
     const m = new RegExp(`\\b${escapeRe(surname)}(?:\\s+et\\s+al\\.?)?\\s*[\\(\\[,]?\\s*${target.year}\\b`, 'i').exec(clean);
     if (m) {
       const kws = normTitle(target.title).split(' ').filter(w => w.length >= 5 && !TITLE_STOP.has(w)), win = lower.slice(Math.max(0, m.index - 600), Math.min(clean.length, m.index + 600));
-      if (!kws.length || kws.some(w => win.includes(w))) return { index: m.index, len: m[0].length };
+      if (kws.length > 0 && kws.some(w => win.includes(w))) return { index: m.index, len: m[0].length };
     }
   }
   return undefined;
+}
+function docMatchesTarget(doc: DocumentInfo, t: { docId?: string; title?: string; doi?: string; arxivId?: string }): boolean {
+  const tDoi = cleanDoi(t.doi)?.toLowerCase(), dDoi = cleanDoi(doc.doi)?.toLowerCase(), tAx = (t.arxivId ?? extractArxivId(t.doi))?.toLowerCase(), dAx = extractArxivId(doc.url, doc.doi)?.toLowerCase(), tTitle = normTitle(t.title);
+  return Boolean((t.docId && doc.id === t.docId) || (tDoi && dDoi && tDoi === dDoi) || (tAx && dAx && tAx === dAx) || (tTitle.length >= 18 && tTitle === normTitle(doc.paperTitle || doc.title)));
+}
+function enrichFromDoc(t: TargetMeta, doc: DocumentInfo | undefined): TargetMeta {
+  if (!doc) return t;
+  const doi = t.doi ?? cleanDoi(doc.doi), arxivId = t.arxivId ?? extractArxivId(doc.url, doc.doi), title = t.title && t.title !== t.doi && !t.title.startsWith('arXiv:') ? t.title : (doc.paperTitle || doc.title);
+  return { ...t, docId: t.docId ?? doc.id, doi, arxivId, title, authors: t.authors.length ? t.authors : splitAuthors(doc.authors), year: t.year ?? parseYear(doc.year ?? doc.venue), sciteUrl: buildSciteUrl(doi, title) };
+}
+async function readBoundedText(res: Response, maxChars: number): Promise<string> {
+  if (!res.body) return (await res.text()).slice(0, maxChars);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let out = '';
+  try { while (out.length < maxChars) { const { done, value } = await reader.read(); if (done) break; out += dec.decode(value, { stream: true }); } return (out + dec.decode()).slice(0, maxChars); }
+  finally { reader.cancel().catch(() => undefined); }
 }
 
 export function scanLocalBackCitations(
@@ -93,24 +109,20 @@ export function scanLocalBackCitations(
   docs: readonly DocumentInfo[], getPages: (docId: string) => DocPageRecord[], direction: CitationDirection = 'cited_by'
 ): CitationStatement[] {
   const out: CitationStatement[] = [], now = new Date().toISOString();
-  const scanPair = (sourceDoc: DocumentInfo, subject: typeof target, entryDoc: DocumentInfo) => {
-    const rawPages = getPages(sourceDoc.id), pages = rawPages.length ? rawPages : (sourceDoc.abstract ? [{ page: 1, text: sourceDoc.abstract }] : []);
-    const hits: { page: number; clean: string; idx: number; len: number; isRefPage: boolean }[] = [];
-    for (const p of pages) {
-      const clean = normSpace(p.text), m = clean.length >= MIN_CONTEXT_LEN ? findCitationMatch(clean, subject) : undefined;
-      if (m) hits.push({ page: p.page, clean, idx: m.index, len: m.len, isRefPage: /\b(?:references|bibliography)\b/i.test(clean.slice(0, Math.min(m.index, 400))) && m.index > 0 });
-    }
+  const loadPages = (doc: DocumentInfo) => { const r = getPages(doc.id); return (r.length ? r : doc.abstract ? [{ page: 1, text: doc.abstract }] : []).map(p => ({ page: p.page, clean: normSpace(p.text) })).filter(p => p.clean.length >= MIN_CONTEXT_LEN); };
+  const scanPages = (pages: readonly { page: number; clean: string }[], subject: typeof target, entryDoc: DocumentInfo, ownerDocId?: string) => {
+    const hits = pages.flatMap(p => { const m = findCitationMatch(p.clean, subject); return m ? [{ page: p.page, clean: p.clean, idx: m.index, len: m.len, isRefPage: /\b(?:references|bibliography)\b/i.test(p.clean.slice(0, Math.min(m.index, 400))) && m.index > 0 }] : []; });
     const chosen = (hits.some(h => !h.isRefPage) ? hits.filter(h => !h.isRefPage) : hits).slice(0, 2);
     const authors = splitAuthors(entryDoc.authors), doi = cleanDoi(entryDoc.doi), arxiv = extractArxivId(entryDoc.url, entryDoc.doi);
     for (const h of chosen) {
       const context = extractSnippet(h.clean, h.idx, h.len);
-      if (context.length >= MIN_CONTEXT_LEN) out.push({ targetKey: target.targetKey, direction, citingKey: `local:${entryDoc.id}:p${h.page}`, ...(target.docId ? { docId: target.docId } : {}), source: 'local', citingDocId: entryDoc.id, citingPage: h.page, citingTitle: entryDoc.paperTitle || entryDoc.title, citingAuthors: authors, citingYear: parseYear(entryDoc.year ?? entryDoc.venue), ...(doi ? { citingDoi: doi } : {}), ...(arxiv ? { citingArxiv: arxiv } : {}), ...(entryDoc.url ? { citingUrl: entryDoc.url } : {}), section: inferSection(h.clean, h.idx, context), context, stance: 'unclassified', rationale: '', isInfluential: false, isSelfCitation: isSelfCitation(target.authors, authors), manualOverride: false, updatedAt: now });
+      if (context.length >= MIN_CONTEXT_LEN) out.push({ targetKey: target.targetKey, direction, citingKey: `local:${entryDoc.id}:p${h.page}`, ...(ownerDocId ? { docId: ownerDocId } : {}), source: 'local', citingDocId: entryDoc.id, citingPage: h.page, citingTitle: entryDoc.paperTitle || entryDoc.title, citingAuthors: authors, citingYear: parseYear(entryDoc.year ?? entryDoc.venue), ...(doi ? { citingDoi: doi } : {}), ...(arxiv ? { citingArxiv: arxiv } : {}), ...(entryDoc.url ? { citingUrl: entryDoc.url } : {}), section: inferSection(h.clean, h.idx, context), context, stance: 'unclassified', rationale: '', isInfluential: false, isSelfCitation: isSelfCitation(target.authors, authors), manualOverride: false, updatedAt: now });
     }
   };
-  if (direction === 'cited_by') for (const doc of docs) { if (doc.id !== target.docId) scanPair(doc, target, doc); }
-  else if (target.docId) {
-    const selfDoc = docs.find(d => d.id === target.docId);
-    if (selfDoc) for (const o of docs) if (o.id !== target.docId) scanPair(selfDoc, { targetKey: target.targetKey, docId: o.id, title: o.paperTitle || o.title, authors: splitAuthors(o.authors), year: parseYear(o.year ?? o.venue), doi: cleanDoi(o.doi), arxivId: extractArxivId(o.url, o.doi) }, o);
+  if (direction === 'cited_by') for (const doc of docs) { if (!docMatchesTarget(doc, target)) scanPages(loadPages(doc), target, doc, target.docId); }
+  else {
+    const selfDoc = docs.find(d => docMatchesTarget(d, target)), selfPages = selfDoc ? loadPages(selfDoc) : [];
+    if (selfDoc) for (const o of docs) if (!docMatchesTarget(o, target)) scanPages(selfPages, { targetKey: target.targetKey, docId: o.id, title: o.paperTitle || o.title, authors: splitAuthors(o.authors), year: parseYear(o.year ?? o.venue), doi: cleanDoi(o.doi), arxivId: extractArxivId(o.url, o.doi) }, o, selfDoc.id);
   }
   return out;
 }
@@ -119,11 +131,15 @@ function extractEpmcXmlContext(xml: string, pmid: string, doi: string | undefine
   for (const m of xml.matchAll(/<ref\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/ref>/gi)) {
     if ((pmid && m[2].includes(pmid)) || (doi && m[2].toLowerCase().includes(doi.toLowerCase())) || (surname.length >= 3 && year && new RegExp(`\\b${escapeRe(surname)}\\b`, 'i').test(m[2]) && m[2].includes(String(year)))) { rid = m[1]; break; }
   }
-  const pm = rid ? new RegExp(`<p\\b[^>]*>([\\s\\S]{0,4000}?\\brid="[^"]*\\b${escapeRe(rid)}\\b[^"]*"[\\s\\S]{0,4000}?)<\\/p>`, 'i').exec(xml) : null;
-  if (!pm) return undefined;
-  const secTitle = [...xml.slice(Math.max(0, pm.index - 4000), pm.index).matchAll(/<title[^>]*>([\s\S]{1,120}?)<\/title>/gi)].at(-1)?.[1] ?? '';
-  const raw = pm[1], refPos = raw.search(new RegExp(`\\brid="[^"]*\\b${escapeRe(rid)}\\b`, 'i')), clean = stripXml(raw);
-  const context = extractSnippet(clean, Math.min(refPos >= 0 ? stripXml(raw.slice(0, refPos)).length : 0, Math.max(0, clean.length - 1)), 8), sec = mapHeadingToSection(stripXml(secTitle));
+  const xm = rid ? new RegExp(`<xref\\b[^>]*\\brid="(?:[^"]*\\s)?${escapeRe(rid)}(?:\\s[^"]*)?"[^>]*>`, 'i').exec(xml) : null;
+  if (!xm) return undefined;
+  const xIdx = xm.index, prevClose = xml.lastIndexOf('</p>', xIdx), scanFrom = Math.max(prevClose >= 0 ? prevClose + 4 : 0, xIdx - 8000);
+  const openP = [...xml.slice(scanFrom, xIdx).matchAll(/<p(?:\s[^>]*)?>/gi)].at(-1), closeRel = openP ? xml.slice(xIdx, xIdx + 8000).search(/<\/p>/i) : -1;
+  if (!openP || closeRel < 0) return undefined;
+  const pStart = scanFrom + openP.index!, bodyStart = pStart + openP[0].length, raw = xml.slice(bodyStart, xIdx + closeRel), beforeP = xml.slice(Math.max(0, pStart - 8000), pStart);
+  const secMatches = [...beforeP.matchAll(/<sec\b[^>]*>(?:\s*<label[^>]*>[\s\S]{0,40}?<\/label>)?\s*<title[^>]*>([\s\S]{1,120}?)<\/title>/gi)];
+  const sec = (secMatches.length ? secMatches : [...beforeP.matchAll(/<title[^>]*>([\s\S]{1,120}?)<\/title>/gi)]).map(m => mapHeadingToSection(stripXml(m[1]))).filter(s => s !== 'Unknown').at(-1) ?? 'Unknown';
+  const clean = stripXml(raw), context = extractSnippet(clean, Math.min(stripXml(raw.slice(0, xIdx - bodyStart)).length, Math.max(0, clean.length - 1)), 8);
   return context.length >= MIN_CONTEXT_LEN ? { context, section: sec !== 'Unknown' ? sec : mapHeadingToSection(context) } : undefined;
 }
 async function fetchExternalCitations(target: TargetMeta, direction: CitationDirection, limit: number, ctx: GraphContext, degraded: Set<string>, forceRefresh: boolean): Promise<CitationStatement[]> {
@@ -134,7 +150,7 @@ async function fetchExternalCitations(target: TargetMeta, direction: CitationDir
   };
   if (s2Key && !degraded.has('s2')) {
     const ep = direction === 'references' ? 'references' : 'citations', field = direction === 'references' ? 'citedPaper' : 'citingPaper';
-    const res = await fetchJson('s2', `cit:s2:${direction}:${s2Key.toLowerCase()}`, `https://api.semanticscholar.org/graph/v1/paper/${encodeURIComponent(s2Key)}/${ep}?fields=contexts,intents,isInfluential,${field}.paperId,${field}.title,${field}.year,${field}.authors,${field}.externalIds,${field}.url&limit=${limit}`, ctx, degraded, TTL_CITATIONS, { method: 'GET', headers: s2Headers(ctx.settings) }, forceRefresh);
+    const res = await fetchJson('s2', `cit:s2:${direction}:${limit}:${s2Key.toLowerCase()}`, `https://api.semanticscholar.org/graph/v1/paper/${encodeURIComponent(s2Key)}/${ep}?fields=contexts,intents,isInfluential,${field}.paperId,${field}.title,${field}.year,${field}.authors,${field}.externalIds,${field}.url&limit=${limit}`, ctx, degraded, TTL_CITATIONS, { method: 'GET', headers: s2Headers(ctx.settings) }, forceRefresh);
     for (const row of arrOf(isObject(res?.data) ? res.data.data : undefined)) {
       const paper = isObject(row) ? parseS2Paper(row[field]) : undefined;
       if (!isObject(row) || !paper) continue;
@@ -155,11 +171,10 @@ async function fetchExternalCitations(target: TargetMeta, direction: CitationDir
     const oaRes = await fetchJson('europepmc', `cit:epmc:oa:${pmid}`, `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(`CITES:${pmid}_MED AND OPEN_ACCESS:y`)}&format=json&resultType=core&pageSize=6`, ctx, degraded, TTL_CITATIONS, { method: 'GET' }, forceRefresh);
     const oaItems = arrOf(isObject(oaRes?.data) && isObject(oaRes.data.resultList) ? oaRes.data.resultList.result : undefined).filter(isObject).slice(0, 4);
     await Promise.allSettled(oaItems.map(async item => {
-      const paper = parseEpmcItem(item), pmcid = typeof item.pmcid === 'string' ? item.pmcid : '';
+      const paper = parseEpmcItem(item), pmcid = typeof item.pmcid === 'string' ? item.pmcid.trim() : '';
       if (!paper) return;
-      const xmlRes = pmcid ? await cachedFetch<string>('europepmc', `cit:epmc:xml:${pmcid}`, `https://www.ebi.ac.uk/europepmc/webservices/rest/${encodeURIComponent(pmcid)}/fullTextXML`, { method: 'GET' }, TTL_CITATIONS, r => r.text(), ctx, degraded, forceRefresh) : undefined;
-      const ex = xmlRes ? extractEpmcXmlContext(xmlRes.data, pmid!, nonArxivDoi, extractSurname(target.authors[0]), target.year) : undefined;
-      pushExt('europepmc', 'epmc:' + (pmcid || paper.pmid || paperIdentityKeys(paper)[0] || normTitle(paper.title)), paper, ex?.context ?? '', ex?.section ?? 'Unknown', false);
+      const exRes = PMCID_RE.test(pmcid) ? await cachedFetch<{ context: string; section: CitationSection } | null>('europepmc', `cit:epmc:ctx:${pmcid.toUpperCase()}:${(pmid || nonArxivDoi || '').toLowerCase()}`, `https://www.ebi.ac.uk/europepmc/webservices/rest/${encodeURIComponent(pmcid)}/fullTextXML`, { method: 'GET' }, TTL_CITATIONS, async r => extractEpmcXmlContext(await readBoundedText(r, MAX_EPMC_XML), pmid!, nonArxivDoi, extractSurname(target.authors[0]), target.year) ?? null, ctx, degraded, forceRefresh) : undefined;
+      pushExt('europepmc', 'epmc:' + (pmcid || paper.pmid || paperIdentityKeys(paper)[0] || normTitle(paper.title)), paper, exRes?.data?.context ?? '', exRes?.data?.section ?? 'Unknown', false);
     }));
   }
   if (pmid && !degraded.has('europepmc') && out.length < 6) {
@@ -207,10 +222,12 @@ function computeTallies(statements: readonly CitationStatement[]): CitationTalli
   }
   return { citingPapers: papers.size, citationStatements: statements.length, ...c };
 }
-async function resolveLocalTarget(deps: Pick<CitationDeps, 'library'>, input: Input): Promise<CitationTargetInfo> {
-  const docId = input.docId !== undefined ? single(input.docId, 'document ID', 512, true) : undefined, doc = docId ? await deps.library.get(docId) : undefined;
+async function resolveLocalTarget(deps: Pick<CitationDeps, 'library'>, input: Input, docs: readonly DocumentInfo[]): Promise<CitationTargetInfo> {
+  const docId = input.docId !== undefined ? single(input.docId, 'document ID', 512, true) : undefined;
   const query = single(input.query, 'query', 500), rawDoi = single(input.doi, 'DOI', 250), rawArxiv = single(input.arxivId, 'arXiv ID', 64), rawTitle = single(input.title, 'title', 300), parsed = query ? parseAcademicInput(query) : undefined;
-  const doi = cleanDoi(rawDoi) ?? cleanDoi(doc?.doi) ?? (parsed?.kind === 'doi' ? parsed.doi : undefined), arxivId = extractArxivId(rawArxiv, rawDoi) ?? extractArxivId(doc?.url, doc?.doi) ?? (parsed?.kind === 'arxiv' ? parsed.id : undefined);
+  const inDoi = cleanDoi(rawDoi) ?? (parsed?.kind === 'doi' ? parsed.doi : undefined), inArxiv = extractArxivId(rawArxiv, rawDoi) ?? (parsed?.kind === 'arxiv' ? parsed.id : undefined), inTitle = rawTitle || (parsed ? '' : query);
+  const doc = docId ? await deps.library.get(docId) : docs.find(d => docMatchesTarget(d, { doi: inDoi, arxivId: inArxiv, title: inTitle }));
+  const doi = inDoi ?? cleanDoi(doc?.doi), arxivId = inArxiv ?? extractArxivId(doc?.url, doc?.doi);
   const title = rawTitle || doc?.paperTitle || doc?.title || (parsed ? '' : query) || doi || (arxivId ? 'arXiv:' + arxivId : '');
   if (!title && !doi && !arxivId && !docId) throw new ServiceError(400, 'Provide a docId, DOI, arXiv ID, or query.');
   return { targetKey: makeTargetKey({ doi, arxivId, title, docId: doc?.id }), ...(doc ? { docId: doc.id } : {}), title, authors: splitAuthors(doc?.authors), year: parseYear(doc?.year ?? doc?.venue), ...(doi ? { doi } : {}), ...(arxivId ? { arxivId } : {}), sciteUrl: buildSciteUrl(doi, title) };
@@ -221,8 +238,7 @@ export async function analyzeCitations(deps: CitationDeps, input: Input, opts?: 
   if (input.forceRefresh !== undefined && typeof input.forceRefresh !== 'boolean') throw new ServiceError(400, 'Invalid forceRefresh option.');
   const limit = input.limit === undefined ? 25 : (typeof input.limit === 'number' && Number.isFinite(input.limit) ? Math.min(40, Math.max(5, Math.round(input.limit))) : (() => { throw new ServiceError(400, 'Invalid limit.'); })());
   const questionModel = readQuestionModel(input.questionModel), docs = await deps.library.list();
-  let target: TargetMeta = await resolveLocalTarget(deps, input);
-  const local = scanLocalBackCitations(target, docs, id => deps.store.withDb(false, db => getDocPages(db, id)), direction);
+  let target: TargetMeta = await resolveLocalTarget(deps, input, docs);
   const existing = deps.store.withDb(false, db => listCitationStances(db, target.targetKey, direction)), existingMap = new Map(existing.map(r => [r.citingKey, r])), cachedExternal = existing.filter(r => r.source !== 'local');
   const degraded = new Set<string>(), fromCache = !forceRefresh && cachedExternal.length > 0;
   let external: CitationStatement[] = cachedExternal;
@@ -233,12 +249,17 @@ export async function analyzeCitations(deps: CitationDeps, input: Input, opts?: 
       const resolved = await resolveAcademicPaper(lookup, ctx).catch(() => ({ paper: null, degraded: ['openalex'], fromCache: false }));
       for (const d of resolved.degraded) degraded.add(d);
       if (resolved.paper) {
-        const doi = target.doi ?? resolved.paper.doi, title = target.title && target.title !== target.doi && !target.title.startsWith('arXiv:') ? target.title : resolved.paper.title;
-        target = { ...target, doi, arxivId: target.arxivId ?? resolved.paper.arxivId, pmid: target.pmid ?? resolved.paper.pmid, s2Id: resolved.paper.s2Id, title, authors: target.authors.length ? target.authors : resolved.paper.authors, year: target.year ?? resolved.paper.year, sciteUrl: buildSciteUrl(doi, title) };
+        const doi = target.doi ?? resolved.paper.doi, arxivId = target.arxivId ?? resolved.paper.arxivId, title = target.title && target.title !== target.doi && !target.title.startsWith('arXiv:') ? target.title : resolved.paper.title;
+        target = { ...target, doi, arxivId, pmid: target.pmid ?? resolved.paper.pmid, s2Id: resolved.paper.s2Id, title, authors: target.authors.length ? target.authors : resolved.paper.authors, year: target.year ?? resolved.paper.year, sciteUrl: buildSciteUrl(doi, title) };
+        if (!target.docId) target = enrichFromDoc(target, resolved.paper.docId ? docs.find(d => d.id === resolved.paper!.docId) : docs.find(d => docMatchesTarget(d, target)));
       }
     }
     external = await fetchExternalCitations(target, direction, limit, ctx, degraded, forceRefresh);
+  } else if (!target.docId) {
+    const cachedDocId = existing.find(r => r.docId)?.docId;
+    if (cachedDocId) target = enrichFromDoc(target, docs.find(d => d.id === cachedDocId));
   }
+  const local = deps.store.withDb(false, db => scanLocalBackCitations(target, docs, id => getDocPages(db, id), direction));
   const merged = new Map<string, CitationStatement>();
   for (const s of [...local, ...external]) {
     const prev = existingMap.get(s.citingKey);
@@ -251,20 +272,30 @@ export async function analyzeCitations(deps: CitationDeps, input: Input, opts?: 
     } catch (err) { if (isAbort(err, opts?.signal)) throw err; degraded.add('llm'); }
   }
   const statements = [...merged.values()].filter(s => (!s.docId || deps.library.hasSync(s.docId)) && (!s.citingDocId || deps.library.hasSync(s.citingDocId)));
-  if (statements.length) deps.store.withDb(true, db => upsertCitationStances(db, statements));
-  const stored = deps.store.withDb(false, db => listCitationStances(db, target.targetKey, direction)), finalList = stored.length ? stored : statements;
-  return { target, direction, tallies: computeTallies(finalList), statements: finalList, sciteUrl: target.sciteUrl, degraded: [...degraded], fromCache, offline: !fromCache && external.length === 0 && degraded.size > 0 };
+  const extDegraded = [...degraded].some(d => d !== 'llm'), pruneExt = !fromCache && (external.length > 0 || (forceRefresh && !extDegraded));
+  const localKeys = new Set(statements.filter(s => s.source === 'local').map(s => s.citingKey)), extKeys = new Set(statements.filter(s => s.source !== 'local').map(s => s.citingKey));
+  const finalList = deps.store.withDb(true, db => {
+    pruneCitationStances(db, target.targetKey, direction, 'local', localKeys);
+    if (pruneExt) pruneCitationStances(db, target.targetKey, direction, 'external', extKeys);
+    if (statements.length) upsertCitationStances(db, statements);
+    return listCitationStances(db, target.targetKey, direction);
+  });
+  return { target, direction, tallies: computeTallies(finalList), statements: finalList, sciteUrl: target.sciteUrl, degraded: [...degraded], fromCache, offline: !fromCache && external.length === 0 && extDegraded };
 }
 export async function summarizeCitations(deps: Pick<CitationDeps, 'store' | 'library'>, input: Input): Promise<CitationSummary> {
-  const direction = readDirection(input.direction), docs = await deps.library.list(), target = await resolveLocalTarget(deps, input);
-  const cached = deps.store.withDb(false, db => listCitationStances(db, target.targetKey, direction)), merged = new Map<string, CitationStatement>(cached.map(s => [s.citingKey, s]));
-  for (const s of scanLocalBackCitations(target, docs, id => deps.store.withDb(false, db => getDocPages(db, id)), direction)) if (!merged.has(s.citingKey)) merged.set(s.citingKey, s);
+  const direction = readDirection(input.direction), docs = await deps.library.list(), baseTarget = await resolveLocalTarget(deps, input, docs);
+  const { cached, local, target } = deps.store.withDb(false, db => {
+    const c = listCitationStances(db, baseTarget.targetKey, direction), cid = !baseTarget.docId ? c.find(r => r.docId)?.docId : undefined;
+    const t = cid ? enrichFromDoc(baseTarget, docs.find(d => d.id === cid)) : baseTarget;
+    return { cached: c, local: scanLocalBackCitations(t, docs, id => getDocPages(db, id), direction), target: t };
+  });
+  const cachedByKey = new Map(cached.map(s => [s.citingKey, s])), merged = new Map(cached.filter(s => s.source !== 'local' || s.manualOverride).map(s => [s.citingKey, s]));
+  for (const s of local) { const prev = cachedByKey.get(s.citingKey); merged.set(s.citingKey, prev && (prev.manualOverride || (prev.stance !== 'unclassified' && prev.context === s.context)) ? prev : s); }
   return { targetKey: target.targetKey, tallies: computeTallies([...merged.values()]), sciteUrl: target.sciteUrl, hasCachedExternal: cached.some(s => s.source !== 'local') };
 }
 export function reclassifyCitation(deps: Pick<CitationDeps, 'store'>, input: Input): CitationReclassifyResult {
   const targetKey = single(input.targetKey, 'target key', 512, true), direction = readDirection(input.direction), citingKey = single(input.citingKey, 'citing key', 512, true);
   if (typeof input.stance !== 'string' || !STANCE_SET.has(input.stance)) throw new ServiceError(400, 'Choose a valid citation stance.');
-  const updated = deps.store.withDb(true, db => reclassifyCitationStance(db, targetKey, direction, citingKey, input.stance as CitationStance, input.rationale === undefined ? undefined : single(input.rationale, 'rationale', 400)));
-  if (!updated) throw new ServiceError(404, 'Citation statement not found.');
-  return { statement: updated, tallies: computeTallies(deps.store.withDb(false, db => listCitationStances(db, targetKey, direction))) };
+  const rationale = input.rationale === undefined ? undefined : single(input.rationale, 'rationale', 400);
+  return deps.store.withDb(true, db => { const updated = reclassifyCitationStance(db, targetKey, direction, citingKey, input.stance as CitationStance, rationale); if (!updated) throw new ServiceError(404, 'Citation statement not found.'); return { statement: updated, tallies: computeTallies(listCitationStances(db, targetKey, direction)) }; });
 }
