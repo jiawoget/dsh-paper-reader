@@ -3,7 +3,7 @@ import { api, bindTablist, button, byId, el, inputField, message, modal, readerL
 
 const close = () => byId<HTMLDialogElement>('dialog').close();
 const CUSTOM_LANGUAGE = '__custom__';
-type SettingsTab = 'ai' | 'obsidian' | 'zotero';
+type SettingsTab = 'ai' | 'obsidian' | 'zotero' | 'academic';
 
 function clearField(input: HTMLInputElement, text: string, visible: boolean): HTMLElement {
   const wrapper = el('label', 'check-row');
@@ -97,6 +97,13 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
 
   const clearModel = el('input'); clearModel.type = 'checkbox';
   const clearZot = el('input'); clearZot.type = 'checkbox';
+  const oaEmail = inputField(label('OpenAlex email (polite pool)', 'OpenAlex 邮箱（高速通道）'), data.openAlexEmail ?? '', 'email', label('you@university.edu', '选填，例如：邮箱地址'));
+  const oaKey = inputField(label('OpenAlex API key', 'OpenAlex API 密钥'), '', 'password', data.hasOpenAlexApiKey ? label('Key saved', '已保存密钥') : label('Optional', '选填'));
+  const s2Key = inputField(label('Semantic Scholar API key', 'Semantic Scholar API 密钥'), '', 'password', data.hasSemanticScholarApiKey ? label('Key saved', '已保存密钥') : label('Optional', '选填'));
+  const ncbiKey = inputField(label('NCBI / PubMed API key', 'NCBI / PubMed API 密钥'), '', 'password', data.hasNcbiApiKey ? label('Key saved', '已保存密钥') : label('Optional', '选填'));
+  const clearOa = el('input'); clearOa.type = 'checkbox';
+  const clearS2 = el('input'); clearS2.type = 'checkbox';
+  const clearNcbi = el('input'); clearNcbi.type = 'checkbox';
   const status = data.aiMode === 'dsh'
     ? label('Using DSH: ' + (data.hostModel || data.hostProvider || 'host model'), '当前使用 DSH：' + (data.hostModel || data.hostProvider || '宿主模型'))
     : data.aiMode === 'api' ? label('Custom model configured', '已配置自定义模型')
@@ -164,12 +171,23 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
     const zoteroPanel = tabPanel('settings-panel-zotero');
     zoteroPanel.append(el('h3', '', 'Zotero'), modeRow, desktopHint, webFields, testLine);
 
-    tabs.append(aiBtn, obsidianBtn, zoteroBtn);
-    form.append(tabs, aiPanel, obsidianPanel, zoteroPanel);
+    const academicBtn = el('button', 'btn', label('Academic APIs', '学术图谱')); academicBtn.id = 'settings-tab-academic';
+    const academicPanel = tabPanel('settings-panel-academic');
+    academicPanel.append(
+      el('h3', '', label('Academic graph APIs', '学术图谱接口')),
+      el('p', 'hint', label('All citation graph features work keyless. Optional free keys raise rate limits.', '所有学术图谱功能默认免密钥可用，选填免费密钥可提高速率上限。')),
+      oaEmail.row, oaKey.row, clearField(clearOa, label('Remove saved OpenAlex key', '移除已保存的 OpenAlex 密钥'), Boolean(data.hasOpenAlexApiKey)),
+      s2Key.row, clearField(clearS2, label('Remove saved Semantic Scholar key', '移除已保存的 Semantic Scholar 密钥'), Boolean(data.hasSemanticScholarApiKey)),
+      ncbiKey.row, clearField(clearNcbi, label('Remove saved NCBI key', '移除已保存的 NCBI 密钥'), Boolean(data.hasNcbiApiKey))
+    );
+
+    tabs.append(aiBtn, obsidianBtn, zoteroBtn, academicBtn);
+    form.append(tabs, aiPanel, obsidianPanel, zoteroPanel, academicPanel);
     selectTab = bindTablist(tabs, [
       { key: 'ai', button: aiBtn, panel: aiPanel },
       { key: 'obsidian', button: obsidianBtn, panel: obsidianPanel },
-      { key: 'zotero', button: zoteroBtn, panel: zoteroPanel }
+      { key: 'zotero', button: zoteroBtn, panel: zoteroPanel },
+      { key: 'academic', button: academicBtn, panel: academicPanel }
     ], initialTab);
   } else form.append(modeRow, desktopHint, webFields, testLine);
 
@@ -188,12 +206,18 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
       }
       const parsedLanguage = parseTargetLanguage(targetLanguage);
       if (!parsedLanguage.ok) { selectTab?.('ai'); customLang.input.focus(); toast(message(new Error(parsedLanguage.error))); return; }
+      if (oaEmail.input.value && !oaEmail.input.checkValidity()) { selectTab?.('academic'); oaEmail.input.reportValidity(); return; }
     }
     if (mode.value === 'web' && !id.input.checkValidity()) { selectTab?.('zotero'); id.input.reportValidity(); return; }
     save.disabled = true;
     try {
       await api('settings.save', {
-        ...(!returnToLibrary && { baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, glossary: glossaryInput.value, customPrompts: promptsInput.value, vaultPath: vault.input.value, clearApiKey: clearModel.checked }),
+        ...(!returnToLibrary && {
+          baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, glossary: glossaryInput.value,
+          customPrompts: promptsInput.value, vaultPath: vault.input.value, clearApiKey: clearModel.checked,
+          openAlexEmail: oaEmail.input.value, openAlexApiKey: oaKey.input.value, clearOpenAlexApiKey: clearOa.checked,
+          semanticScholarApiKey: s2Key.input.value, clearSemanticScholarApiKey: clearS2.checked, ncbiApiKey: ncbiKey.input.value, clearNcbiApiKey: clearNcbi.checked
+        }),
         ...zoteroSettings()
       });
       await app.refresh();
@@ -206,4 +230,5 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
   body.append(form);
   if (initialTab === 'zotero') mode.focus();
   else if (initialTab === 'obsidian') vault.input.focus();
+  else if (initialTab === 'academic') oaEmail.input.focus();
 }

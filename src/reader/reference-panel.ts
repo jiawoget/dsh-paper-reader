@@ -1,5 +1,6 @@
 import type { DocumentInfo, ZoteroItem } from '../shared/types.js';
 import { buildCitationMetadata, buildCiteKey, formatBibTeX, formatRIS } from '../shared/citation-export.js';
+import { researchViewName } from './research/labels.js';
 import { settingsDialog } from './settings-dialog.js';
 import { api, bindTablist, button, byId, copyText, downloadFile, el, icon, inputField, message, readerLabel as label, safeWeb, toast, zoteroStatusText, type ReaderPort } from './ui.js';
 
@@ -68,6 +69,18 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
   if (web) {
     const link = el('a', 'external', (doc.doi || doc.kind === 'pdf') ? label('Original paper ↗', '原始论文 ↗') : label('Original article ↗', '原始文章 ↗'));
     link.href = web; link.target = '_blank'; link.rel = 'noopener'; parent.append(link);
+  }
+  if (app.openResearchWorkspace) {
+    const graphSection = el('section', 'ref-graph-triggers');
+    graphSection.setAttribute('aria-label', researchViewName('citation-map'));
+    const graphRow = el('div', 'ref-graph-actions');
+    for (const [dir, text] of [['earlier', 'Earlier'], ['later', 'Later'], ['similar', 'Similar']] as const) {
+      const trigger = button(text, () => app.openResearchWorkspace?.('citation-map', { seedDocId: doc.id, filter: dir }), 'btn');
+      trigger.dataset.graphDir = dir;
+      graphRow.append(trigger);
+    }
+    graphSection.append(el('h3', '', researchViewName('citation-map')), graphRow);
+    parent.append(graphSection);
   }
   const desktop = app.state.settings.zoteroMode === 'desktop';
   const legacyKey = 'reader.zotero.' + app.state.settings.zoteroLibraryType + ':' + app.state.settings.zoteroLibraryId + ':' + doc.id;
