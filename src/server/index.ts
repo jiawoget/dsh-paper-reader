@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { registerPaperReaderTools, type HostToolsRegistry } from './host-tools.js';
 import { Library, PDF_LIMIT, fail, isRecord } from './library.js';
 import { extractPdfPages } from './pdf-text.js';
 import { publicResource } from './public-resource.js';
@@ -20,6 +21,7 @@ interface ReaderHost {
   inject(services: ['sessionController'], setup: (child: { sessionController: unknown }) => () => void): unknown;
   inject(services: ['agentDefaultModel'], setup: (child: { agentDefaultModel: unknown }) => () => void): unknown;
   inject(services: ['attachments'], setup: (child: { attachments: unknown }) => () => void): unknown;
+  inject(services: ['tools'], setup: (child: { tools?: HostToolsRegistry }) => () => void): unknown;
   inject(services: ['webServer'], setup: (child: { webServer: WebListener }) => () => void): unknown;
 }
 export const name = 'paper-reader';
@@ -90,6 +92,7 @@ export function apply(ctx:ReaderHost):void {
     return () => { if (models.attachments === store) delete models.attachments; };
   });
   const service = createServices({root,ctx:models,library,store,readResource:publicResource});
+  registerPaperReaderTools(ctx, { root, library });
   const route=(suffix:string,methods:Method[],fetch:HostRoute['fetch'],requestBody:HostRoute['requestBody']='buffered') => ctx.connection.fetch.register({
     path:'/api/paper-reader/'+suffix,methods,requestBody,
     async fetch(request) {

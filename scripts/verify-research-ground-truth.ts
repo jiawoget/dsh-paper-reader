@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { setGlobalProxyFromEnv } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,7 +15,7 @@ import { extractDocumentPages, extractPdfPages } from '../src/server/pdf-text.js
 import { publicResource } from '../src/server/public-resource.js';
 import { ReaderModel } from '../src/server/reader-model.js';
 import { ReaderStore } from '../src/server/reader-store.js';
-import { ensureResearchSchema, getDocPages, replaceDocPages, searchDocPagesFts } from '../src/server/research-store.js';
+import { ensureResearchSchema, getDocPages, replaceDocPages, saveTopic, searchDocPagesFts, setPaperCard } from '../src/server/research-store.js';
 import { createServices } from '../src/server/services.js';
 import { REVIEW_PRESETS, verifyQuote } from '../src/shared/review-types.js';
 import { CITATION_STANCE_GOLD } from './citation-stance-gold.js';
@@ -234,5 +236,88 @@ try {
       console.log(`  PagedAttention: ${paged.tallies.citingPapers} papers / ${paged.tallies.citationStatements} stmts (sup=${paged.tallies.supporting}, ext=${paged.tallies.extending}, con=${paged.tallies.contrasting}, men=${paged.tallies.mentioning}, unc=${paged.tallies.unclassified}) | scite=${paged.sciteUrl} | degraded=[${paged.degraded.join(',')}]`);
       console.log(`  NEJMoa2032183: ${nejm.tallies.citingPapers} papers / ${nejm.tallies.citationStatements} stmts (sup=${nejm.tallies.supporting}, ext=${nejm.tallies.extending}, con=${nejm.tallies.contrasting}, men=${nejm.tallies.mentioning}, unc=${nejm.tallies.unclassified}) | scite=${nejm.sciteUrl} | degraded=[${nejm.degraded.join(',')}]`);
     } finally { await rm(tempRoot, { recursive: true, force: true }); }
+  }
+
+  if (shouldRun('7')) {
+    const dshBin = [process.env.DSH_ENTRY, path.resolve(path.dirname(process.execPath), '../lib/node_modules/@deepseek-ai/dsh/lib/bin.js'), '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js', '/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'].find((f): f is string => Boolean(f && existsSync(f)));
+    assert.ok(dshBin, 'Installed DSH binary not found');
+    const tempRoot = await mkdtemp(path.join(tmpdir(), 'reader-gt-pr7-')), readerHome = path.join(tempRoot, 'reader'), port = 29824;
+    let child: ReturnType<typeof spawn> | undefined;
+    try {
+      const store = new ReaderStore(readerHome), library = new Library(readerHome, publicResource, id => store.deleteDocument(id));
+      const pagedPages = await extractPdfPages(await readFile(path.resolve('public/assets/pagedattention.pdf')));
+      store.updateDocTriage({ docId: 'pagedattention', status: 'reading', starred: true, tags: ['llm-serving'] });
+      const citing = await library.createAbstract({
+        title: 'SGLang RadixAttention Follow-up', authors: 'Zheng et al.', venue: 'NeurIPS 2024', year: '2024', doi: '10.1000/sglang-smoke',
+        abstract: 'Extending PagedAttention (arXiv:2309.06180), which manages KV cache memory via block tables, we introduce radix tree prefix sharing.'
+      });
+      store.withDb(true, d => {
+        replaceDocPages(d, 'pagedattention', pagedPages);
+        replaceDocPages(d, citing.id, [{ page: 1, text: citing.abstract ?? '' }]);
+        saveTopic(d, { id: 'llm-serving', name: 'LLM Serving', tag: 'llm-serving', description: 'KV cache inference' });
+        setPaperCard(d, { docId: 'pagedattention', sourceKind: 'pdf', problem: 'KV cache fragmentation', method: 'Virtual memory block table', findings: 'Higher serving throughput', limitations: 'Block granularity trade-off', futureWork: 'Disaggregated serving', sourceHash: 'smoke', updatedAt: Date.now() });
+      });
+      const probePath = path.join(tempRoot, 'probe.mjs'), patchPath = path.join(tempRoot, 'probe.patch.yml');
+      const probeCode = [
+        "export const name = 'paper-reader-tool-probe'; export const inject = ['tools', 'connection'];",
+        "export function apply(ctx) {",
+        "  ctx.connection.fetch.register({ path: '/api/paper-reader-tool-probe', methods: ['GET'], requestBody: 'buffered', async fetch(req) {",
+        "    const names = ctx.tools.schemas().map(s => s.name).filter(n => n.startsWith('paper_reader_')).sort();",
+        "    const calls = [",
+        "      { id: 'c1', name: 'paper_reader_search', arguments: JSON.stringify({ query: 'KV cache', limit: 5 }) },",
+        "      { id: 'c2', name: 'paper_reader_topic_summary', arguments: JSON.stringify({ topic: 'LLM Serving' }) },",
+        "      { id: 'c3', name: 'paper_reader_citation_stance', arguments: JSON.stringify({ docId: 'pagedattention', direction: 'cited_by' }) },",
+        "      { id: 'c4', name: 'paper_reader_field_trends', arguments: JSON.stringify({ query: 'GLP-1', windowYears: 3, metric: 'volume', sources: ['europepmc'] }) },",
+        "      { id: 'c5', name: 'paper_reader_search', arguments: JSON.stringify({ query: '', extra: 1 }) }",
+        "    ];",
+        "    const batch = await ctx.tools.execute({ calls, signal: req.signal });",
+        "    return Response.json({ names, results: batch.results.map(r => ({ callId: r.callId, isError: r.result.isError, value: r.result.value, error: r.result.error?.message })) });",
+        "  } });",
+        "}"
+      ].join('\n');
+      await writeFile(probePath, probeCode);
+      await writeFile(patchPath, JSON.stringify([{ insert: [{ id: 'paper-reader-tool-probe', name: probePath }] }]));
+      const webPkgPath = path.join(homedir(), '.dsh', 'profiles', 'web', 'package.json');
+      const hasLinkedPlugin = existsSync(webPkgPath) && readFileSync(webPkgPath, 'utf8').includes('"dsh-paper-reader"');
+      const patchArgs = [...(hasLinkedPlugin ? [] : ['--patch', path.resolve('paper-reader.patch.yml')]), '--patch', patchPath];
+      child = spawn(process.execPath, [dshBin, 'web', ...patchArgs, '--host', '127.0.0.1', '--port', String(port), '--no-open'], {
+        cwd: process.cwd(), env: { ...process.env, PAPER_READER_HOME: readerHome }, windowsHide: true
+      });
+      const authUrl = await new Promise<string>((resolve, reject) => {
+        let buf = '';
+        const timer = setTimeout(() => reject(new Error(`DSH :${port} startup timed out: ${buf.slice(-600)}`)), 45_000);
+        const onData = (chunk: Buffer) => { buf = (buf + chunk.toString('utf8')).slice(-16_384); const m = /dsh web: (https?:\/\/[^\s\x1b]+)\r?\n/.exec(buf); if (m) { clearTimeout(timer); resolve(m[1]); } };
+        child!.stdout?.on('data', onData); child!.stderr?.on('data', onData);
+        child!.once('error', e => { clearTimeout(timer); reject(e); });
+        child!.once('exit', code => { clearTimeout(timer); reject(new Error(`DSH :${port} exited (${code}): ${buf.slice(-600)}`)); });
+      });
+      const dbPath = path.join(readerHome, 'reader.sqlite'), beforeBytes = await readFile(dbPath);
+      const authRes = await fetch(authUrl, { redirect: 'manual' });
+      const cookie = authRes.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+      const probeRes = await fetch(`http://127.0.0.1:${port}/api/paper-reader-tool-probe`, { headers: { cookie, origin: `http://127.0.0.1:${port}` } });
+      assert.equal(probeRes.status, 200, `probe endpoint returned ${probeRes.status}: ${await probeRes.clone().text()}`);
+      const report = await probeRes.json() as { names: string[]; results: { callId: string; isError: boolean; value?: Record<string, unknown>; error?: string }[] };
+      assert.deepEqual(report.names, ['paper_reader_citation_stance', 'paper_reader_field_trends', 'paper_reader_search', 'paper_reader_topic_summary']);
+      const byId = new Map(report.results.map(r => [r.callId, r]));
+      const r1 = byId.get('c1')!, r2 = byId.get('c2')!, r3 = byId.get('c3')!, r4 = byId.get('c4')!, r5 = byId.get('c5')!;
+      assert.equal(r1.isError, false, `search failed: ${r1.error}`);
+      assert.ok(Array.isArray(r1.value?.pageHits) && (r1.value.pageHits as { docId: string }[]).some(h => h.docId === 'pagedattention'));
+      assert.equal(r2.isError, false, `topic_summary failed: ${r2.error}`);
+      assert.equal(r2.value?.documentCount, 1);
+      assert.equal(r3.isError, false, `citation_stance failed: ${r3.error}`);
+      assert.ok(String(r3.value?.sciteUrl ?? '').startsWith('https://scite.ai/') && Number((r3.value?.tallies as { localBackCitations?: number } | undefined)?.localBackCitations ?? 0) >= 1);
+      assert.equal(r4.isError, false, `field_trends failed: ${r4.error}`);
+      assert.ok(Array.isArray(r4.value?.topics) && (r4.value.topics as unknown[]).length >= 1, `expected live Europe PMC GLP-1 trends, got ${JSON.stringify(r4.value)}`);
+      assert.equal(r5.isError, true, 'expected invalid search args to fail');
+      assert.match(String(r5.error ?? ''), /invalid arguments/i);
+      assert.equal(Buffer.compare(beforeBytes, await readFile(dbPath)), 0, 'live DSH host tools mutated reader.sqlite');
+      console.log(`PASS PR-7 live DSH host smoke (127.0.0.1:${port}, ~/.dsh/profiles/web): 4 tools registered | search=${(r1.value!.pageHits as unknown[]).length} hits | topic_summary=1 doc | citation_stance=local+scite | field_trends(GLP-1/europepmc)=${(r4.value!.topics as unknown[]).length} topics | invalid_args=rejected | sqlite_writes=0`);
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null && child.pid) {
+        const stopped = once(child, 'exit'); child.kill(); await Promise.race([stopped, new Promise(r => setTimeout(r, 5000))]);
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   }
 } finally { db.close(); }

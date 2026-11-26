@@ -27,9 +27,10 @@ The two `--allow-build` flags cover the only production dependencies with instal
 
 ### Sources and local document management
 
-Open **Library** to load four kinds of sources:
+Open **Library** to load five kinds of sources:
 
-- **Local PDFs**: Choose Open a PDF to import one or more files (up to 80 MB each), or drag and drop PDFs onto the reader or Library dialog. Paper Reader extracts embedded PDF metadata plus arXiv IDs and DOIs from the first page. The bundled 16-page PagedAttention paper opens on page 6 with a prebuilt Simplified Chinese translation.
+- **Local PDFs**: Choose Open a PDF to import one or more files (up to 80 MB each), or drag and drop PDFs onto the reader or Library dialog. Paper Reader extracts embedded PDF metadata, arXiv IDs, DOIs, and per-page text into a local SQLite FTS5 index (`doc_pages_fts`). The bundled 16-page PagedAttention paper opens on page 6 with a prebuilt Simplified Chinese translation.
+- **Abstract only and bulk references**: Import paywalled papers as `Abstract only` records (from citation views, Deep Search, Field Trends, or bulk `.bib`, `.ris`, and CSV import in Library). Drag and drop a PDF onto the `Attach PDF` dropzone later to upgrade the record in place while keeping its `docId`, tags, notes, screening decisions, and extraction cells. Library also exports selected or full libraries to `.bib`, `.ris`, or CSV.
 - **Web articles, arXiv, and DOIs**: Choose Open web page and paste an HTTP/HTTPS article URL, a bare arXiv ID (such as `2309.06180`), an `arxiv.org/abs/` or `arxiv.org/pdf/` URL, or a bare DOI (`10.xxxx/...`). Academic identifiers import the paper metadata and PDF directly; ordinary webpages extract prose, code blocks, figures, tables, and equations with offline figure caching.
 - **OpenStax books**: Paste an OpenStax book or section URL and choose Open book. The Contents tab groups sections by chapter, downloads each section on demand, and resumes at the last paragraph you read.
 - **Zotero libraries**: Open Library → Zotero to browse desktop or web collections, filter by title, author, or year, and open attached PDFs or linked webpages.
@@ -44,7 +45,7 @@ For PDFs, choose translation scope between Full page, Active column, and Active 
 
 Adjust PDF display with `Aa` (Paper, Warm Sepia, Low-Glare Dim, Smart Dark), zoom presets (Fit page, `75%`, Fit width, `125%`, `150%`, `200%`), `-`/`+` buttons, or `Ctrl/Cmd+Wheel`. Move through long papers with 50-step jump history (`<` / `>`, `Alt+←` / `Alt+→`), native PDF internal links, Contents bookmarks (or Generate contents with AI when a PDF has none), and cross-page full-text search (`Ctrl/Cmd+F`) across PDFs, web articles, OpenStax books, and cached translations. To restore default pane widths after resizing, use More actions → Reset reading layout.
 
-Open **Connections** (More actions → Connections) to manage settings across three tabs (AI & Translation, Obsidian, Zotero) with a sticky Save connections footer. Under AI & Translation, choose from eight built-in translation languages (Simplified Chinese, Traditional Chinese, English, Japanese, Korean, French, German, Spanish) or Custom… (up to 64 characters), define a Translation glossary (`term = translation`, or `term` alone to keep it unchanged) to lock terms during AI translation, and add custom research prompt templates. Cached pages are stored per language, so switching back reuses prior translations without repeating model requests. When a translation request fails, the translated header offers Retry translation and Connections.
+Open **Connections** (More actions → Connections) to manage settings across four tabs (AI & Translation, Obsidian, Zotero, Academic APIs) with a sticky Save connections footer. Under AI & Translation, choose from eight built-in translation languages (Simplified Chinese, Traditional Chinese, English, Japanese, Korean, French, German, Spanish) or Custom… (up to 64 characters), define a Translation glossary (`term = translation`, or `term` alone to keep it unchanged) to lock terms during AI translation, and add custom research prompt templates. Under Academic APIs, optionally enter free keys for OpenAlex (email or key), Semantic Scholar, or NCBI/PubMed to raise public API rate limits. Cached pages are stored per language, so switching back reuses prior translations without repeating model requests. When a translation request fails, the translated header offers Retry translation and Connections.
 
 Both the bundled PagedAttention translation and the optional local CPU translator apply only when Translation language is Simplified Chinese; other languages require a connected DSH or custom LLM. To install the optional offline English-to-Chinese OPUS-MT model (about 120 MB, SHA-256 verified, pinned to commit `046f55ae`), run:
 
@@ -80,9 +81,29 @@ To sync notes with Obsidian, choose **Connect Obsidian** (or Connections → Obs
 
 ## Citations and Zotero
 
-Hover, click, or keyboard-focus numbered citations in the text to open the citation popover with Jump to References (p. N), Copy, and Open / Import (which imports linked arXiv, DOI, or web references straight into the reader). Open the **Reference** tab to edit document metadata inline (Edit metadata for title, authors, venue, year, and DOI), inspect formatted output in the collapsible Preview BibTeX / RIS panel, and export via Copy BibTeX, Download .bib, Copy RIS, or Download .ris. Exports build deterministic ASCII citekeys, escape LaTeX special characters, detect arXiv IDs, extract academic HTML `<meta>` tags (`citation_*` and `dc.*`) from imported webpages, and merge fields from linked Zotero items.
+Hover, click, or keyboard-focus numbered citations in the text to open the citation popover with Jump to References (p. N), Copy, and Open / Import (which imports linked arXiv, DOI, or web references straight into the reader). Open the **Reference** tab to edit document metadata inline (Edit metadata for title, authors, venue, year, and DOI), inspect the compact Smart Citations mini-badge (clicking any stance tally opens `Citations` pre-filtered, alongside a Scite report link) and `Earlier / Later / Similar` graph triggers, preview formatted BibTeX / RIS output, and export via Copy BibTeX, Download .bib, Copy RIS, or Download .ris. Exports build deterministic ASCII citekeys, escape LaTeX special characters, detect arXiv IDs, extract academic HTML `<meta>` tags (`citation_*` and `dc.*`) from imported webpages, and merge fields from linked Zotero items.
 
 For desktop Zotero access, turn on "Allow other applications on this computer to communicate with Zotero" in Zotero's advanced settings. For remote access, open Connections → Zotero (or Library → Zotero → Connection settings), switch to Web library, and enter your library ID (plus a read-access API key for private libraries). From Reference, you can link a document to an existing Zotero item or file it into collections. ([Zotero Local API](https://www.zotero.org/support/dev/web_api/v3/local_api) · [Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/basics))
+
+## Research Workspace and DSH host tools
+
+Click `⤢` in the sidebar header, press `Ctrl/Cmd+Shift+R`, or use the Library dialog entry to open the full-page **Research Workspace** without adding buttons to the reading topbar. Press `⤡` or `Esc` to return to the exact paper and page you left; clicking any cited paper or quote inside the workspace opens that passage and shows a floating return pill to restore your workspace view and filters.
+
+The workspace hosts six flat views behind an auto-collapsing SVG icon rail:
+
+- **Deep Search**: 2-3 round interruptible non-keyword literature search (Scoping questions, live round telemetry with Stop, and ranked results with Match %, rationale, inline abstracts, and Watchlist incremental tracking).
+- **Citation Map**: Seed-based `Earlier`, `Later`, and `Similar` paper exploration over OpenAlex, Semantic Scholar, Europe PMC/PubMed, and arXiv, with breadcrumb history, `Network | Timeline` SVG graph, and in-place `Abstract only` or OA PDF saving.
+- **Citations**: Smart citation stance tallies (`Supporting`, `Extending`, `Contrasting`, `Mentioning`, `Unclassified`) from Semantic Scholar and Europe PMC alongside 100% offline local-library back-citations, section/source/year facets, local reclassification, and Scite report links.
+- **Review Table**: Two-step `Screening` and `Extraction` workflow with CS/AI and Medicine/Pharmacy PICO presets, custom columns, Pilot (3 papers) and Run all execution with Stop/Retry, deterministic quote verification against indexed pages, manual override locks, keyboard-navigable Evidence Inspector, and CSV/Markdown export.
+- **Field Trends**: `Topic × Year` heatmap over OpenAlex and Europe PMC/PubMed with Volume, Growth, and Citation Heat modes, `My Library` coverage counts, blind-spot filtering, and per-cell paper drilldown.
+- **Library Chat**: Three-pane library synthesis (navigation rail, streaming chat with preset prompts and clickable `(Author, Year, p. N)` jump citations, and a categorized paper-scope selector) backed by cached paper cards and FTS5 excerpts.
+
+When running inside DSH with the host `tools` service active, Paper Reader registers four read-only tools via `ctx.inject(['tools'], ...)` and `ctx.tools.register()` that never write to SQLite:
+
+- `paper_reader_search`: searches local FTS5 pages, document metadata, notes, and highlights (`query`, optional `topic`, `limit` `1..50`).
+- `paper_reader_topic_summary`: summarizes a topic or the whole library from documents, cached paper cards, saved review tables, and aggregated limitations/open problems (`topic` optional).
+- `paper_reader_citation_stance`: returns citation stance tallies, cached external stances, Scite report URL, and live offline local back-citations (`docId`, `doi`, `arxivId`, or `query`, plus optional `direction`).
+- `paper_reader_field_trends`: queries read-only field trends across OpenAlex and/or Europe PMC with local library coverage (`query`, optional `windowYears` `3|5|8`, `metric`, `sources`).
 
 ## Keyboard shortcuts
 
@@ -100,6 +121,7 @@ Press `?` or open **More actions → Keyboard shortcuts** inside the reader to o
 | Reading | `?` | Open keyboard shortcuts |
 | Reading | `Esc` | Cancel screenshot, close menu, card, search, or dialog |
 | Panels | `l` | Open Library |
+| Panels | `Ctrl/Cmd+Shift+R` | Toggle Research Workspace |
 | Panels | `n` / `c` / `m` / `r` | Toggle Notes, Contents, Marks, or Reference sidebar |
 | Panels | `←` / `→` / `Home` / `End` | Switch tabs in sidebar, Library, Connections, or Vocabulary and history |
 | Notes editor | `Ctrl/Cmd+S`, `Ctrl/Cmd+B`, `Ctrl/Cmd+I` | Save notes, bold text, italic text |
@@ -127,14 +149,18 @@ npm run check
 npm run dev
 npm start
 npm test
+npm run check:ux-smoke
 npm run test:e2e
+npx tsx scripts/verify-research-ground-truth.ts
 ```
 
 - `npm run build` runs `npm run typecheck` and bundles all server, web, client, and extension targets into `dist/`. `npm run dev` watches source and asset files.
 - `npm run check` runs `scripts/check-hygiene.ts` to verify file-size ceilings and ratchets, stylesheet line length and selector overlap, dead exports, and cross-file duplication.
+- `npm run check:ux-smoke` runs deterministic desktop (`1024–1440px`) and mobile (`390×844`) Light/Dark geometry, touch-target, and overflow checks.
 - `npm start` launches local DSH Web with `paper-reader.patch.yml` on `http://127.0.0.1:29812`.
 - `npm test` runs the `node:test` unit and integration suites under `tests/*.test.ts`.
-- `npm run test:e2e` runs the Playwright suites in isolated Chrome profiles against ephemeral DSH hosts (`--port 0` and temporary `DSH_HOME`).
+- `npm run test:e2e` runs the Playwright suites in 4-way parallel inside isolated Chrome profiles against ephemeral DSH hosts (`--port 0` and temporary `DSH_HOME`).
+- `npx tsx scripts/verify-research-ground-truth.ts` runs live CS/AI (`PagedAttention`) and Medicine (`10.1056/NEJMoa2032183`) verification against public academic APIs, DSH models, and the isolated DSH host tool smoke (`--only=1|2|3a|3b|4|5|6|7`).
 
 To run a single default E2E suite, invoke scripts from `package.json` such as `npm run test:browser`, `npm run test:extension`, `npm run test:integrations`, `npm run test:target-language`, `npm run test:citation-export`, `npm run test:dark-theme-a11y`, or `npm run test:shortcuts-i18n`.
 
