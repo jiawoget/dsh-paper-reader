@@ -14,8 +14,8 @@ export function apply(ctx) {
     listModels: () => models, resolveModel,
     prepareCall: (route, id) => ({
       model: resolveModel(route, id),
-      async *stream({ provider, model, reasoningEffort, messages, signal }) {
-        const prompt = JSON.stringify(messages ?? '');
+      async *stream({ provider, model, reasoningEffort, system, messages, signal }) {
+        const prompt = JSON.stringify([system ?? '', messages ?? '']);
         if (prompt.includes('slow-stream-markdown')) {
           const chunks = ['### Key **Result**\n\nFirst ', 'paragraph with `code`.\n\n', '- Item one\n- Item two'];
           let full = '';
@@ -34,6 +34,26 @@ export function apply(ctx) {
           yield { type: 'block-end', index: 0, block: { type: 'text', text: full } };
           yield { type: 'finish', reason: { kind: 'stop' } };
           return;
+        }
+        if (prompt.includes('Extract structured review-table cells') || prompt.includes('Screen the supplied paper')) {
+          const isPaged = prompt.includes('PagedAttention'), isExt = prompt.includes('Extract structured review-table cells');
+          if (isExt && !isPaged) await new Promise((resolve, reject) => {
+            if (signal?.aborted) { reject(new Error('Aborted')); return; }
+            const timer = setTimeout(resolve, 650);
+            signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Aborted')); }, { once: true });
+          });
+          const text = isExt ? JSON.stringify({ cells: {
+            method: { value: isPaged ? 'PagedAttention block KV cache' : 'Abstract method', quote: isPaged ? 'The KV block manager also maintains block tables' : 'IO-aware exact attention', page: isPaged ? 6 : null, reasoning: 'Extracted from source.' },
+            datasets: { value: 'ShareGPT, Alpaca', quote: 'fabricated unverified quote string', page: isPaged ? 6 : null, reasoning: 'Datasets listed.' },
+            key_metrics: { value: '2-4x throughput', quote: '', page: null, reasoning: 'Throughput metric.' },
+            main_result: { value: 'Near-zero KV waste', quote: '', page: null, reasoning: 'Main result.' },
+            limitations: { value: 'Single-node focus', quote: '', page: null, reasoning: 'Scope limit.' }
+          } }) : JSON.stringify({ criteria: {
+            llm_serving: { decision: isPaged ? 'yes' : 'maybe', quote: isPaged ? 'The KV block manager also maintains block tables' : '', page: isPaged ? 6 : null, reasoning: 'Serving focus.' },
+            open_weights: { decision: isPaged ? 'no' : 'yes', quote: '', page: null, reasoning: 'Weights check.' }
+          } });
+          yield { type: 'block-start', index: 0, blockType: 'text' }; yield { type: 'text-delta', index: 0, text };
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }; yield { type: 'finish', reason: { kind: 'stop' } }; return;
         }
         const text = prompt.includes('Cite exact page numbers as (p. N)')
           ? '### Structured Brief\n\nPagedAttention manages KV blocks efficiently (p. 2).'

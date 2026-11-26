@@ -197,7 +197,7 @@ export async function responseJson<T>(response:Response):Promise<T> {
 export async function api<K extends keyof Operations>(op:K, payload:Operations[K][0], keepalive=false, signal?:AbortSignal):Promise<Operations[K][1]> {
   return responseJson(await fetch('../action',{method:'POST',credentials:'same-origin',cache:'no-store',keepalive,signal,headers:{'content-type':'application/json'},body:JSON.stringify({op,payload})}));
 }
-export async function apiStream<K extends 'ai'|'chat.ask'|'library.chat'>(op:K, payload:Operations[K][0], onDelta:(delta:string)=>void, signal?:AbortSignal):Promise<Operations[K][1]> {
+export async function apiStream<K extends 'ai'|'chat.ask'|'library.chat'|'review.extract'|'review.screen'>(op:K, payload:Operations[K][0], onDelta:(delta:string)=>void, signal?:AbortSignal):Promise<Operations[K][1]> {
   const response = await fetch('../action', {
     method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
     headers: { 'content-type': 'application/json', accept: 'application/x-ndjson, application/json' },
@@ -218,10 +218,10 @@ export async function apiStream<K extends 'ai'|'chat.ask'|'library.chat'>(op:K, 
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         if (line) {
-          const frame = JSON.parse(line) as { delta?: string; text?: string; answer?: string; error?: string };
+          const frame = JSON.parse(line) as { delta?: string; text?: string; answer?: string; tableId?: string; error?: string };
           if (typeof frame.error === 'string') throw new Error(frame.error);
           if (typeof frame.delta === 'string') onDelta(frame.delta);
-          if (typeof frame.text === 'string' || typeof frame.answer === 'string') finalResult = frame as Operations[K][1];
+          if (typeof frame.text === 'string' || typeof frame.answer === 'string' || typeof frame.tableId === 'string') finalResult = frame as Operations[K][1];
         }
         newline = buffer.indexOf('\n');
       }
