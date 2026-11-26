@@ -121,6 +121,9 @@ await withHost(async host => {
       if (!await field.isVisible()) await toggle.click();
       await chat.getByText('Ask a question about this paper.').waitFor();
       assert.equal(await answers.count(), 0);
+      for (const chip of ['Structured Brief', 'Datasets & Metrics', 'Methodology Critique', 'Key Equations & Notation']) {
+        await chat.locator('.chat-prompt-bar').getByRole('button', { name: chip, exact: true }).waitFor();
+      }
       await reader.goto(address);
       if (!await field.isVisible()) await toggle.click();
       await answers.nth(2).waitFor();
@@ -231,7 +234,47 @@ await withHost(async host => {
         await localInput.fill('Which model answers this passage question?');
         await localInput.press('Enter');
         await card.locator('.selection-answer').filter({ hasText: 'reader-test / plain / default' }).waitFor();
-        console.log('Verified inline model popover, mid-stream Markdown rendering, Stop retention + Retry, Delete/Clear persistence, and switching models.');
+
+        await reader.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=6');
+        await reader.locator('#loading').waitFor({ state: 'hidden' });
+        if (!await field.isVisible()) await toggle.click();
+        await reader.locator('#more').click();
+        await reader.locator('#menu').getByRole('button', { name: 'Connections', exact: true }).click();
+        const dialog = reader.getByRole('dialog');
+        await dialog.waitFor({ state: 'visible' });
+        const promptDetails = dialog.locator('.settings-prompts');
+        assert.equal(await promptDetails.evaluate(node => (node as HTMLDetailsElement).open), false);
+        assert.ok((await dialog.getByRole('button', { name: 'Save connections', exact: true }).boundingBox())!.y < 860);
+        await promptDetails.locator('summary').click();
+        await dialog.locator('#settingsCustomPrompts').fill('paper: Custom Paper | Check ablation\nselection: Custom Sel | Check units\nShared Chip | Summarize briefly');
+        await dialog.getByRole('button', { name: 'Save connections', exact: true }).click();
+        await dialog.waitFor({ state: 'hidden' });
+        const paperPrompts = chat.locator('.chat-prompt-bar');
+        await paperPrompts.getByRole('button', { name: 'Custom Paper', exact: true }).waitFor();
+        await paperPrompts.getByRole('button', { name: 'Shared Chip', exact: true }).waitFor();
+        assert.equal(await paperPrompts.getByRole('button', { name: 'Custom Sel', exact: true }).count(), 0);
+        await paperPrompts.getByRole('button', { name: 'Structured Brief', exact: true }).click();
+        await paperPrompts.waitFor({ state: 'hidden' });
+        const briefChip = chat.locator('.paper-answer .page-cite-chip[data-page="2"]').first();
+        await briefChip.waitFor(); await briefChip.click();
+        await reader.waitForFunction(() => document.getElementById('pageCount')?.textContent?.startsWith('2 / '));
+        await chat.getByRole('button', { name: 'Clear chat', exact: true }).click();
+        await chat.getByRole('button', { name: 'Confirm clear', exact: true }).click();
+        await paperPrompts.getByRole('button', { name: 'Structured Brief', exact: true }).waitFor();
+        await reader.locator('#original .pdf-native-text span').filter({ hasText: 'memory' }).first().evaluate(node => {
+          const text = node.firstChild!, range = document.createRange(); range.setStart(text, 0); range.setEnd(text, Math.min(6, text.textContent?.length ?? 0));
+          const sel = window.getSelection()!; sel.removeAllRanges(); sel.addRange(range);
+          node.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
+        });
+        await card.getByRole('button', { name: 'Ask AI', exact: true }).click();
+        const selPrompts = card.locator('.chat-prompt-bar');
+        for (const name of ['Explain Step-by-Step', 'Extract Equation (LaTeX)', 'Extract Table (Markdown)', 'Intuition & Example', 'Custom Sel', 'Shared Chip']) {
+          await selPrompts.getByRole('button', { name, exact: true }).waitFor();
+        }
+        assert.equal(await selPrompts.getByRole('button', { name: 'Custom Paper', exact: true }).count(), 0);
+        await selPrompts.getByRole('button', { name: 'Custom Sel', exact: true }).click();
+        await selPrompts.waitFor({ state: 'hidden' }); await card.locator('.selection-answer').waitFor();
+        console.log('Verified inline model popover, research prompt chips, custom templates, mid-stream Markdown, Stop/Retry, Delete/Clear, and model switching.');
       }
       console.log('Verified page-12 table grounding from imported page 2, opt-in attachment, whole-paper follow-up, passage history, resize and per-paper restoration (' +
         (live ? 'live DSH model' : 'grounding-checked model fixture') + ').');

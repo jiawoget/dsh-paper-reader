@@ -476,9 +476,9 @@ function readTargetLanguage(value) {
   if (!parsed.ok) throw new ServiceError(400, parsed.error);
   return parsed.value;
 }
-function readGlossary(value) {
-  const raw = stringValue(value, "glossary", 8e3, false, true);
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, "Glossary contains invalid control characters.");
+function readMultilinePref(value, name2, error) {
+  const raw = stringValue(value, name2, 8e3, false, true);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, error);
   return raw.replace(/\r\n?/g, "\n");
 }
 var initialSettings = {
@@ -487,6 +487,7 @@ var initialSettings = {
   apiKey: "",
   targetLanguage: DEFAULT_TARGET_LANGUAGE,
   glossary: "",
+  customPrompts: "",
   vaultPath: "",
   zoteroLibraryId: "",
   zoteroLibraryType: "user",
@@ -518,7 +519,8 @@ function mergeSettings(current, input) {
   if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, "The Zotero library ID must be a positive integer.");
   const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
   const targetLanguage = input.targetLanguage === void 0 ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
-  const glossary = input.glossary === void 0 ? current.glossary : readGlossary(input.glossary);
+  const glossary = input.glossary === void 0 ? current.glossary : readMultilinePref(input.glossary, "glossary", "Glossary contains invalid control characters.");
+  const customPrompts = input.customPrompts === void 0 ? current.customPrompts : readMultilinePref(input.customPrompts, "custom prompts", "Custom prompts contain invalid control characters.");
   return {
     questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
     model,
@@ -526,6 +528,7 @@ function mergeSettings(current, input) {
     apiKey: updatedSecret(sameOrigin ? current.apiKey : "", input.apiKey, input.clearApiKey),
     targetLanguage,
     glossary,
+    customPrompts,
     vaultPath: vault ? path.resolve(vault) : "",
     zoteroLibraryType: type,
     zoteroLibraryId: id,
@@ -3421,6 +3424,7 @@ var ReaderModel = class {
       hasApiKey: Boolean(settings.apiKey),
       targetLanguage: settings.targetLanguage,
       glossary: settings.glossary,
+      customPrompts: settings.customPrompts,
       questionModel: settings.questionModel,
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind,

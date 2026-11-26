@@ -63,6 +63,19 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
   glossaryInput.placeholder = label('One entry per line: KV = key-value cache (term only to keep unchanged)', '每行一条：KV = 键值缓存（仅填术语则保留原文）');
   glossaryRow.append(el('span', '', label('Translation glossary', '翻译术语表')), glossaryInput);
   const glossaryHint = el('p', 'hint', label('Matched terms are locked during AI translation. Lines starting with # are ignored.', '翻译时会自动锁定匹配到的术语，以 # 开头的行会被忽略。'));
+  const promptsDetails = el('details', 'settings-prompts');
+  const promptsRow = el('label', 'field'), promptsInput = el('textarea');
+  promptsInput.id = 'settingsCustomPrompts';
+  promptsInput.rows = 4;
+  promptsInput.maxLength = 8000;
+  promptsInput.value = data.customPrompts ?? '';
+  promptsInput.placeholder = label('One per line: Label | Prompt (prefix paper: or selection: to scope)', '每行一条：标签 | 提示词（可加 paper: 或 selection: 限定范围）');
+  promptsRow.append(el('span', '', label('Prompt templates', '提示词模板')), promptsInput);
+  promptsDetails.append(
+    el('summary', '', label('Custom research prompts', '自定义学术提示词')),
+    promptsRow,
+    el('p', 'hint', label('Shown as 1-click chips in empty Paper chat and Selection chat. Lines starting with # are ignored.', '会在空的全文问答与选段讨论中显示为快捷提示词，以 # 开头的行会被忽略。'))
+  );
 
   const vault = inputField(label('Obsidian vault folder', 'Obsidian 笔记库文件夹'), data.vaultPath, 'text', label('Absolute path to your vault', '填写 Obsidian 笔记库的绝对路径'));
   const id = inputField(label('Zotero library ID', 'Zotero 资料库 ID'), data.zoteroLibraryId);
@@ -140,7 +153,7 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
       advanced.append(el('summary', '', label('Override with custom API', '使用自定义 API 覆盖')), base.row, model.row, key.row, clearModelRow);
       aiPanel.append(advanced);
     } else aiPanel.append(base.row, model.row, key.row, clearModelRow);
-    aiPanel.append(langRow, customLang.row, glossaryRow, glossaryHint);
+    aiPanel.append(langRow, customLang.row, glossaryRow, glossaryHint, promptsDetails);
 
     const obsidianBtn = el('button', 'btn', 'Obsidian'); obsidianBtn.id = 'settings-tab-obsidian';
     const obsidianPanel = tabPanel('settings-panel-obsidian');
@@ -180,7 +193,7 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
     save.disabled = true;
     try {
       await api('settings.save', {
-        ...(!returnToLibrary && { baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, glossary: glossaryInput.value, vaultPath: vault.input.value, clearApiKey: clearModel.checked }),
+        ...(!returnToLibrary && { baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, glossary: glossaryInput.value, customPrompts: promptsInput.value, vaultPath: vault.input.value, clearApiKey: clearModel.checked }),
         ...zoteroSettings()
       });
       await app.refresh();

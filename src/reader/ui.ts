@@ -83,6 +83,7 @@ const localizedErrors: Record<string, string> = {
   'Target language must be at most 64 characters.': '翻译目标语言最多 64 个字符。',
   'Target language contains invalid control characters.': '翻译目标语言包含无效控制字符。',
   'Glossary contains invalid control characters.': '术语表包含无效控制字符。',
+  'Custom prompts contain invalid control characters.': '自定义提示词包含无效控制字符。',
   'The translation did not cover every passage on this page. Retry to continue.': '本页译文未覆盖全部段落，请点击重试继续。',
   'Some passages on this page were missing from the translation. Try again.': '本页部分段落缺少译文，请重试。',
   'The model omitted a paragraph. Retry to resume the translation.': '模型漏译了部分段落，请点击重试继续翻译。',
@@ -249,8 +250,8 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   }
 }
-export function downloadFile(filename: string, content: string, mime: string): void {
-  const blob = new Blob([content], { type: mime });
+export function downloadFile(filename: string, content: string | Blob, mime?: string): void {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mime ?? 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const link = el('a');
   link.href = url;

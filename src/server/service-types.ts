@@ -60,9 +60,9 @@ export function readTargetLanguage(value: unknown): string {
   if (!parsed.ok) throw new ServiceError(400, parsed.error);
   return parsed.value;
 }
-function readGlossary(value: unknown): string {
-  const raw = stringValue(value, 'glossary', 8_000, false, true);
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, 'Glossary contains invalid control characters.');
+function readMultilinePref(value: unknown, name: string, error: string): string {
+  const raw = stringValue(value, name, 8_000, false, true);
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(raw)) throw new ServiceError(400, error);
   return raw.replace(/\r\n?/g, '\n');
 }
 
@@ -73,6 +73,7 @@ export interface PrivateSettings {
   apiKey: string;
   targetLanguage: string;
   glossary: string;
+  customPrompts: string;
   vaultPath: string;
   zoteroLibraryId: string;
   zoteroLibraryType: 'user' | 'group';
@@ -81,7 +82,7 @@ export interface PrivateSettings {
 }
 export const initialSettings: Readonly<PrivateSettings> = {
   baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '',
-  targetLanguage: DEFAULT_TARGET_LANGUAGE, glossary: '', vaultPath: '',
+  targetLanguage: DEFAULT_TARGET_LANGUAGE, glossary: '', customPrompts: '', vaultPath: '',
   zoteroLibraryId: '', zoteroLibraryType: 'user', zoteroApiKey: ''
 };
 export function zoteroModeFor(settings: PrivateSettings): 'desktop' | 'web' {
@@ -114,11 +115,12 @@ export function mergeSettings(current: PrivateSettings, input: Input): PrivateSe
   if (id && !/^[1-9]\d*$/.test(id)) throw new ServiceError(400, 'The Zotero library ID must be a positive integer.');
   const sameOrigin = new URL(current.baseUrl).origin === new URL(baseUrl).origin;
   const targetLanguage = input.targetLanguage === undefined ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
-  const glossary = input.glossary === undefined ? current.glossary : readGlossary(input.glossary);
+  const glossary = input.glossary === undefined ? current.glossary : readMultilinePref(input.glossary, 'glossary', 'Glossary contains invalid control characters.');
+  const customPrompts = input.customPrompts === undefined ? current.customPrompts : readMultilinePref(input.customPrompts, 'custom prompts', 'Custom prompts contain invalid control characters.');
   return {
     questionModel: input.questionModel === undefined ? current.questionModel : readQuestionModel(input.questionModel),
     model, baseUrl, apiKey: updatedSecret(sameOrigin ? current.apiKey : '', input.apiKey, input.clearApiKey),
-    targetLanguage, glossary,
+    targetLanguage, glossary, customPrompts,
     vaultPath: vault ? path.resolve(vault) : '', zoteroLibraryType: type, zoteroLibraryId: id, zoteroMode,
     zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
   };

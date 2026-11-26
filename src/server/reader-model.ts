@@ -131,7 +131,7 @@ export class ReaderModel {
     const route = await this.#route(settings);
     return {
       model: settings.model, baseUrl: settings.baseUrl, hasApiKey: Boolean(settings.apiKey),
-      targetLanguage: settings.targetLanguage, glossary: settings.glossary,
+      targetLanguage: settings.targetLanguage, glossary: settings.glossary, customPrompts: settings.customPrompts,
       questionModel: settings.questionModel,
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind, hostProvider: route.kind === 'dsh' ? route.provider : '', hostModel: route.kind === 'dsh' ? route.model : '',
