@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { readdirSync, statSync } from 'node:fs';
+import { chmod, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -77,7 +78,7 @@ describe('DSH host read-only tools', () => {
       const registered = new Map<string, HostToolDefinition>();
       let disposed = 0, teardown: (() => void) | undefined;
       const registry: HostToolsRegistry = { register(def) { registered.set(def.name, def); return () => { disposed++; registered.delete(def.name); }; } };
-      registerPaperReaderTools({ inject(services, setup) { assert.deepEqual(services, ['tools']); teardown = setup({ tools: registry }); } }, { store, library, fetchFn: mockTrendFetch() });
+      registerPaperReaderTools({ inject(services, setup) { assert.deepEqual(services, ['tools']); teardown = setup({ tools: registry }); } }, { root, library, fetchFn: mockTrendFetch() });
       assert.deepEqual([...registered.keys()], EXPECTED_TOOLS);
       for (const tool of registered.values()) {
         assert.equal(tool.parameters.type, 'object'); assert.equal(tool.parameters.additionalProperties, false); assert.equal(tool.isConcurrencySafe(), true);
@@ -123,7 +124,8 @@ describe('DSH host read-only tools', () => {
         ['paper_reader_topic_summary', { topic: 42 }], ['paper_reader_topic_summary', { unknownKey: 'x' }],
         ['paper_reader_citation_stance', {}], ['paper_reader_citation_stance', { docId: 'pagedattention', direction: 'invalid' }],
         ['paper_reader_field_trends', { query: 'llm', windowYears: 4 }], ['paper_reader_field_trends', { query: 'llm', metric: 'invalid' }],
-        ['paper_reader_field_trends', { query: 'llm', sources: ['arxiv'] }], ['paper_reader_field_trends', { query: 'llm', sources: [] }]
+        ['paper_reader_field_trends', { query: 'llm', sources: ['arxiv'] }], ['paper_reader_field_trends', { query: 'llm', sources: [] }],
+        ['paper_reader_field_trends', { query: '((()))', sources: ['europepmc'] }], ['paper_reader_search', Object.create({ query: 'kv' })]
       ];
       for (const [name, badArgs] of invalidCases) await assertToolArgsError(() => registered.get(name)!.execute(badArgs));
 
@@ -132,13 +134,53 @@ describe('DSH host read-only tools', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  test('creates zero files on empty root and never mutates chmod 0444 legacy v2 reader.sqlite', async () => {
+    const emptyRoot = await mkdtemp(path.join(tmpdir(), 'paper-reader-empty-')), legacyRoot = await mkdtemp(path.join(tmpdir(), 'paper-reader-legacy-'));
+    const runAll = async (root: string) => {
+      const tools = new Map<string, HostToolDefinition>();
+      registerPaperReaderTools({ inject(_s, setup) { setup({ tools: { register(d) { tools.set(d.name, d); return () => {}; } } }); } }, { root, library: new Library(root, publicResource), fetchFn: mockTrendFetch() });
+      const search = await tools.get('paper_reader_search')!.execute({ query: 'PagedAttention' }) as { metadataHits: { docId: string }[]; noteHits: { docId: string }[] };
+      await tools.get('paper_reader_topic_summary')!.execute({});
+      await tools.get('paper_reader_citation_stance')!.execute({ docId: 'pagedattention', direction: 'cited_by' });
+      await tools.get('paper_reader_field_trends')!.execute({ query: 'LLM inference', windowYears: 3, sources: ['openalex', 'europepmc'] });
+      return search;
+    };
+    const dbPath = path.join(legacyRoot, 'reader.sqlite');
+    try {
+      const searchEmpty = await runAll(emptyRoot);
+      assert.ok(searchEmpty.metadataHits.some(h => h.docId === 'pagedattention'));
+      assert.deepEqual(readdirSync(emptyRoot), []);
+
+      const legacyDb = new DatabaseSync(dbPath);
+      try {
+        legacyDb.exec("CREATE TABLE prefs(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL) STRICT; CREATE TABLE entries(id TEXT PRIMARY KEY, kind TEXT NOT NULL, docId TEXT NOT NULL, page INTEGER NOT NULL, anchor TEXT NOT NULL, text TEXT NOT NULL, label TEXT NOT NULL, quote TEXT NOT NULL, updatedAt TEXT NOT NULL) STRICT; CREATE TABLE annotations(id TEXT PRIMARY KEY, docId TEXT NOT NULL, content TEXT, updatedAt TEXT NOT NULL) STRICT; CREATE TABLE doc_meta(docId TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'unread', starred INTEGER NOT NULL DEFAULT 0, tags TEXT NOT NULL DEFAULT '[]', lastOpenedAt INTEGER, lastPage INTEGER, pageCount INTEGER, scrollFraction REAL) STRICT;");
+        for (const t of ['citations', 'notebooks', 'notebook_documents', 'notebook_vaults', 'chat_exchanges', 'zotero_authorizations', 'zotero_sources', 'book_positions', 'pdf_outlines', 'article_captures']) legacyDb.exec(`CREATE TABLE ${t}(id TEXT PRIMARY KEY) STRICT`);
+        legacyDb.prepare("INSERT INTO entries(id,kind,docId,page,anchor,text,label,quote,updatedAt) VALUES('n1','note','pagedattention',6,'','PagedAttention legacy note','','','2025-01-01T00:00:00Z')").run();
+        legacyDb.exec('PRAGMA user_version=2');
+      } finally { legacyDb.close(); }
+      await chmod(dbPath, 0o444);
+      const beforeBytes = await readFile(dbPath), beforeMtime = statSync(dbPath).mtimeMs;
+      const searchLegacy = await runAll(legacyRoot);
+      assert.equal(searchLegacy.noteHits.length, 1);
+      assert.equal(Buffer.compare(beforeBytes, await readFile(dbPath)), 0);
+      assert.equal(statSync(dbPath).mtimeMs, beforeMtime);
+      assert.deepEqual(readdirSync(legacyRoot), ['reader.sqlite']);
+      const obs = new DatabaseSync(dbPath, { readOnly: true });
+      try { assert.equal(Object.keys(tableCounts(obs)).length, 14); } finally { obs.close(); }
+    } finally {
+      await chmod(dbPath, 0o600).catch(() => {});
+      await rm(emptyRoot, { recursive: true, force: true });
+      await rm(legacyRoot, { recursive: true, force: true });
+    }
+  });
+
   test('degrades gracefully when ctx.inject or tools service is unavailable', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'paper-reader-tools-graceful-'));
     try {
-      const store = new ReaderStore(root), library = new Library(root, publicResource, id => store.deleteDocument(id));
-      assert.doesNotThrow(() => registerPaperReaderTools(undefined, { store, library }));
-      assert.doesNotThrow(() => registerPaperReaderTools({}, { store, library }));
-      assert.doesNotThrow(() => registerPaperReaderTools({ inject: (_s, setup) => setup({}) }, { store, library }));
+      const library = new Library(root, publicResource);
+      assert.doesNotThrow(() => registerPaperReaderTools(undefined, { root, library }));
+      assert.doesNotThrow(() => registerPaperReaderTools({}, { root, library }));
+      assert.doesNotThrow(() => registerPaperReaderTools({ inject: (_s, setup) => setup({}) }, { root, library }));
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

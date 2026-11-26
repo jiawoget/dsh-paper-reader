@@ -92,7 +92,7 @@ export function apply(ctx:ReaderHost):void {
     return () => { if (models.attachments === store) delete models.attachments; };
   });
   const service = createServices({root,ctx:models,library,store,readResource:publicResource});
-  registerPaperReaderTools(ctx, { store, library });
+  registerPaperReaderTools(ctx, { root, library });
   const route=(suffix:string,methods:Method[],fetch:HostRoute['fetch'],requestBody:HostRoute['requestBody']='buffered') => ctx.connection.fetch.register({
     path:'/api/paper-reader/'+suffix,methods,requestBody,
     async fetch(request) {

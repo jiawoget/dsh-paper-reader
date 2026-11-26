@@ -62,7 +62,7 @@ export async function cachedFetch<T>(
   source: GraphSource, key: string, url: string, init: RequestInit, ttlMs: number, parse: (res: Response) => Promise<T>, ctx: GraphContext, degraded: Set<string>, noCache = false
 ): Promise<{ data: T; fromCache: boolean; fetchedAt: number } | undefined> {
   if (ctx.signal?.aborted) throw new ServiceError(499, 'Request canceled.');
-  const cached = noCache ? undefined : ctx.withDb(false, db => getGraphCache<T>(db, key));
+  const cached = noCache ? undefined : (() => { try { return ctx.withDb(false, db => getGraphCache<T>(db, key)); } catch (e) { if (ctx.readOnly) return undefined; throw e; } })();
   if (cached && !cached.stale) return { data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   const fetcher = ctx.fetchFn ?? globalThis.fetch, sleep = ctx.sleepFn ?? defaultSleep, headers = new Headers(init.headers);
   if (!headers.has('User-Agent')) headers.set('User-Agent', 'DSH-Paper-Reader/0.1 (academic graph)');

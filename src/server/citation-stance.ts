@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite';
 import { parseAcademicInput } from '../shared/academic-intake.js';
 import { extractArxivId } from '../shared/citation-export.js';
 import { VALID_CITATION_SECTIONS, VALID_CITATION_STANCES, type CitationDirection, type CitationReclassifyResult, type CitationReport, type CitationSection, type CitationStance, type CitationStatement, type CitationSummary, type CitationTallies, type CitationTargetInfo } from '../shared/citation-stance-types.js';
@@ -282,12 +283,14 @@ export async function analyzeCitations(deps: CitationDeps, input: Input, opts?: 
   });
   return { target, direction, tallies: computeTallies(finalList), statements: finalList, sciteUrl: target.sciteUrl, degraded: [...degraded], fromCache, offline: !fromCache && external.length === 0 && extDegraded };
 }
-export async function readCachedCitations(deps: Pick<CitationDeps, 'store' | 'library'>, input: Input): Promise<{ target: CitationTargetInfo; direction: CitationDirection; sciteUrl: string; tallies: CitationTallies; statements: CitationStatement[]; hasCachedExternal: boolean }> {
-  const direction = readDirection(input.direction), docs = await deps.library.list(), baseTarget = await resolveLocalTarget(deps, input, docs);
-  const { cached, local, target } = deps.store.withDb(false, db => {
-    const c = listCitationStances(db, baseTarget.targetKey, direction), cid = !baseTarget.docId ? c.find(r => r.docId)?.docId : undefined;
+const hasTbl = (db: DatabaseSync | undefined, name: string): db is DatabaseSync => Boolean(db?.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+export async function readCachedCitations(deps: { library: Library; store?: ReaderStore; docs?: readonly DocumentInfo[]; withDb?: <T>(run: (db?: DatabaseSync) => T) => T }, input: Input): Promise<{ target: CitationTargetInfo; direction: CitationDirection; sciteUrl: string; tallies: CitationTallies; statements: CitationStatement[]; hasCachedExternal: boolean }> {
+  const direction = readDirection(input.direction), docs = deps.docs ?? await deps.library.list(), baseTarget = await resolveLocalTarget(deps, input, docs);
+  const runDb = deps.withDb ?? (<T>(fn: (db?: DatabaseSync) => T) => deps.store!.withDb(false, db => fn(db)));
+  const { cached, local, target } = runDb(db => {
+    const c = hasTbl(db, 'citation_stances') ? listCitationStances(db, baseTarget.targetKey, direction) : [], cid = !baseTarget.docId ? c.find(r => r.docId)?.docId : undefined;
     const t = cid ? enrichFromDoc(baseTarget, docs.find(d => d.id === cid)) : baseTarget;
-    return { cached: c, local: scanLocalBackCitations(t, docs, id => getDocPages(db, id), direction), target: t };
+    return { cached: c, local: scanLocalBackCitations(t, docs, id => (hasTbl(db, 'doc_pages') ? getDocPages(db, id) : []), direction), target: t };
   });
   const cachedByKey = new Map(cached.map(s => [s.citingKey, s])), merged = new Map(cached.filter(s => s.source !== 'local' || s.manualOverride).map(s => [s.citingKey, s]));
   for (const s of local) { const prev = cachedByKey.get(s.citingKey); merged.set(s.citingKey, prev && (prev.manualOverride || (prev.stance !== 'unclassified' && prev.context === s.context)) ? prev : s); }

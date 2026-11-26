@@ -1,9 +1,14 @@
 // src/server/index.ts
-import { existsSync as existsSync4, readdirSync } from "node:fs";
+import { existsSync as existsSync5, readdirSync } from "node:fs";
 import { readFile as readFile3 } from "node:fs/promises";
-import path11 from "node:path";
+import path12 from "node:path";
 import os from "node:os";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
+
+// src/server/host-tools.ts
+import { existsSync as existsSync4 } from "node:fs";
+import path7 from "node:path";
+import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 
 // src/shared/citation-export.ts
 var ARXIV_NEW = "\\d{4}\\.\\d{4,5}";
@@ -2290,7 +2295,14 @@ function makePaper(p) {
 }
 async function cachedFetch(source2, key2, url, init, ttlMs, parse3, ctx, degraded, noCache = false) {
   if (ctx.signal?.aborted) throw new ServiceError(499, "Request canceled.");
-  const cached = noCache ? void 0 : ctx.withDb(false, (db) => getGraphCache(db, key2));
+  const cached = noCache ? void 0 : (() => {
+    try {
+      return ctx.withDb(false, (db) => getGraphCache(db, key2));
+    } catch (e) {
+      if (ctx.readOnly) return void 0;
+      throw e;
+    }
+  })();
   if (cached && !cached.stale) return { data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   const fetcher = ctx.fetchFn ?? globalThis.fetch, sleep = ctx.sleepFn ?? defaultSleep, headers = new Headers(init.headers);
   if (!headers.has("User-Agent")) headers.set("User-Agent", "DSH-Paper-Reader/0.1 (academic graph)");
@@ -4624,12 +4636,14 @@ async function analyzeCitations(deps, input, opts) {
   });
   return { target, direction, tallies: computeTallies(finalList), statements: finalList, sciteUrl: target.sciteUrl, degraded: [...degraded], fromCache, offline: !fromCache && external.length === 0 && extDegraded };
 }
+var hasTbl = (db, name2) => Boolean(db?.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name2));
 async function readCachedCitations(deps, input) {
-  const direction = readDirection(input.direction), docs = await deps.library.list(), baseTarget = await resolveLocalTarget(deps, input, docs);
-  const { cached, local, target } = deps.store.withDb(false, (db) => {
-    const c = listCitationStances(db, baseTarget.targetKey, direction), cid = !baseTarget.docId ? c.find((r) => r.docId)?.docId : void 0;
+  const direction = readDirection(input.direction), docs = deps.docs ?? await deps.library.list(), baseTarget = await resolveLocalTarget(deps, input, docs);
+  const runDb = deps.withDb ?? ((fn) => deps.store.withDb(false, (db) => fn(db)));
+  const { cached, local, target } = runDb((db) => {
+    const c = hasTbl(db, "citation_stances") ? listCitationStances(db, baseTarget.targetKey, direction) : [], cid = !baseTarget.docId ? c.find((r) => r.docId)?.docId : void 0;
     const t = cid ? enrichFromDoc(baseTarget, docs.find((d) => d.id === cid)) : baseTarget;
-    return { cached: c, local: scanLocalBackCitations(t, docs, (id) => getDocPages(db, id), direction), target: t };
+    return { cached: c, local: scanLocalBackCitations(t, docs, (id) => hasTbl(db, "doc_pages") ? getDocPages(db, id) : [], direction), target: t };
   });
   const cachedByKey = new Map(cached.map((s) => [s.citingKey, s])), merged = new Map(cached.filter((s) => s.source !== "local" || s.manualOverride).map((s) => [s.citingKey, s]));
   for (const s of local) {
@@ -4985,6 +4999,8 @@ var OUTPUT_SPEC = {
   render: (_args, value) => [{ type: "text", text: JSON.stringify(value, null, 2) }]
 };
 var toJsonObject = (value) => JSON.parse(JSON.stringify(value));
+var own = (obj, key2) => Object.hasOwn(obj, key2) ? obj[key2] : void 0;
+var hasTable = (db, name2) => Boolean(db?.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name2));
 var expectObject = (raw, allowedKeys) => {
   if (!isObject(raw)) throw new ToolArgsError("arguments must be a JSON object");
   const allowed = new Set(allowedKeys), extra = Object.keys(raw).filter((k) => !allowed.has(k));
@@ -4992,7 +5008,7 @@ var expectObject = (raw, allowedKeys) => {
   return raw;
 };
 var readString = (obj, key2, maxLen, required) => {
-  const val = obj[key2];
+  const val = own(obj, key2);
   if (val === void 0) {
     if (required) throw new ToolArgsError(`missing required property "${key2}"`);
     return void 0;
@@ -5004,13 +5020,13 @@ var readString = (obj, key2, maxLen, required) => {
   return trimmed;
 };
 var readIntRange = (obj, key2, min, max, fallback) => {
-  const val = obj[key2];
+  const val = own(obj, key2);
   if (val === void 0) return fallback;
   if (typeof val !== "number" || !Number.isSafeInteger(val) || val < min || val > max) throw new ToolArgsError(`"${key2}" must be an integer between ${min} and ${max}`);
   return val;
 };
 var readEnumValue = (obj, key2, allowed, fallback) => {
-  const val = obj[key2];
+  const val = own(obj, key2);
   if (val === void 0) return fallback;
   const hit = allowed.find((item) => item === val);
   if (hit === void 0) throw new ToolArgsError(`"${key2}" must be one of ${JSON.stringify(allowed)}`);
@@ -5018,12 +5034,8 @@ var readEnumValue = (obj, key2, allowed, fallback) => {
 };
 var readTrendSources = (raw) => {
   if (raw === void 0) return "openalex";
-  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 2) throw new ToolArgsError('"sources" must be a non-empty array of ["openalex" | "europepmc"]');
-  const picked = /* @__PURE__ */ new Set();
-  for (const item of raw) {
-    if (item !== "openalex" && item !== "europepmc") throw new ToolArgsError('"sources" items must be "openalex" or "europepmc"');
-    picked.add(item);
-  }
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 2 || raw.some((x) => x !== "openalex" && x !== "europepmc")) throw new ToolArgsError('"sources" must be a non-empty array of ["openalex" | "europepmc"]');
+  const picked = new Set(raw);
   return picked.size === 2 ? "all" : picked.has("europepmc") ? "europepmc" : "openalex";
 };
 function matchTopicScope(docs, topics, topicQuery) {
@@ -5042,8 +5054,31 @@ function parseJsonArray(raw) {
     return [];
   }
 }
-async function listDocsWithMeta(store, library) {
-  const docs = await library.list(), metas = store.withDb(false, (db) => listDocMeta(db));
+function withReadOnlyDb(root, run) {
+  const dbPath = path7.join(root, "reader.sqlite");
+  if (!existsSync4(dbPath)) return run(void 0);
+  const db = new DatabaseSync2(dbPath, { readOnly: true, timeout: 5e3 });
+  try {
+    return run(db);
+  } finally {
+    db.close();
+  }
+}
+function readSettingsReadOnly(root) {
+  return withReadOnlyDb(root, (db) => {
+    const row = hasTable(db, "prefs") ? db.prepare("SELECT data FROM prefs WHERE id=1").get() : void 0;
+    if (!row || typeof row.data !== "string") return { ...initialSettings };
+    try {
+      const parsed = JSON.parse(row.data);
+      return isObject(parsed) ? mergeSettings({ ...initialSettings }, parsed) : { ...initialSettings };
+    } catch {
+      return { ...initialSettings };
+    }
+  });
+}
+async function listDocsWithMeta(root, library) {
+  const docs = existsSync4(path7.join(root, "documents")) ? await library.list() : [sample];
+  const metas = withReadOnlyDb(root, (db) => hasTable(db, "doc_meta") ? listDocMeta(db) : /* @__PURE__ */ new Map());
   return docs.map((doc) => {
     const meta = metas.get(doc.id);
     return meta ? { ...doc, meta } : doc;
@@ -5067,136 +5102,116 @@ function readExtractionData(db, docIds) {
     return { id, name: String(tableRow.name ?? id), preset: String(tableRow.preset ?? "cs_ai"), columns, rows: [...byDoc.entries()].map(([docId, cells]) => ({ docId, cells })) };
   });
 }
+var readTool = (name2, description, title, parameters, execute2) => ({ name: name2, description, parameters, output: OUTPUT_SPEC, isConcurrencySafe: () => true, presentCall: () => ({ card: "generic", kind: "read", title }), execute: execute2 });
 function buildPaperReaderTools(deps) {
-  const { store, library, fetchFn } = deps;
-  const readOnlyWithDb = (writer, run) => {
+  const { root, library, fetchFn } = deps;
+  const trendWithDb = (writer, run) => {
     if (writer) throw new Error("Read-only Paper Reader host tool attempted a SQLite write.");
-    return store.withDb(false, run);
+    return withReadOnlyDb(root, (db) => {
+      if (!db) throw new Error("Database absent");
+      return run(db);
+    });
   };
   return [
-    {
-      name: "paper_reader_search",
-      description: "Read-only search across local Paper Reader full-text PDF pages (FTS5), document metadata, notes, and highlights.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Search query text." },
-          topic: { type: "string", description: "Optional topic name, topic ID, tag, or Zotero collection filter." },
-          limit: { type: "integer", description: "Maximum hits per category (1 to 50, default 20)." }
-        },
-        required: ["query"],
-        additionalProperties: false
+    readTool("paper_reader_search", "Read-only search across local Paper Reader full-text PDF pages (FTS5), document metadata, notes, and highlights.", "Search Paper Reader library", {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query text." },
+        topic: { type: "string", description: "Optional topic name, topic ID, tag, or Zotero collection filter." },
+        limit: { type: "integer", description: "Maximum hits per category (1 to 50, default 20)." }
       },
-      output: OUTPUT_SPEC,
-      isConcurrencySafe: () => true,
-      presentCall: () => ({ card: "generic", kind: "read", title: "Search Paper Reader library" }),
-      async execute(rawArgs) {
-        const obj = expectObject(rawArgs, ["query", "topic", "limit"]);
-        const query = readString(obj, "query", 500, true), topic = readString(obj, "topic", 120, false), limit = readIntRange(obj, "limit", 1, 50, 20);
-        const allDocs = await listDocsWithMeta(store, library);
-        return toJsonObject(readOnlyWithDb(false, (db) => {
-          const { docs: scopedDocs, matchedTopic } = matchTopicScope(allDocs, listTopics(db), topic);
-          const docMap = new Map(scopedDocs.map((d) => [d.id, d])), docIds = scopedDocs.map((d) => d.id);
-          const ftsHits = docIds.length ? searchDocPagesFts(db, query, { docIds, limit }) : [];
-          const libHits = scopedDocs.length ? searchLibrary(db, query, scopedDocs) : [];
-          return {
-            query,
-            ...topic ? { topic, matchedTopic: matchedTopic ?? null } : {},
-            limit,
-            totalDocumentsSearched: scopedDocs.length,
-            pageHits: ftsHits.map((h) => {
-              const d = docMap.get(h.docId);
-              return { docId: h.docId, docTitle: d?.paperTitle || d?.title || h.docId, docKind: d?.kind ?? "pdf", page: h.page, snippet: h.snippet, score: h.score };
-            }),
-            metadataHits: libHits.filter((h) => h.kind === "doc").slice(0, limit),
-            noteHits: libHits.filter((h) => h.kind === "note").slice(0, limit),
-            highlightHits: libHits.filter((h) => h.kind === "mark").slice(0, limit)
-          };
-        }));
-      }
-    },
-    {
-      name: "paper_reader_topic_summary",
-      description: "Read-only summary of a local research topic (or entire library when topic is omitted): documents, cached paper cards, saved review tables, and aggregated limitations/open problems.",
-      parameters: {
-        type: "object",
-        properties: { topic: { type: "string", description: "Optional topic name, topic ID, tag, or Zotero collection." } },
-        additionalProperties: false
+      required: ["query"],
+      additionalProperties: false
+    }, async (rawArgs) => {
+      const obj = expectObject(rawArgs, ["query", "topic", "limit"]);
+      const query = readString(obj, "query", 500, true), topic = readString(obj, "topic", 120, false), limit = readIntRange(obj, "limit", 1, 50, 20);
+      const allDocs = await listDocsWithMeta(root, library);
+      return toJsonObject(withReadOnlyDb(root, (db) => {
+        const { docs: scopedDocs, matchedTopic } = matchTopicScope(allDocs, hasTable(db, "topics") ? listTopics(db) : [], topic);
+        const docMap = new Map(scopedDocs.map((d) => [d.id, d])), docIds = scopedDocs.map((d) => d.id);
+        const ftsHits = docIds.length && hasTable(db, "doc_pages_fts") && hasTable(db, "doc_pages") ? searchDocPagesFts(db, query, { docIds, limit }) : [];
+        const libHits = scopedDocs.length && hasTable(db, "doc_meta") && hasTable(db, "entries") && hasTable(db, "annotations") ? searchLibrary(db, query, scopedDocs) : scopedDocs.filter((d) => [d.title, d.paperTitle, d.authors, d.venue, d.year, d.doi, d.url, d.id].some((f) => f?.toLocaleLowerCase().includes(query.toLocaleLowerCase()))).map((d) => ({ docId: d.id, docTitle: d.title, docKind: d.book ? "book" : d.kind, kind: "doc", snippet: d.paperTitle || d.title, page: d.defaultPage }));
+        return {
+          query,
+          ...topic ? { topic, matchedTopic: matchedTopic ?? null } : {},
+          limit,
+          totalDocumentsSearched: scopedDocs.length,
+          pageHits: ftsHits.map((h) => {
+            const d = docMap.get(h.docId);
+            return { docId: h.docId, docTitle: d?.paperTitle || d?.title || h.docId, docKind: d?.kind ?? "pdf", page: h.page, snippet: h.snippet, score: h.score };
+          }),
+          metadataHits: libHits.filter((h) => h.kind === "doc").slice(0, limit),
+          noteHits: libHits.filter((h) => h.kind === "note").slice(0, limit),
+          highlightHits: libHits.filter((h) => h.kind === "mark").slice(0, limit)
+        };
+      }));
+    }),
+    readTool("paper_reader_topic_summary", "Read-only summary of a local research topic (or entire library when topic is omitted): documents, cached paper cards, saved review tables, and aggregated limitations/open problems.", "Summarize Paper Reader topic", {
+      type: "object",
+      properties: { topic: { type: "string", description: "Optional topic name, topic ID, tag, or Zotero collection." } },
+      additionalProperties: false
+    }, async (rawArgs) => {
+      const obj = expectObject(rawArgs === void 0 ? {} : rawArgs, ["topic"]);
+      const topic = readString(obj, "topic", 120, false), allDocs = await listDocsWithMeta(root, library);
+      return toJsonObject(withReadOnlyDb(root, (db) => {
+        const topics = hasTable(db, "topics") ? listTopics(db) : [], { docs: scopedDocs, matchedTopic } = matchTopicScope(allDocs, topics, topic);
+        const docIds = scopedDocs.map((d) => d.id), titleOf = new Map(scopedDocs.map((d) => [d.id, d.paperTitle || d.title]));
+        const paperCards = hasTable(db, "paper_cards") ? listPaperCards(db, docIds) : [];
+        const extractionTables = hasTable(db, "extraction_tables") && hasTable(db, "extraction_cells") ? readExtractionData(db, docIds) : [];
+        return {
+          scope: topic ? "topic" : "library",
+          ...topic ? { topic, matchedTopic: matchedTopic ?? null } : {},
+          topics,
+          documentCount: scopedDocs.length,
+          documents: scopedDocs.map((d) => ({ id: d.id, title: d.paperTitle || d.title, authors: d.authors ?? "", year: d.year ?? "", venue: d.venue ?? "", doi: d.doi ?? "", kind: d.kind, status: d.meta?.status ?? "unread", starred: d.meta?.starred ?? false, tags: d.meta?.tags ?? [] })),
+          paperCards,
+          extractionTables,
+          limitations: paperCards.filter((c) => c.limitations.trim()).map((c) => ({ docId: c.docId, title: titleOf.get(c.docId) ?? c.docId, limitations: c.limitations })),
+          openProblems: paperCards.filter((c) => c.futureWork.trim()).map((c) => ({ docId: c.docId, title: titleOf.get(c.docId) ?? c.docId, futureWork: c.futureWork }))
+        };
+      }));
+    }),
+    readTool("paper_reader_citation_stance", "Read-only citation stance tallies, cached external citation stances, Scite report link, and live offline local-library back-citations for a paper.", "Read Paper Reader citation stances", {
+      type: "object",
+      properties: {
+        docId: { type: "string", description: "Local Paper Reader document ID." },
+        doi: { type: "string", description: "Paper DOI." },
+        arxivId: { type: "string", description: "arXiv identifier." },
+        query: { type: "string", description: "Paper title, DOI, or arXiv query." },
+        direction: { type: "string", enum: ["cited_by", "references"], description: "Citation direction (default cited_by)." }
       },
-      output: OUTPUT_SPEC,
-      isConcurrencySafe: () => true,
-      presentCall: () => ({ card: "generic", kind: "read", title: "Summarize Paper Reader topic" }),
-      async execute(rawArgs) {
-        const obj = expectObject(rawArgs === void 0 ? {} : rawArgs, ["topic"]);
-        const topic = readString(obj, "topic", 120, false), allDocs = await listDocsWithMeta(store, library);
-        return toJsonObject(readOnlyWithDb(false, (db) => {
-          const topics = listTopics(db), { docs: scopedDocs, matchedTopic } = matchTopicScope(allDocs, topics, topic);
-          const docIds = scopedDocs.map((d) => d.id), titleOf = new Map(scopedDocs.map((d) => [d.id, d.paperTitle || d.title]));
-          const paperCards = listPaperCards(db, docIds), extractionTables = readExtractionData(db, docIds);
-          return {
-            scope: topic ? "topic" : "library",
-            ...topic ? { topic, matchedTopic: matchedTopic ?? null } : {},
-            topics,
-            documentCount: scopedDocs.length,
-            documents: scopedDocs.map((d) => ({ id: d.id, title: d.paperTitle || d.title, authors: d.authors ?? "", year: d.year ?? "", venue: d.venue ?? "", doi: d.doi ?? "", kind: d.kind, status: d.meta?.status ?? "unread", starred: d.meta?.starred ?? false, tags: d.meta?.tags ?? [] })),
-            paperCards,
-            extractionTables,
-            limitations: paperCards.filter((c) => c.limitations.trim()).map((c) => ({ docId: c.docId, title: titleOf.get(c.docId) ?? c.docId, limitations: c.limitations })),
-            openProblems: paperCards.filter((c) => c.futureWork.trim()).map((c) => ({ docId: c.docId, title: titleOf.get(c.docId) ?? c.docId, futureWork: c.futureWork }))
-          };
-        }));
-      }
-    },
-    {
-      name: "paper_reader_citation_stance",
-      description: "Read-only citation stance tallies, cached external citation stances, Scite report link, and live offline local-library back-citations for a paper.",
-      parameters: {
-        type: "object",
-        properties: {
-          docId: { type: "string", description: "Local Paper Reader document ID." },
-          doi: { type: "string", description: "Paper DOI." },
-          arxivId: { type: "string", description: "arXiv identifier." },
-          query: { type: "string", description: "Paper title, DOI, or arXiv query." },
-          direction: { type: "string", enum: ["cited_by", "references"], description: "Citation direction (default cited_by)." }
-        },
-        additionalProperties: false
+      additionalProperties: false
+    }, async (rawArgs) => {
+      const obj = expectObject(rawArgs, ["docId", "doi", "arxivId", "query", "direction"]);
+      const docId = readString(obj, "docId", 512, false), doi = readString(obj, "doi", 250, false), arxivId = readString(obj, "arxivId", 64, false), query = readString(obj, "query", 500, false);
+      const direction = readEnumValue(obj, "direction", ["cited_by", "references"], "cited_by");
+      if (!docId && !doi && !arxivId && !query) throw new ToolArgsError('provide at least one of "docId", "doi", "arxivId", or "query"');
+      const docs = await listDocsWithMeta(root, library);
+      return toJsonObject(await readCachedCitations({ library, docs, withDb: (run) => withReadOnlyDb(root, run) }, { docId, doi, arxivId, query, direction }));
+    }),
+    readTool("paper_reader_field_trends", "Read-only macro field trends query across OpenAlex and/or Europe PMC with local library coverage counts.", "Query research field trends", {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Research field or topic query." },
+        windowYears: { type: "integer", enum: [3, 5, 8], description: "Trend window in years: 3, 5, or 8 (default 5)." },
+        metric: { type: "string", enum: ["volume", "growth", "citations"], description: "Primary trend metric (default volume)." },
+        sources: { type: "array", items: { type: "string", enum: ["openalex", "europepmc"] }, description: 'Upstream trend sources (default ["openalex"]).' }
       },
-      output: OUTPUT_SPEC,
-      isConcurrencySafe: () => true,
-      presentCall: () => ({ card: "generic", kind: "read", title: "Read Paper Reader citation stances" }),
-      async execute(rawArgs) {
-        const obj = expectObject(rawArgs, ["docId", "doi", "arxivId", "query", "direction"]);
-        const docId = readString(obj, "docId", 512, false), doi = readString(obj, "doi", 250, false), arxivId = readString(obj, "arxivId", 64, false), query = readString(obj, "query", 500, false);
-        const direction = readEnumValue(obj, "direction", ["cited_by", "references"], "cited_by");
-        if (!docId && !doi && !arxivId && !query) throw new ToolArgsError('provide at least one of "docId", "doi", "arxivId", or "query"');
-        return toJsonObject(await readCachedCitations({ store, library }, { docId, doi, arxivId, query, direction }));
+      required: ["query"],
+      additionalProperties: false
+    }, async (rawArgs, exec) => {
+      const obj = expectObject(rawArgs, ["query", "windowYears", "metric", "sources"]);
+      const query = readString(obj, "query", 250, true), windowYears = readEnumValue(obj, "windowYears", [3, 5, 8], 5);
+      const metric = readEnumValue(obj, "metric", ["volume", "growth", "citations"], "volume"), source2 = readTrendSources(own(obj, "sources"));
+      if (!/[\p{L}\p{N}]/u.test(query)) throw new ToolArgsError('"query" must contain searchable terms');
+      const docs = await listDocsWithMeta(root, library);
+      try {
+        return toJsonObject(await queryFieldTrends({ query, source: source2, windowYears, metric }, { withDb: trendWithDb, settings: readSettingsReadOnly(root), fetchFn, docs, signal: exec?.signal, readOnly: true }));
+      } catch (err) {
+        if (err instanceof ServiceError && err.status === 400) throw new ToolArgsError(err.message);
+        throw err;
       }
-    },
-    {
-      name: "paper_reader_field_trends",
-      description: "Read-only macro field trends query across OpenAlex and/or Europe PMC with local library coverage counts.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Research field or topic query." },
-          windowYears: { type: "integer", enum: [3, 5, 8], description: "Trend window in years: 3, 5, or 8 (default 5)." },
-          metric: { type: "string", enum: ["volume", "growth", "citations"], description: "Primary trend metric (default volume)." },
-          sources: { type: "array", items: { type: "string", enum: ["openalex", "europepmc"] }, description: 'Upstream trend sources (default ["openalex"]).' }
-        },
-        required: ["query"],
-        additionalProperties: false
-      },
-      output: OUTPUT_SPEC,
-      isConcurrencySafe: () => true,
-      presentCall: () => ({ card: "generic", kind: "read", title: "Query research field trends" }),
-      async execute(rawArgs, exec) {
-        const obj = expectObject(rawArgs, ["query", "windowYears", "metric", "sources"]);
-        const query = readString(obj, "query", 250, true), windowYears = readEnumValue(obj, "windowYears", [3, 5, 8], 5);
-        const metric = readEnumValue(obj, "metric", ["volume", "growth", "citations"], "volume"), source2 = readTrendSources(obj.sources);
-        const docs = await listDocsWithMeta(store, library);
-        return toJsonObject(await queryFieldTrends({ query, source: source2, windowYears, metric }, { withDb: readOnlyWithDb, settings: store.settings(), fetchFn, docs, signal: exec?.signal, readOnly: true }));
-      }
-    }
+    })
   ];
 }
 function registerPaperReaderTools(ctx, deps) {
@@ -6228,7 +6243,7 @@ async function checkWatchlist(input, deps, signal) {
 // src/server/notebook.ts
 import { createHash as createHash8 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 
 // src/shared/annotations.ts
 var ANNOTATION_COLOR_META = {
@@ -6370,7 +6385,7 @@ import {
   unlinkSync as unlinkSync2,
   writeFileSync
 } from "node:fs";
-import path8 from "node:path";
+import path9 from "node:path";
 
 // src/server/vault-markdown.ts
 import { createHash as createHash6 } from "node:crypto";
@@ -6378,14 +6393,14 @@ import { createHash as createHash6 } from "node:crypto";
 // src/server/vault-sources.ts
 import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
-import path7 from "node:path";
+import path8 from "node:path";
 var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function publicSource(value) {
   const url = value && URL.parse(value);
   if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
-  const temp = path7.join(path7.dirname(file), ".source-" + randomUUID6() + ".tmp");
+  const temp = path8.join(path8.dirname(file), ".source-" + randomUUID6() + ".tmp");
   copyFileSync(original, temp, constants.COPYFILE_EXCL);
   try {
     try {
@@ -6433,7 +6448,7 @@ var VaultSources = class {
         const id = createHash5("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
         const title = section?.title ?? doc.title.replace(/\.pdf$/i, "");
         const name2 = filenameStem(title, 64) + " - " + id + (doc.kind === "pdf" ? ".pdf" : ".md");
-        const file = path7.join(vaultFolder(vault, "Sources", true), name2);
+        const file = path8.join(vaultFolder(vault, "Sources", true), name2);
         const existing = lstatSync2(file, { throwIfNoEntry: false });
         if (existing && !existing.isFile()) throw new ServiceError(409, "The library copy in the vault must be a regular file.");
         if (!existing) {
@@ -6444,7 +6459,7 @@ var VaultSources = class {
             writeMarkdown(file, void 0, ["# " + markdownHeading(title), ...original ? ["[Original source](<" + original.href + ">)"] : [], ...paragraphs].join("\n\n") + "\n");
           }
         }
-        copy = path7.relative(folder, file).split(path7.sep).map(encodeURIComponent).join("/");
+        copy = path8.relative(folder, file).split(path8.sep).map(encodeURIComponent).join("/");
         if (doc.kind === "pdf") copy += "#page=" + page;
         else if (/^p-[1-9]\d*$/.test(anchor) && material?.paragraphs?.[Number(anchor.slice(2)) - 1]) copy += "#^" + anchor;
       }
@@ -6564,10 +6579,10 @@ function vaultFolder(vaultPath, bookSlug2, create = false) {
     segments.push(name2 === bookSlug2 ? name2 : name2 + " - " + hash2(bookSlug2).slice(0, 12));
   }
   for (const part of segments) {
-    folder = path8.join(folder, part);
+    folder = path9.join(folder, part);
     if (create) mkdirSync2(folder, { recursive: true, mode: 448 });
     const info = lstatSync3(folder, { throwIfNoEntry: false });
-    if (info && (!info.isDirectory() || path8.relative(folder, realpathSync(folder)) !== "")) {
+    if (info && (!info.isDirectory() || path9.relative(folder, realpathSync(folder)) !== "")) {
       throw new ServiceError(409, "The notebook folder must be inside the selected vault.");
     }
   }
@@ -6666,7 +6681,7 @@ function fileContent(file) {
 }
 function writeMarkdown(file, observed, next) {
   if (observed === next) return;
-  const temp = path8.join(path8.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
+  const temp = path9.join(path9.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
   const fd = openSync2(temp, "wx", 384);
   try {
     try {
@@ -6704,8 +6719,8 @@ function exportNotebook(store, input, sources, notebook) {
     try {
       const folder = vaultFolder(settings.vaultPath, void 0, true);
       const name2 = filename ?? filenameFor(title, docId);
-      if (name2 !== path8.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
-      const file = path8.join(folder, name2);
+      if (name2 !== path9.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
+      const file = path9.join(folder, name2);
       const observed = fileContent(file);
       const doc = sources.doc ?? { id: docId, kind: "pdf", title, ...supplied ? { url: supplied } : {} };
       const liveMarks = annotations.filter(isLiveAnnotation);
@@ -6872,16 +6887,16 @@ function load(records, local, sources, stored = true) {
     let name2;
     if (binding) {
       name2 = binding.filename;
-      if (name2 !== path9.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
+      if (name2 !== path10.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
     } else {
       const stem = local.chapter ? filenameStem(local.chapter.title) : filenameFor(local.title.replace(/\.pdf$/i, ""), local.docId).slice(0, -3) + " - Notebook";
       const reserved = local.chapter && records.chapterFilenames(vault, local.docId);
       name2 = stem + ".md";
-      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path9.join(folder, name2), { throwIfNoEntry: false }); n++) {
+      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path10.join(folder, name2), { throwIfNoEntry: false }); n++) {
         name2 = stem + " (" + n + ").md";
       }
     }
-    book.file = path9.join(folder, name2);
+    book.file = path10.join(folder, name2);
     book.observed = binding ? fileContent(book.file) : void 0;
     book.baseline = binding?.baseline;
     if (binding && book.observed === void 0) {
@@ -6931,14 +6946,14 @@ function persist(records, book) {
   if (book.file) {
     const file = book.file;
     const projected = vaultAccess(() => {
-      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path9.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
+      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path10.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
       const zotero = records.zoteroSource(doc.docId);
       if (!book.sources.doc?.url) book.sources.useSavedSources([zotero?.original ?? "", ...records.entries("note", doc.docId, doc.chapter).map((note) => note.sourceUrl)]);
-      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path9.dirname(file), zotero?.link)));
+      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path10.dirname(file), zotero?.link)));
       writeMarkdown(file, book.observed, portable);
       return portable;
     });
-    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path9.basename(book.file));
+    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path10.basename(book.file));
     book.observed = projected;
   }
   if (book.local.markdown !== book.markdown || !book.stored) records.store(doc);
@@ -7106,7 +7121,7 @@ var PaperNotebooks = class {
 import { spawn } from "node:child_process";
 import { statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
-import path10 from "node:path";
+import path11 from "node:path";
 var isFile = (file) => {
   try {
     return Boolean(statSync3(file, { throwIfNoEntry: false })?.isFile());
@@ -7121,7 +7136,7 @@ var isDir = (file) => {
     return false;
   }
 };
-var onPath = (name2) => (process.env.PATH ?? "").split(path10.delimiter).filter((dir) => path10.isAbsolute(dir)).map((dir) => path10.join(dir, name2)).find(isFile);
+var onPath = (name2) => (process.env.PATH ?? "").split(path11.delimiter).filter((dir) => path11.isAbsolute(dir)).map((dir) => path11.join(dir, name2)).find(isFile);
 function launch(command, args, errorMessage) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, detached: true, stdio: "ignore", windowsHide: false });
@@ -7134,13 +7149,13 @@ function launch(command, args, errorMessage) {
 }
 function installedObsidian() {
   if (process.platform === "win32") {
-    const directories = [process.env.LOCALAPPDATA && path10.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
-    const executable = directories.filter((dir) => Boolean(dir && path10.isAbsolute(dir))).map((dir) => path10.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
+    const directories = [process.env.LOCALAPPDATA && path11.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
+    const executable = directories.filter((dir) => Boolean(dir && path11.isAbsolute(dir))).map((dir) => path11.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
     if (!executable) return;
     return (uri) => launch(executable, [uri], "Windows could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "darwin") {
-    if (!["/Applications/Obsidian.app", path10.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
+    if (!["/Applications/Obsidian.app", path11.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
     return (uri) => launch("/usr/bin/open", ["-a", "Obsidian", uri], "macOS could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "linux") {
@@ -7148,7 +7163,7 @@ function installedObsidian() {
     const present = Boolean(onPath("obsidian") || [
       "/opt/Obsidian/obsidian",
       "/var/lib/flatpak/exports/bin/md.obsidian.Obsidian",
-      path10.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
+      path11.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
     ].some(isFile));
     if (!opener || !present) return;
     return (uri) => launch(opener, [uri], "Could not start Obsidian via xdg-open. Open the notebook link with the Obsidian app.");
@@ -8168,8 +8183,8 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
 var name = "paper-reader";
 var inject = ["connection"];
 var builtWeb = fileURLToPath5(new URL("../web/", import.meta.url));
-var publicDir = existsSync4(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
-var pdfDir = path11.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
+var publicDir = existsSync5(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
+var pdfDir = path12.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
 var mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -8225,7 +8240,7 @@ async function boundedBody(request, limit) {
   return Buffer.concat(chunks, bytes);
 }
 function apply(ctx) {
-  const root = process.env.PAPER_READER_HOME || path11.join(process.env.DSH_HOME || path11.join(os.homedir(), ".dsh"), "paper-reader");
+  const root = process.env.PAPER_READER_HOME || path12.join(process.env.DSH_HOME || path12.join(os.homedir(), ".dsh"), "paper-reader");
   const store = new ReaderStore(root);
   const library = new Library(root, publicResource, (id) => store.deleteDocument(id));
   const models = {};
@@ -8264,7 +8279,7 @@ function apply(ctx) {
     };
   });
   const service = createServices({ root, ctx: models, library, store, readResource: publicResource });
-  registerPaperReaderTools(ctx, { store, library });
+  registerPaperReaderTools(ctx, { root, library });
   const route = (suffix, methods, fetch, requestBody = "buffered") => ctx.connection.fetch.register({
     path: "/api/paper-reader/" + suffix,
     methods,
@@ -8280,18 +8295,18 @@ function apply(ctx) {
     }
   });
   const asset = (url, file) => route(url, ["GET", "HEAD"], async (req) => new Response(req.method === "HEAD" ? null : new Uint8Array(await readFile3(file)), {
-    headers: { "content-type": mimeTypes[path11.extname(file)] ?? "application/octet-stream", "cache-control": url.startsWith("vendor/") ? "private, max-age=86400" : "private, no-cache", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" }
+    headers: { "content-type": mimeTypes[path12.extname(file)] ?? "application/octet-stream", "cache-control": url.startsWith("vendor/") ? "private, max-age=86400" : "private, no-cache", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" }
   }));
   function assets(url, dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const file = path11.join(dir, entry.name);
+      const file = path12.join(dir, entry.name);
       if (entry.isDirectory()) assets(url + entry.name + "/", file);
-      else if (entry.isFile() && Object.hasOwn(mimeTypes, path11.extname(entry.name))) asset(url + entry.name, file);
+      else if (entry.isFile() && Object.hasOwn(mimeTypes, path12.extname(entry.name))) asset(url + entry.name, file);
     }
   }
   assets("app/", publicDir);
-  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path11.join(pdfDir, "build", file));
-  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path11.join(pdfDir, dir));
+  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path12.join(pdfDir, "build", file));
+  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path12.join(pdfDir, dir));
   route("pdf", ["GET"], async (req) => new Response(new Uint8Array(await library.bytes(new URL(req.url).searchParams.get("id"))), { headers: { "content-type": "application/pdf", "cache-control": "private, no-cache" } }));
   route("article-image", ["GET"], async (req) => {
     const params = new URL(req.url).searchParams;
