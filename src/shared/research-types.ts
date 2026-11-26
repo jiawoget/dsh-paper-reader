@@ -1,4 +1,4 @@
-import type { GraphPaper } from './types.js';
+import type { GraphPaper, QuestionModel } from './types.js';
 
 export type TrendMetric = 'volume' | 'growth' | 'citations';
 export type TrendSort = 'fastest_growing' | 'hottest' | 'blind_spots_first';
@@ -71,4 +71,22 @@ export function sortTrendTopics(rows: ReadonlyArray<TrendTopicRow>, sort: TrendS
 
 export function filterTrendTopics(rows: ReadonlyArray<TrendTopicRow>, blindSpotsOnly: boolean): TrendTopicRow[] {
   return blindSpotsOnly ? rows.filter(r => r.localCount === 0) : [...rows];
+}
+
+export interface PaperCard {
+  docId: string; sourceKind: 'pdf' | 'abstract'; problem: string; method: string;
+  findings: string; limitations: string; futureWork: string; sourceHash: string; updatedAt: number;
+}
+export type LibraryChatPreset = 'compare_methods' | 'innovation_gaps' | 'limitations_open_problems' | 'cross_paper_disagreements';
+export interface LibraryCitationRef {
+  key: string; docId: string; authorLabel: string; year: string; page?: number; quote: string; title: string; kind: 'pdf' | 'web' | 'abstract';
+}
+export interface LibraryChatMessage { role: 'user' | 'assistant'; content: string }
+export interface PaperCardsInput { docIds: string[]; refresh?: boolean; questionModel?: QuestionModel | null }
+export interface PaperCardsResult { cards: PaperCard[]; truncatedCount: number; generatedCount: number }
+export interface LibraryChatInput {
+  docIds: string[]; question?: string; preset?: LibraryChatPreset; history?: LibraryChatMessage[]; questionModel?: QuestionModel | null;
+}
+export interface LibraryChatResult {
+  answer: string; citations: LibraryCitationRef[]; truncatedCount: number; usedDocIds: string[]; usedAbstractOnlyIds: string[];
 }

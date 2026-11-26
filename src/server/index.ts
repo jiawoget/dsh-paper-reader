@@ -159,7 +159,8 @@ export function apply(ctx:ReaderHost):void {
         return json(await service(body.op,input));
       }
       case 'ai':
-      case 'chat.ask': {
+      case 'chat.ask':
+      case 'library.chat': {
         const op = body.op;
         if (req.headers.get('accept')?.includes('application/x-ndjson')) {
           const encoder = new TextEncoder();
