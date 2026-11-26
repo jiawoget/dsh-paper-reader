@@ -910,6 +910,9 @@ var Library = class {
     await writeOnce(path2.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
     return this.get(doc.id);
   }
+  hasSync(id) {
+    return id === sample.id || validDocId(id) && existsSync(path2.join(this.directory, id + ".json"));
+  }
   async get(id) {
     if (!validDocId(id)) fail("Invalid document ID.", 404);
     if (id === sample.id) return sample;
@@ -1736,6 +1739,149 @@ function deleteAnnotation(db, input) {
   return true;
 }
 
+// src/server/doc-meta.ts
+var docMetaSchema = `CREATE TABLE IF NOT EXISTS doc_meta(
+  docId TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'unread', starred INTEGER NOT NULL DEFAULT 0,
+  tags TEXT NOT NULL DEFAULT '[]', lastOpenedAt INTEGER, lastPage INTEGER, pageCount INTEGER, scrollFraction REAL
+) STRICT`;
+var isStatus = (value) => value === "unread" || value === "reading" || value === "done";
+function decodeMeta(row) {
+  let tags = [];
+  if (typeof row.tags === "string") {
+    try {
+      const parsed = JSON.parse(row.tags);
+      if (Array.isArray(parsed)) tags = parsed.filter((v) => typeof v === "string");
+    } catch {
+    }
+  }
+  return {
+    status: isStatus(row.status) ? row.status : "unread",
+    starred: row.starred === 1,
+    tags,
+    ...typeof row.lastOpenedAt === "number" && { lastOpenedAt: row.lastOpenedAt },
+    ...typeof row.lastPage === "number" && { lastPage: row.lastPage },
+    ...typeof row.pageCount === "number" && { pageCount: row.pageCount },
+    ...typeof row.scrollFraction === "number" && { scrollFraction: row.scrollFraction }
+  };
+}
+function listDocMeta(db, docId) {
+  const rows = docId !== void 0 ? db.prepare("SELECT * FROM doc_meta WHERE docId=?").all(docId) : db.prepare("SELECT * FROM doc_meta").all();
+  const out = /* @__PURE__ */ new Map();
+  for (const row of rows) if (typeof row.docId === "string") out.set(row.docId, decodeMeta(row));
+  return out;
+}
+function upsertMeta(db, docId, meta) {
+  db.prepare(`INSERT INTO doc_meta(docId,status,starred,tags,lastOpenedAt,lastPage,pageCount,scrollFraction) VALUES(?,?,?,?,?,?,?,?)
+    ON CONFLICT(docId) DO UPDATE SET status=excluded.status,starred=excluded.starred,tags=excluded.tags,
+    lastOpenedAt=excluded.lastOpenedAt,lastPage=excluded.lastPage,pageCount=excluded.pageCount,scrollFraction=excluded.scrollFraction`).run(
+    docId,
+    meta.status,
+    meta.starred ? 1 : 0,
+    JSON.stringify(meta.tags),
+    meta.lastOpenedAt ?? null,
+    meta.lastPage ?? null,
+    meta.pageCount ?? null,
+    meta.scrollFraction ?? null
+  );
+  return meta;
+}
+function saveDocProgress(db, input) {
+  const docId = single(input.docId, "document ID", 512, true);
+  const lastPage = input.lastPage === void 0 ? void 0 : pageNumber(input.lastPage);
+  const pageCount = input.pageCount === void 0 ? void 0 : pageNumber(input.pageCount);
+  let scrollFraction;
+  if (input.scrollFraction !== void 0) {
+    if (typeof input.scrollFraction !== "number" || !Number.isFinite(input.scrollFraction)) throw new ServiceError(400, "Scroll fraction must be a finite number.");
+    scrollFraction = Math.max(0, Math.min(1, input.scrollFraction));
+  }
+  const prev = listDocMeta(db, docId).get(docId) ?? { status: "unread", starred: false, tags: [] };
+  const nextCount = pageCount ?? prev.pageCount;
+  let nextPage = lastPage ?? prev.lastPage;
+  if (nextPage !== void 0 && nextCount !== void 0) nextPage = Math.min(nextPage, nextCount);
+  const nextScroll = scrollFraction ?? prev.scrollFraction;
+  const progressed = nextPage !== void 0 && nextPage > 1 || nextScroll !== void 0 && nextScroll > 0;
+  return upsertMeta(db, docId, {
+    status: prev.status === "unread" && progressed ? "reading" : prev.status,
+    starred: prev.starred,
+    tags: prev.tags,
+    lastOpenedAt: Date.now(),
+    ...nextPage !== void 0 && { lastPage: nextPage },
+    ...nextCount !== void 0 && { pageCount: nextCount },
+    ...nextScroll !== void 0 && { scrollFraction: nextScroll }
+  });
+}
+function sanitizeTags(raw) {
+  if (!Array.isArray(raw) || raw.length > 50 || !raw.every((item) => typeof item === "string")) throw new ServiceError(400, "Tags must be an array of strings.");
+  const seen = /* @__PURE__ */ new Set(), tags = [];
+  for (const item of raw) {
+    const clean2 = item.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+    const key2 = clean2.toLocaleLowerCase();
+    if (!clean2 || seen.has(key2)) continue;
+    seen.add(key2);
+    tags.push(clean2);
+    if (tags.length >= 20) break;
+  }
+  return tags;
+}
+function updateDocTriage(db, input) {
+  const docId = single(input.docId, "document ID", 512, true);
+  if (input.status !== void 0 && !isStatus(input.status)) throw new ServiceError(400, "Choose unread, reading, or done.");
+  if (input.starred !== void 0 && typeof input.starred !== "boolean") throw new ServiceError(400, "Starred must be a boolean.");
+  const prev = listDocMeta(db, docId).get(docId) ?? { status: "unread", starred: false, tags: [] };
+  return upsertMeta(db, docId, {
+    ...prev,
+    status: input.status ?? prev.status,
+    starred: input.starred ?? prev.starred,
+    tags: input.tags === void 0 ? prev.tags : sanitizeTags(input.tags)
+  });
+}
+function deleteDocMeta(db, docId) {
+  db.prepare("DELETE FROM doc_meta WHERE docId=?").run(docId);
+}
+function snippetFor(raw, needle) {
+  const clean2 = raw.replace(/\s+/g, " ").trim(), idx = clean2.toLocaleLowerCase().indexOf(needle);
+  if (idx < 0) return clean2.slice(0, 120);
+  const start = Math.max(0, idx - 40), end = Math.min(clean2.length, idx + needle.length + 72);
+  return (start > 0 ? "\u2026" : "") + clean2.slice(start, end).trim() + (end < clean2.length ? "\u2026" : "");
+}
+function matchFields(fields, needle) {
+  for (const field of fields) if (field && field.toLocaleLowerCase().includes(needle)) return snippetFor(field, needle);
+}
+function searchLibrary(db, query, docs) {
+  const needle = query.toLocaleLowerCase(), docMap = new Map(docs.map((doc) => [doc.id, doc])), metas = listDocMeta(db);
+  const docKind = (doc) => doc.book ? "book" : doc.kind;
+  const docHits = [], contentHits = [];
+  for (const doc of docs) {
+    const meta = metas.get(doc.id);
+    const snippet = matchFields([doc.title, doc.paperTitle, doc.authors, doc.venue, doc.year, ...meta?.tags ?? [], doc.doi, doc.url, doc.id], needle);
+    if (snippet) docHits.push({ docId: doc.id, docTitle: doc.title, docKind: docKind(doc), kind: "doc", snippet, page: meta?.lastPage ?? doc.defaultPage });
+  }
+  const unicodeCased = /[^\x00-\x7f]/.test(query) && query.toLocaleLowerCase() !== query.toLocaleUpperCase();
+  const pattern = "%" + query.replace(/[\\%_]/g, "\\$&") + "%";
+  const noteRows = unicodeCased ? db.prepare("SELECT id,docId,page,anchor,text,quote,label,updatedAt FROM entries WHERE kind='note' ORDER BY updatedAt DESC,rowid DESC").all() : db.prepare("SELECT id,docId,page,anchor,text,quote,label,updatedAt FROM entries WHERE kind='note' AND (text LIKE ? ESCAPE '\\' OR quote LIKE ? ESCAPE '\\' OR label LIKE ? ESCAPE '\\') ORDER BY updatedAt DESC,rowid DESC").all(pattern, pattern, pattern);
+  for (const row of noteRows) {
+    const doc = typeof row.docId === "string" ? docMap.get(row.docId) : void 0;
+    if (!doc) continue;
+    const text2 = String(row.text ?? ""), quote = String(row.quote ?? ""), anchor = String(row.anchor ?? "");
+    const snippet = matchFields([text2, quote, String(row.label ?? "")], needle);
+    if (snippet) contentHits.push({ docId: doc.id, docTitle: doc.title, docKind: docKind(doc), kind: "note", snippet, page: typeof row.page === "number" ? row.page : void 0, anchor: anchor || void 0, quote: quote || void 0, id: String(row.id), updatedAt: String(row.updatedAt ?? "") });
+  }
+  for (const row of db.prepare("SELECT id,docId,content,updatedAt FROM annotations WHERE content IS NOT NULL ORDER BY updatedAt DESC,rowid DESC").all()) {
+    const doc = typeof row.docId === "string" ? docMap.get(row.docId) : void 0;
+    if (!doc || typeof row.content !== "string") continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(row.content);
+    } catch {
+      continue;
+    }
+    const snippet = matchFields([parsed.text, parsed.quote, parsed.label], needle);
+    if (snippet) contentHits.push({ docId: doc.id, docTitle: doc.title, docKind: docKind(doc), kind: "mark", snippet, page: parsed.page, anchor: parsed.anchor || void 0, quote: parsed.quote || void 0, id: String(row.id), color: parsed.color, updatedAt: String(row.updatedAt ?? "") });
+  }
+  contentHits.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  return [...docHits, ...contentHits].slice(0, 60);
+}
+
 // src/shared/article-region.ts
 function readArticleLocation(location) {
   if (location.length > 128) return;
@@ -2183,8 +2329,8 @@ var ReaderStore = class {
       db = new DatabaseSync(file, { timeout: 5e3 });
       const version = db.prepare("PRAGMA user_version").get()?.user_version;
       const hasExtensions = version === 2 && db.prepare(
-        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources')"
-      ).get()?.n === 7;
+        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources','doc_meta')"
+      ).get()?.n === 8;
       if (version === 0 || version === 1 || version === 2 && !hasExtensions) {
         db.exec("BEGIN IMMEDIATE");
         if (version === 0) for (const sql of setupSql) db.exec(sql);
@@ -2195,6 +2341,7 @@ var ReaderStore = class {
         db.exec("CREATE TABLE IF NOT EXISTS zotero_authorizations(serverId TEXT PRIMARY KEY, apiKey TEXT NOT NULL) STRICT");
         db.exec("CREATE TABLE IF NOT EXISTS zotero_sources(library TEXT NOT NULL,itemKey TEXT NOT NULL,original TEXT NOT NULL,webUrl TEXT NOT NULL,PRIMARY KEY(library,itemKey)) STRICT");
         db.exec(annotationSchema);
+        db.exec(docMetaSchema);
         db.exec("CREATE TABLE IF NOT EXISTS book_positions(docId TEXT PRIMARY KEY, updated INTEGER NOT NULL, place TEXT NOT NULL) STRICT");
         db.exec("CREATE TABLE IF NOT EXISTS pdf_outlines(docId TEXT PRIMARY KEY, contents TEXT NOT NULL) STRICT");
         db.exec(`CREATE TABLE IF NOT EXISTS article_captures(
@@ -2281,6 +2428,18 @@ var ReaderStore = class {
   }
   deleteAnnotation(input) {
     return this.#transaction(true, (db) => deleteAnnotation(db, input));
+  }
+  listDocMeta(docId) {
+    return this.#transaction(false, (db) => listDocMeta(db, docId));
+  }
+  saveDocProgress(input) {
+    return this.#transaction(true, (db) => saveDocProgress(db, input));
+  }
+  updateDocTriage(input) {
+    return this.#transaction(true, (db) => updateDocTriage(db, input));
+  }
+  searchLibrary(query, docs) {
+    return this.#transaction(false, (db) => searchLibrary(db, query, docs));
   }
   settings() {
     return this.#transaction(false, settingsFor);
@@ -2378,15 +2537,9 @@ var ReaderStore = class {
     if (!docId || docId === "pagedattention") return;
     const prefix2 = docId + "";
     this.#transaction(true, (db) => {
-      db.prepare("DELETE FROM entries WHERE docId=?").run(docId);
-      db.prepare("DELETE FROM annotations WHERE docId=?").run(docId);
-      db.prepare("DELETE FROM chat_exchanges WHERE docId=?").run(docId);
-      db.prepare("DELETE FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
-      db.prepare("DELETE FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
-      db.prepare("DELETE FROM notebooks WHERE docId=? OR substr(docId,1,?)=?").run(docId, prefix2.length, prefix2);
-      db.prepare("DELETE FROM book_positions WHERE docId=?").run(docId);
-      db.prepare("DELETE FROM pdf_outlines WHERE docId=?").run(docId);
-      db.prepare("DELETE FROM article_captures WHERE docId=?").run(docId);
+      for (const table of ["entries", "annotations", "chat_exchanges", "book_positions", "pdf_outlines", "article_captures"]) db.prepare(`DELETE FROM ${table} WHERE docId=?`).run(docId);
+      for (const table of ["notebook_documents", "notebook_vaults", "notebooks"]) db.prepare(`DELETE FROM ${table} WHERE docId=? OR substr(docId,1,?)=?`).run(docId, prefix2.length, prefix2);
+      deleteDocMeta(db, docId);
       db.prepare("DELETE FROM citations WHERE identity=?").run("document/" + docId);
     });
   }
@@ -4540,12 +4693,32 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
   const discussions = new PaperDiscussions(database, model);
   const outlines = new PdfOutlines(documents, database, model);
   const zotero = () => new ZoteroLibrary(database.settings(), fetchImpl, database);
+  const withDoc = async (id, write) => {
+    await documents.get(id);
+    if (!documents.hasSync(id)) throw new ServiceError(404, "Document not found.");
+    return write();
+  };
   const handlers = {
-    "library.list": async () => ({ docs: await documents.list() }),
-    "library.get": async (input) => ({ doc: await documents.get(input.id) }),
+    "library.list": async () => {
+      const docs = await documents.list(), metas = database.listDocMeta();
+      return { docs: docs.map((doc) => {
+        const meta = metas.get(doc.id);
+        return meta ? { ...doc, meta } : doc;
+      }) };
+    },
+    "library.get": async (input) => {
+      const doc = await documents.get(input.id), meta = database.listDocMeta(doc.id).get(doc.id);
+      return { doc: meta ? { ...doc, meta } : doc };
+    },
     "library.rename": async (input) => ({ doc: await documents.rename(input.id, input.title) }),
     "library.updateMeta": async (input) => ({ doc: await documents.updateMeta(input) }),
     "library.delete": (input) => documents.delete(input.id),
+    "library.progress.save": (input) => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
+    "library.triage": (input) => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
+    "library.search": async (input) => {
+      const query = single(input.query, "search query", 256);
+      return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };
+    },
     "web.import": (input) => documents.importWebDocument(input),
     "web.open": (input) => openWebArticle(documents, input.url, readResource),
     "book.section": async (input) => ({ doc: await documents.bookSection(input.docId, input.page) }),
@@ -4560,10 +4733,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "outline.get": (input) => outlines.get(input),
     "outline.generate": (input) => outlines.generate(input),
     "book.progress.get": (input) => ({ place: database.bookPosition(input.docId) }),
-    "book.progress.save": async (input) => {
-      await documents.get(input.docId);
-      return { place: database.saveBookPosition(input.docId, input.place) };
-    },
+    "book.progress.save": (input) => withDoc(input.docId, () => ({ place: database.saveBookPosition(input.docId, input.place) })),
     state: async () => {
       const { settings, ...entries } = database.state();
       return { ...entries, settings: await model.publicSettings(settings) };

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import type { Page } from 'playwright-core';
 
 const ZH_ENGLISH_ALLOWLIST = new Set([
-  'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown',
+  'bibtex', 'ris', 'bib', 'doi', 'arxiv', 'obsidian', 'zotero', 'dsh', 'pdf', 'url', 'markdown', 'latex', 'selection',
   'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
   'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
   'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',

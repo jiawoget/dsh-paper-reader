@@ -175,7 +175,14 @@ test('a signed-in DSH tab receives user-requested lookups, and saving a quote ca
       else if (operation.op === 'ai' && providerDenied) { res.writeHead(403); res.end('{"error":"Model service denied access. Check the API key and its permissions."}'); }
       else if (operation.op === 'ai') res.end('{"text":"A sample definition."}');
       else if (operation.op === 'web.import') res.end(JSON.stringify({ doc: { id: 'web-53', ...operation.payload } }));
+      else if (operation.op === 'web.open') res.end(JSON.stringify({ doc: { id: 'pdf-99', kind: 'pdf', title: 'Direct.pdf' }, page: 1 }));
       else res.end('{}');
+      return;
+    }
+    if (req.url === '/paper.pdf') {
+      const pdfBytes = await readFile(path.join(root, 'public/assets/pagedattention.pdf'));
+      res.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': 'inline; filename="paper.pdf"' });
+      res.end(pdfBytes);
       return;
     }
     res.setHeader('content-type', 'text/html; charset=utf-8');
@@ -265,6 +272,27 @@ test('a signed-in DSH tab receives user-requested lookups, and saving a quote ca
     await dsh.reload();
     await clickCard(page, '[data-do="explain"]');
     await until(() => records.some(call => call.payload.mode === 'explain' && call.payload.text === phrase), 'Missing sentence explanation');
+    const readBadge = (p: Awaited<ReturnType<typeof openToolbar>>) => p.evaluate(async () => chrome.action.getBadgeText({ tabId: (await chrome.tabs.query({ active: true, currentWindow: true }))[0].id! }), null);
+    const pagesBefore = context.pages().length;
+    const silentPopup = await openToolbar(page, id);
+    await silentPopup.click('#save');
+    await until(() => silentPopup.evaluate(() => /Saved to library|已保存到文库/.test(document.querySelector('#message')!.textContent!), null), 'Silent save did not report success');
+    assert.equal(context.pages().length, pagesBefore);
+    assert.equal(await readBadge(silentPopup), '✓');
+    await silentPopup.detach();
+    const pdfTab = await context.newPage(), pdfUrl = 'http://reader-fixture.test:' + address.port + '/paper.pdf';
+    await pdfTab.goto(pdfUrl);
+    const pdfSavePopup = await openToolbar(pdfTab, id), pagesBeforePdfSave = context.pages().length;
+    await pdfSavePopup.click('#save');
+    await until(() => records.some(call => call.op === 'web.open' && call.payload.url === pdfUrl), 'Direct PDF silent save must invoke web.open');
+    await until(() => pdfSavePopup.evaluate(() => /Saved to library|已保存到文库/.test(document.querySelector('#message')!.textContent!), null), 'Direct PDF silent save status missing');
+    assert.equal(context.pages().length, pagesBeforePdfSave);
+    assert.equal(await readBadge(pdfSavePopup), '✓');
+    await pdfSavePopup.detach();
+    const pdfReadPopup = await openToolbar(pdfTab, id), pdfOpened = context.waitForEvent('page');
+    await pdfReadPopup.click('#read');
+    await (await pdfOpened).waitForURL(origin + '/api/paper-reader/app/index.html?doc=pdf-99&page=1');
+    await pdfReadPopup.detach();
   } finally { await context.close(); }
 });
 

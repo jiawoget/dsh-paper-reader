@@ -19,11 +19,21 @@ interface ShortcutActions {
   jumpBack: () => void;
   jumpForward: () => void;
   toggleBilingual: () => void;
-  toggleSidebar: (tab: 'contents' | 'notes') => void;
+  toggleSidebar: (tab: 'contents' | 'notes' | 'marks' | 'reference') => void;
   stepZoom: (delta: -1 | 1) => void;
 }
 
 export function installShortcuts(actions: ShortcutActions): { open: () => void } {
+  const hints: [string, string, string][] = [
+    ['library', 'Open library (L)', '打开资料库 (L)'],
+    ['pageCount', 'Go to page (G)', '跳转到页码 (G)'],
+    ['parallel', 'Bilingual (B)', '双语对照 (B)'],
+    ['contentsTab', 'Contents (C)', '目录 (C)'],
+    ['notesTab', 'Notes (N)', '笔记 (N)'],
+    ['annotationsTab', 'Marks (M)', '标记 (M)'],
+    ['refsTab', 'Reference (R)', '文献 (R)']
+  ];
+  for (const [id, en, zh] of hints) byId(id).title = label(en, zh);
   const dialog = byId<HTMLDialogElement>('shortcutsDialog');
   let returnFocus: HTMLElement | undefined;
   byId('closeShortcuts').addEventListener('click', () => dialog.close());
@@ -39,16 +49,21 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
     const groups: [string, [string[], string][]][] = [
       [label('Reading', '阅读'), [
         [['←', '→'], label('Previous or next page / book section', '上一页或下一页 / 书籍上一节或下一节')],
+        [['g'], label('Go to page', '跳转到页码')],
         [['Alt+←', 'Alt+→'], label('Jump back or forward in reading history', '在阅读跳转历史中后退或前进')],
         [['Ctrl/Cmd+F'], label('Find in document', '文档内搜索')],
         [['b'], label('Toggle original and bilingual view', '切换原文与双语对照')],
+        [['s'], label('Ask with a screenshot', '截图问 AI')],
         [['+', '=', '-'], label('Zoom in or zoom out', '放大或缩小页面')],
         [['?'], label('Open keyboard shortcuts', '打开快捷键帮助')],
         [['Esc'], label('Cancel screenshot, close menu, card, or dialog', '取消截图，关闭菜单、卡片或弹窗')]
       ]],
       [label('Panels', '侧边栏与弹窗'), [
+        [['l'], label('Open library', '打开资料库')],
         [['n'], label('Toggle Notes sidebar', '打开或收起笔记栏')],
         [['c'], label('Toggle Contents sidebar', '打开或收起目录栏')],
+        [['m'], label('Toggle Marks sidebar', '打开或收起标记栏')],
+        [['r'], label('Toggle Reference sidebar', '打开或收起文献栏')],
         [['←', '→', 'Home', 'End'], label('Switch tabs in sidebar, Library, Connections, or Vocabulary and history', '在侧栏、资料库、连接设置或生词与历史中切换标签页')]
       ]],
       [label('Notes editor', '笔记编辑器'), [
@@ -115,9 +130,23 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
       if (actions.canPrevPage()) { e.preventDefault(); byId('prev').click(); }
       else if (actions.canPrevSection()) { e.preventDefault(); byId('previousSection').click(); }
     }
-    if (e.key === 'b') { e.preventDefault(); actions.toggleBilingual(); }
-    if (e.key === 'n') { e.preventDefault(); actions.toggleSidebar('notes'); }
-    if (e.key === 'c') { e.preventDefault(); actions.toggleSidebar('contents'); }
+    const key = e.key.toLowerCase();
+    if (key === 'b') { e.preventDefault(); actions.toggleBilingual(); }
+    if (key === 'n') { e.preventDefault(); actions.toggleSidebar('notes'); }
+    if (key === 'c') { e.preventDefault(); actions.toggleSidebar('contents'); }
+    if (key === 'm') { e.preventDefault(); actions.toggleSidebar('marks'); }
+    if (key === 'r') { e.preventDefault(); actions.toggleSidebar('reference'); }
+    if (key === 'l') { e.preventDefault(); byId('library').click(); }
+    if (key === 'g') {
+      const pageBtn = byId<HTMLButtonElement>('pageCount');
+      if (!pageBtn.disabled && !pageBtn.closest('[hidden]')) {
+        e.preventDefault();
+        byId<HTMLFormElement>('pageJump').showPopover();
+        const input = byId<HTMLInputElement>('pageNumber');
+        input.focus(); input.select();
+      }
+    }
+    if (key === 's' && !byId('captureRegion').hidden) { e.preventDefault(); byId('captureRegion').click(); }
     if (e.key === '=' || e.key === '+' || e.key === '-') {
       e.preventDefault();
       actions.stepZoom(e.key === '-' ? -1 : 1);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright-core';
 import { until } from './extension-controls.js';
 import { assertDarkAndContrast } from './helpers/contrast.js';
@@ -205,6 +206,83 @@ try {
         } finally {
           await ctx.close();
         }
+      }
+
+      {
+        const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' });
+        const scope: ErrorScope = { allowZotero503: true };
+        try {
+          await authContext(ctx, host);
+          const longParagraphs = Array.from({ length: 24 }, (_, i) => `Section ${i + 1}: Detailed long-form benchmark analysis of kv-cache memory scheduling across multiple workloads.`);
+          const webId = (await rpc<{ doc: { id: string } }>(ctx.request, host.origin, 'web.import', { title: 'Zebra Long Web Article', url: 'https://example.org/zebra-article', paragraphs: longParagraphs })).body.doc.id;
+          const webUrl = host.origin + '/api/paper-reader/app/index.html?doc=' + webId + '&page=1&anchor=p-12';
+          assert.equal((await rpc(ctx.request, host.origin, 'note.save', { docId: webId, title: 'Zebra Long Web Article', page: 1, anchor: 'p-12', label: 'Paragraph 12', sourceUrl: webUrl, quote: 'Section 12:', text: 'Unique crosslib-note-sentinel for jump test' })).status, 200);
+          assert.equal((await rpc(ctx.request, host.origin, 'annotation.save', { id: randomUUID(), docId: webId, title: 'Zebra Long Web Article', page: 1, anchor: 'p-14', label: 'Paragraph 14', sourceUrl: webUrl, kind: 'highlight', color: 'green', quote: 'Section 14: Detailed', text: 'Unique crosslib-mark-sentinel' })).status, 200);
+
+          const page = await openReaderPage(ctx, host, '?doc=' + webId, { tag: 'W3-2', scope, pageErrors, consoleErrors });
+          await page.evaluate(() => { const s = document.getElementById('paperScroll')!; s.scrollTop = Math.round((s.scrollHeight - s.clientHeight) * 0.55); });
+          await page.waitForTimeout(450);
+          await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('#loading').waitFor({ state: 'hidden' });
+          await until(async () => (await page.evaluate(() => document.getElementById('paperScroll')!.scrollTop)) > 100, 'Web scroll progress did not restore');
+
+          await page.goto(host.origin + '/api/paper-reader/app/index.html?doc=pagedattention&page=3', { waitUntil: 'domcontentloaded' });
+          await page.locator('#loading').waitFor({ state: 'hidden' });
+          await page.evaluate(() => { const s = document.getElementById('paperScroll')!; s.scrollTop = Math.round((s.scrollHeight - s.clientHeight) * 0.5); });
+          await page.waitForTimeout(450);
+          await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('#loading').waitFor({ state: 'hidden' });
+          assert.equal(await page.locator('#pageCount').innerText(), '3 / 16');
+          await until(async () => (await page.evaluate(() => document.getElementById('paperScroll')!.scrollTop)) > 60, 'PDF scroll progress did not restore');
+
+          const titles = await page.evaluate(() => ['library', 'pageCount', 'parallel', 'contentsTab', 'notesTab', 'annotationsTab', 'refsTab', 'captureRegion', 'mobileRail', 'contentsToggle'].map(id => document.getElementById(id)!.title));
+          for (const [idx, hint] of ['(L)', '(G)', '(B)', '(C)', '(N)', '(M)', '(R)', '(S)', '(N)', '(C)'].entries()) assert.ok(titles[idx].includes(hint), `Missing ${hint} in ${titles[idx]}`);
+
+          await page.locator('#paperScroll').focus();
+          await page.keyboard.press('g'); await page.locator('#pageJump').waitFor({ state: 'visible' });
+          assert.equal(await page.evaluate(() => document.activeElement?.id), 'pageNumber');
+          await page.keyboard.press('Escape');
+          await page.keyboard.press('m'); assert.equal(await page.locator('#annotationsTab').getAttribute('aria-selected'), 'true');
+          await page.keyboard.press('r'); assert.equal(await page.locator('#refsTab').getAttribute('aria-selected'), 'true');
+          await page.keyboard.press('r'); assert.equal(await page.locator('#reader').getAttribute('data-notebook-open'), 'false');
+          await page.keyboard.press('s'); await page.locator('.pdf-capture-surface').waitFor({ state: 'visible' });
+          await page.keyboard.press('Escape'); await page.locator('.pdf-capture-surface').waitFor({ state: 'hidden' });
+          await page.keyboard.press('Shift+?'); await page.locator('#shortcutsDialog').waitFor({ state: 'visible' });
+          const scLayout = await page.evaluate(() => {
+            const dlg = document.getElementById('shortcutsDialog')!, body = document.getElementById('shortcutsBody')!;
+            return { cols: getComputedStyle(body).gridTemplateColumns.trim().split(/\s+/).length, fits: dlg.scrollHeight <= dlg.clientHeight + 2 };
+          });
+          assert.deepEqual(scLayout, { cols: 2, fits: true });
+          await page.keyboard.press('Escape');
+
+          await page.locator('#paperScroll').focus(); await page.keyboard.press('l');
+          const dlg = page.locator('#dialog'); await dlg.waitFor({ state: 'visible' });
+          assert.ok((await dlg.locator('.library-device-item').filter({ hasText: 'PagedAttention.pdf' }).innerText()).includes('p. 3 / 16'));
+          const webItem = dlg.locator('.library-device-item').filter({ hasText: 'Zebra Long Web Article' });
+          assert.match(await webItem.innerText(), /\d+%/);
+          await webItem.getByRole('button', { name: 'Star document', exact: true }).click();
+          await webItem.getByRole('button', { name: 'Remove star', exact: true }).waitFor();
+          await webItem.locator('.library-status-btn').click();
+          await webItem.locator('.library-status-btn[data-status="done"]').waitFor();
+          await webItem.getByRole('button', { name: 'Edit tags', exact: true }).click();
+          await dlg.locator('.library-rename input').fill('systems, ml'); await dlg.locator('.library-rename button[type="submit"]').click();
+          await webItem.locator('.library-tag').filter({ hasText: 'systems' }).waitFor();
+          await dlg.getByLabel('Filter by status').selectOption('starred'); assert.equal(await dlg.locator('.library-device-item').count(), 1);
+          await dlg.getByLabel('Filter by status').selectOption('all');
+          await dlg.getByLabel('Filter by type').selectOption('web'); assert.equal(await dlg.locator('.library-device-item').count(), 1);
+          await dlg.getByLabel('Filter by type').selectOption('all');
+          await dlg.getByLabel('Sort documents').selectOption('title');
+          assert.ok((await dlg.locator('.library-device-item').first().innerText()).includes('PagedAttention.pdf'));
+
+          await dlg.getByRole('searchbox').fill('crosslib-note-sentinel');
+          const noteHit = dlg.locator('.library-search-hit').filter({ hasText: 'crosslib-note-sentinel' });
+          await noteHit.waitFor({ state: 'visible' }); assert.equal(await noteHit.locator('.library-hit-kind').innerText(), 'Note');
+          await noteHit.click(); await dlg.waitFor({ state: 'hidden' });
+          await page.waitForURL(url => url.searchParams.get('doc') === webId);
+          assert.equal(await page.locator('#notesTab').getAttribute('aria-selected'), 'true');
+          await page.locator('#rail .cm-content').click(); await page.keyboard.type('glmr');
+          assert.equal(await dlg.isVisible(), false);
+          await page.locator('#closeRail').click();
+          console.log('PASS W3-2: Library triage, cross-library jump, PDF+Web progress restore, g/l/m/r/s shortcuts, tooltips & 2-col ? modal.');
+        } finally { await ctx.close(); }
       }
     } finally {
       await browser.close();

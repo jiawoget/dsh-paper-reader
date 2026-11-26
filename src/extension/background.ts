@@ -1,5 +1,25 @@
-import { errorText, extensionActions, getOrigin, readerAddress } from './protocol.js';
+import { errorText, extensionActions, getOrigin, isDirectPaperUrl, readerAddress } from './protocol.js';
 import type { Envelope, ExtensionAction, TabCommand, WorkerRequest } from './protocol.js';
+import type { OpenDocument } from '../shared/types.js';
+
+const badgeTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+function clearBadgeTimer(tabId: number): void {
+  const prior = badgeTimers.get(tabId);
+  if (prior !== undefined) { clearTimeout(prior); badgeTimers.delete(tabId); }
+}
+
+async function flashSavedBadge(tabId: number): Promise<void> {
+  clearBadgeTimer(tabId);
+  await chrome.action?.setBadgeBackgroundColor?.({ tabId, color: '#1f7a4c' }).catch(() => {});
+  await chrome.action?.setBadgeText?.({ tabId, text: '✓' }).catch(() => {});
+  await chrome.action?.setTitle?.({ tabId, title: bgLabel('Saved to Paper Reader library', '已保存到文库') }).catch(() => {});
+  badgeTimers.set(tabId, setTimeout(() => {
+    badgeTimers.delete(tabId);
+    void chrome.action?.setBadgeText?.({ tabId, text: '' }).catch(() => {});
+    void chrome.action?.setTitle?.({ tabId, title: 'DSH Paper Reader' }).catch(() => {});
+  }, 3000));
+}
 
 function bgLabel(english: string, chinese: string): string {
   const locale = (typeof navigator !== 'undefined' && navigator.language) || chrome.i18n?.getUILanguage?.() || '';
@@ -52,14 +72,28 @@ async function serviceAction(op: ExtensionAction, payload: unknown): Promise<unk
   return reply.data;
 }
 
-async function commandTab(tabId: number, command: TabCommand, frameId = 0): Promise<unknown> {
+async function commandTab(tabId: number, command: TabCommand, frameId = 0, tabUrl?: string): Promise<unknown> {
   const message = { channel: 'paper-reader-page', command };
   if (command === 'status') {
     try {
       const reply: Envelope<unknown> = await chrome.tabs.sendMessage(tabId, message, { frameId });
       if (reply?.ok) return reply.data;
-    } catch { /* A tab that has never been activated has no content script. */ }
+    } catch {}
     return { enabled: false };
+  }
+  if (command === 'capture' || command === 'save') {
+    const url = tabUrl ?? (await chrome.tabs.get?.(tabId).catch(() => undefined))?.url;
+    if (isDirectPaperUrl(url)) {
+      const opened = await serviceAction('web.open', { url }) as OpenDocument;
+      if (!opened?.doc?.id) throw new Error(bgLabel('Could not import this document.', '无法导入该文档。'));
+      if (command === 'capture') {
+        await chrome.tabs.create({ url: readerAddress(await getOrigin(), opened.doc.id, opened.anchor || '', opened.page ?? null) });
+        clearBadgeTimer(tabId);
+        await chrome.action?.setBadgeText?.({ tabId, text: '' }).catch(() => {});
+        await chrome.action?.setTitle?.({ tabId, title: 'DSH Paper Reader' }).catch(() => {});
+      } else await flashSavedBadge(tabId);
+      return { enabled: false, saved: true };
+    }
   }
   try {
     await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ['content.js'] });
@@ -68,8 +102,12 @@ async function commandTab(tabId: number, command: TabCommand, frameId = 0): Prom
   }
   const reply: Envelope<unknown> = await chrome.tabs.sendMessage(tabId, message, { frameId });
   if (!reply?.ok) throw new Error(reply?.error || bgLabel('The webpage did not respond. Refresh it and try again.', '当前网页没有响应，请刷新后重试。'));
-  await chrome.action.setBadgeText({ tabId, text: '' });
-  await chrome.action.setTitle({ tabId, title: 'DSH Paper Reader' });
+  if (command === 'save') await flashSavedBadge(tabId);
+  else {
+    clearBadgeTimer(tabId);
+    await chrome.action.setBadgeText({ tabId, text: '' });
+    await chrome.action.setTitle({ tabId, title: 'DSH Paper Reader' });
+  }
   return reply.data;
 }
 
@@ -78,7 +116,7 @@ async function handle(request: WorkerRequest, sender: chrome.runtime.MessageSend
   switch (request.type) {
     case 'tab':
       if (!sender.url?.startsWith(chrome.runtime.getURL('popup.html'))) throw new Error(bgLabel('Use the extension menu to act on the current tab.', '请通过扩展菜单操作当前标签页。'));
-      return commandTab(request.tabId, request.command);
+      return commandTab(request.tabId, request.command, 0, request.tabUrl);
     case 'action': return serviceAction(request.op, request.payload);
     case 'reader':
       if (!request.doc || (request.anchor && !/^p-[1-9]\d*$/.test(request.anchor)) ||
@@ -107,7 +145,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (tab?.id === undefined) return;
   const tabId = tab.id;
   const command = info.menuItemId === 'translate-selection' ? 'translate' : 'capture';
-  void commandTab(tabId, command, info.frameId ?? 0).catch(async error => {
+  void commandTab(tabId, command, info.frameId ?? 0, tab.url ?? info.pageUrl).catch(async error => {
+    clearBadgeTimer(tabId);
     await chrome.action.setBadgeText({ tabId, text: '!' });
     await chrome.action.setTitle({ tabId, title: errorText(error) });
   });

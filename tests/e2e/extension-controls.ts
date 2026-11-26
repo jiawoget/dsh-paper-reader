@@ -93,7 +93,7 @@ export async function openToolbar(source: Page, id: string) {
   }
   async function evaluate<T, P>(operation: (input: P) => T, input: P): Promise<T> {
     const expression = '(' + operation.toString() + ')(' + JSON.stringify(input) + ')';
-    const result = await send<{ result: { value: T }; exceptionDetails?: unknown }>('Runtime.evaluate', { expression, returnByValue: true });
+    const result = await send<{ result: { value: T }; exceptionDetails?: unknown }>('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     assert.ok(!result.exceptionDetails, 'The extension popup could not be inspected');
     return result.result.value;
   }

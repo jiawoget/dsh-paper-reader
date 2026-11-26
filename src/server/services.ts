@@ -7,7 +7,7 @@ import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
 import { hostAttachments } from './region-image.js';
-import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, type Input, type ServiceResults } from './service-types.js';
+import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, type Input, type ServiceResults } from './service-types.js';
 import { openWebArticle } from './web-article.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
@@ -32,12 +32,29 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
   const discussions = new PaperDiscussions(database, model);
   const outlines = new PdfOutlines(documents, database, model);
   const zotero = () => new ZoteroLibrary(database.settings(), fetchImpl, database);
+  const withDoc = async <T>(id: unknown, write: () => T): Promise<T> => {
+    await documents.get(id);
+    if (!documents.hasSync(id)) throw new ServiceError(404, 'Document not found.');
+    return write();
+  };
   const handlers = {
-    'library.list': async () => ({ docs: await documents.list() }),
-    'library.get': async input => ({ doc: await documents.get(input.id) }),
+    'library.list': async () => {
+      const docs = await documents.list(), metas = database.listDocMeta();
+      return { docs: docs.map(doc => { const meta = metas.get(doc.id); return meta ? { ...doc, meta } : doc; }) };
+    },
+    'library.get': async input => {
+      const doc = await documents.get(input.id), meta = database.listDocMeta(doc.id).get(doc.id);
+      return { doc: meta ? { ...doc, meta } : doc };
+    },
     'library.rename': async input => ({ doc: await documents.rename(input.id, input.title) }),
     'library.updateMeta': async input => ({ doc: await documents.updateMeta(input) }),
     'library.delete': input => documents.delete(input.id),
+    'library.progress.save': input => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
+    'library.triage': input => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
+    'library.search': async input => {
+      const query = single(input.query, 'search query', 256);
+      return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };
+    },
     'web.import': input => documents.importWebDocument(input),
     'web.open': input => openWebArticle(documents, input.url, readResource),
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
@@ -52,10 +69,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'outline.get': input => outlines.get(input),
     'outline.generate': input => outlines.generate(input),
     'book.progress.get': input => ({place:database.bookPosition(input.docId)}),
-    'book.progress.save': async input => {
-      await documents.get(input.docId);
-      return { place: database.saveBookPosition(input.docId, input.place) };
-    },
+    'book.progress.save': input => withDoc(input.docId, () => ({ place: database.saveBookPosition(input.docId, input.place) })),
     state: async () => {
       const { settings, ...entries } = database.state();
       return { ...entries, settings: await model.publicSettings(settings) };

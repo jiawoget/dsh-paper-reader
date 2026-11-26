@@ -37,9 +37,17 @@ export function readerAddress(origin: string, doc: string, anchor: string, page:
 
 export const extensionActions = ['ai', 'ai.models', 'ai.selectModel', 'history.add', 'web.import', 'web.open', 'vocab.save', 'note.save'] as const;
 export type ExtensionAction = typeof extensionActions[number];
-export type TabCommand = 'status' | 'enable' | 'disable' | 'translate' | 'capture';
+export type TabCommand = 'status' | 'enable' | 'disable' | 'translate' | 'capture' | 'save';
+const directArxivPath = /^\/(?:abs|pdf)\/(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?\/?$/i;
+export function isDirectPaperUrl(raw: unknown): boolean {
+  if (typeof raw !== 'string') return false;
+  let url: URL;
+  try { url = new URL(raw); } catch { return false; }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return false;
+  return /\.pdf$/i.test(url.pathname) || (/(?:^|\.)arxiv\.org$/i.test(url.hostname) && directArxivPath.test(url.pathname));
+}
 type ActionRequest = { [K in ExtensionAction]: { type: 'action'; op: K; payload: Operations[K][0] } }[ExtensionAction];
-export type WorkerRequest = ActionRequest | { type: 'tab'; tabId: number; command: TabCommand }
+export type WorkerRequest = ActionRequest | { type: 'tab'; tabId: number; command: TabCommand; tabUrl?: string }
   | { type: 'reader'; doc: string; anchor: string; page?: number | null };
 export type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
 

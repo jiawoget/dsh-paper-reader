@@ -194,10 +194,11 @@ export class ReadingDesk {
   private updateSidebarButtons(): void {
     const notes = this.notebookOpen && !this.contents, contents = this.notebookOpen && this.contents;
     const toggle = byId('mobileRail');
-    toggle.ariaLabel = toggle.title = notes ? label('Hide notes', '收起笔记') : label('Show notes', '打开笔记');
+    toggle.ariaLabel = notes ? label('Hide notes', '收起笔记') : label('Show notes', '打开笔记');
+    toggle.title = toggle.ariaLabel + ' (N)';
     toggle.setAttribute('aria-expanded', String(notes));
     const nav = byId('contentsToggle');
-    nav.title = contents ? label('Hide contents', '收起目录') : label('Show contents', '打开目录');
+    nav.title = (contents ? label('Hide contents', '收起目录') : label('Show contents', '打开目录')) + ' (C)';
     nav.setAttribute('aria-expanded', String(contents));
   }
   private bindPosition(select: HTMLSelectElement, name: string, signal?: AbortSignal): void {

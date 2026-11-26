@@ -3,11 +3,12 @@ import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { annotationSchema, listAnnotations, saveAnnotation, deleteAnnotation } from './annotations.js';
+import { deleteDocMeta, docMetaSchema, listDocMeta, saveDocProgress, searchLibrary, updateDocTriage } from './doc-meta.js';
 import { readArticleLocation, readArticleRegion } from '../shared/article-region.js';
 import { bookPlace, type BookPlace } from '../shared/book-place.js';
 import type { PdfOutlineEntry } from '../shared/pdf-outline.js';
 import type { PaperAnnotation } from '../shared/annotations.js';
-import type { ChatExchange } from '../shared/types.js';
+import type { ChatExchange, DocumentInfo } from '../shared/types.js';
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
 import { readRegionImage } from './region-image.js';
 import {
@@ -282,8 +283,8 @@ export class ReaderStore {
       const version = db.prepare('PRAGMA user_version').get()?.user_version;
       // The added tables are independent of the v2 schema. Older open readers can keep using their notes and history.
       const hasExtensions = version === 2 && db.prepare(
-        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources')"
-      ).get()?.n === 7;
+        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources','doc_meta')"
+      ).get()?.n === 8;
       if (version === 0 || version === 1 || version === 2 && !hasExtensions) {
         db.exec('BEGIN IMMEDIATE');
         if (version === 0) for (const sql of setupSql) db.exec(sql);
@@ -294,6 +295,7 @@ export class ReaderStore {
         db.exec('CREATE TABLE IF NOT EXISTS zotero_authorizations(serverId TEXT PRIMARY KEY, apiKey TEXT NOT NULL) STRICT');
         db.exec('CREATE TABLE IF NOT EXISTS zotero_sources(library TEXT NOT NULL,itemKey TEXT NOT NULL,original TEXT NOT NULL,webUrl TEXT NOT NULL,PRIMARY KEY(library,itemKey)) STRICT');
         db.exec(annotationSchema);
+        db.exec(docMetaSchema);
         db.exec('CREATE TABLE IF NOT EXISTS book_positions(docId TEXT PRIMARY KEY, updated INTEGER NOT NULL, place TEXT NOT NULL) STRICT');
         db.exec('CREATE TABLE IF NOT EXISTS pdf_outlines(docId TEXT PRIMARY KEY, contents TEXT NOT NULL) STRICT');
         db.exec(`CREATE TABLE IF NOT EXISTS article_captures(
@@ -373,6 +375,10 @@ export class ReaderStore {
   listAnnotations(input: Input) { return this.#transaction(false, db => listAnnotations(db, input)); }
   saveAnnotation(input: Input) { return this.#transaction(true, db => saveAnnotation(db, input)); }
   deleteAnnotation(input: Input) { return this.#transaction(true, db => deleteAnnotation(db, input)); }
+  listDocMeta(docId?: string) { return this.#transaction(false, db => listDocMeta(db, docId)); }
+  saveDocProgress(input: Input) { return this.#transaction(true, db => saveDocProgress(db, input)); }
+  updateDocTriage(input: Input) { return this.#transaction(true, db => updateDocTriage(db, input)); }
+  searchLibrary(query: string, docs: DocumentInfo[]) { return this.#transaction(false, db => searchLibrary(db, query, docs)); }
   settings(): PrivateSettings { return this.#transaction(false, settingsFor); }
   chatHistory(docId: string, thread?: string): ChatExchange[] {
     return this.#transaction(false, db => {
@@ -473,15 +479,9 @@ export class ReaderStore {
     if (!docId || docId === 'pagedattention') return;
     const prefix = docId + '\u001f';
     this.#transaction(true, db => {
-      db.prepare('DELETE FROM entries WHERE docId=?').run(docId);
-      db.prepare('DELETE FROM annotations WHERE docId=?').run(docId);
-      db.prepare('DELETE FROM chat_exchanges WHERE docId=?').run(docId);
-      db.prepare('DELETE FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?').run(docId, prefix.length, prefix);
-      db.prepare('DELETE FROM notebook_vaults WHERE docId=? OR substr(docId,1,?)=?').run(docId, prefix.length, prefix);
-      db.prepare('DELETE FROM notebooks WHERE docId=? OR substr(docId,1,?)=?').run(docId, prefix.length, prefix);
-      db.prepare('DELETE FROM book_positions WHERE docId=?').run(docId);
-      db.prepare('DELETE FROM pdf_outlines WHERE docId=?').run(docId);
-      db.prepare('DELETE FROM article_captures WHERE docId=?').run(docId);
+      for (const table of ['entries', 'annotations', 'chat_exchanges', 'book_positions', 'pdf_outlines', 'article_captures']) db.prepare(`DELETE FROM ${table} WHERE docId=?`).run(docId);
+      for (const table of ['notebook_documents', 'notebook_vaults', 'notebooks']) db.prepare(`DELETE FROM ${table} WHERE docId=? OR substr(docId,1,?)=?`).run(docId, prefix.length, prefix);
+      deleteDocMeta(db, docId);
       db.prepare('DELETE FROM citations WHERE identity=?').run('document/' + docId);
     });
   }

@@ -33,6 +33,7 @@ import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './ju
 import { bindPdfControls, runRetranslate, type PdfControlsHandle, type ZoomSetting } from './pdf-controls.js';
 import { bindPdfDropTarget, importPdfFiles } from './pdf-import.js';
 import { FigurePins } from './figure-pin.js';
+import { trackReadingProgress } from './reading-progress.js';
 import { copyRegionPng, saveRegionPng } from './region-png.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
@@ -52,7 +53,7 @@ class Reader implements ReaderPort {
   notebookError?:string;
   private pdf?:PdfDocument;
   private loadedId='';
-  private leaveBookReading?: (save?: boolean) => void;
+  private leaveBookReading?: (save?: boolean) => void; private leaveProgress?: (save?: boolean) => void;
   private readonly card=new SelectionCard(this);
   private readonly chat=new PaperChat(this);
   private readonly desk=new ReadingDesk();
@@ -266,8 +267,8 @@ class Reader implements ReaderPort {
   discardDocument(docId: string): void {
     discardNotebook(this, docId);
     if (this.doc.id === docId) {
-      this.jumpHistory.clear(); this.pins.clear(); this.search.reset(); this.leaveBookReading?.(false);
-      this.leaveBookReading = undefined;
+      this.jumpHistory.clear(); this.pins.clear(); this.search.reset(); this.leaveBookReading?.(false); this.leaveProgress?.(false);
+      this.leaveBookReading = undefined; this.leaveProgress = undefined;
       this.notebook = undefined;
       this.notebookError = undefined;
     }
@@ -378,7 +379,7 @@ class Reader implements ReaderPort {
           if(version!==this.epoch){await pdf.destroy();return;}
           localStorage.setItem('reader.pdf-pages.'+id,String(pdf.pages));
       }
-      const wanted=page || place?.page || Number(localStorage.getItem('reader.page.'+id))||doc.defaultPage||1;
+      const wanted=page || place?.page || doc.meta?.lastPage || Number(localStorage.getItem('reader.page.'+id))||doc.defaultPage||1;
       const number=Math.min(doc.book?.sections.length||pdf?.pages||1,Math.max(1,Number.isFinite(wanted)?Math.floor(wanted):1));
       if(doc.book && doc.sectionPage!==number) {
         doc=(await api('book.section',{docId:id,page:number})).doc;
@@ -389,7 +390,7 @@ class Reader implements ReaderPort {
         await leaveNotebook(this,id,chapter);
         if(version!==this.epoch){if(changed && pdf && this.pdf!==pdf)await pdf.destroy();return;}
       }
-      this.leaveBookReading?.(); this.leaveBookReading=undefined;
+      this.leaveBookReading?.(); this.leaveBookReading=undefined; this.leaveProgress?.(); this.leaveProgress=undefined;
       if(changed || doc.book && (number!==this.page || !this.view)){
         const newNotebook=changed || chapter!==this.doc.book?.sections[this.page-1]?.chapterId;
         this.view?.dispose?.();this.view=undefined;
@@ -415,7 +416,11 @@ class Reader implements ReaderPort {
         anchor=Object.entries(doc.articleLayout||{}).find(([,block])=>block.ids?.includes(fragment))?.[0]??'';
       }
       await this.render(version,anchor,quote,target,range);
-      if(this.doc.book && version===this.epoch)this.leaveBookReading=trackBookPlace(id,number,place?.page===number?place:undefined);
+      if(version===this.epoch){
+        if(this.doc.book)this.leaveBookReading=trackBookPlace(id,number,place?.page===number?place:undefined);
+        const savedScroll=!anchor && !quote && !target && !range && !this.doc.book && (this.doc.meta?.scrollFraction ?? 0)>0 && (this.doc.kind==='web' || !page || (options?.restoreWithinPage && this.doc.meta?.lastPage===number)) ? this.doc.meta?.scrollFraction : undefined;
+        this.leaveProgress=trackReadingProgress({docId:id,page:number,pageCount:this.pdf?.pages||this.doc.book?.sections.length||1,restoreFraction:savedScroll});
+      }
     }catch(error){
       if(version!==this.epoch)return;
       if(this.view && this.doc.book) {
@@ -639,7 +644,7 @@ class Reader implements ReaderPort {
     capture.hidden=!this.view?.beginRegion;
     capture.setAttribute('aria-pressed',String(this.capturing));
     const captureLabel=this.capturing ? label('Cancel screenshot','取消截图') : label('Ask with a screenshot','截图问 AI');
-    capture.ariaLabel=capture.title=captureLabel;
+    capture.ariaLabel=captureLabel; capture.title=captureLabel+(this.capturing?' (Esc)':' (S)');
     capture.querySelector('.capture-label')!.textContent=this.capturing ? label('Cancel','取消') : label('Capture','截图');
     pin.textContent=this.placingPin?label('Cancel placement','取消放置'):
       reading || this.desk.visibleLanguage==='translation' ? label('Pin on PDF','在 PDF 原页标注') : label('Add page note','添加页边笔记');
@@ -918,14 +923,11 @@ class Reader implements ReaderPort {
     localStorage.setItem('reader.tab.'+this.doc.id,tab);
     this.repaintNotes();
   }
-  private toggleSidebar(tab:'contents'|'notes'):void {
-    if(this.desk.notebookOpen && (tab==='contents')===(this.tab==='contents')) {
-      this.desk.showNotebook(false);
-      return;
-    }
+  private toggleSidebar(tab:SidebarTab):void {
+    if(this.desk.notebookOpen && this.tab===tab){this.desk.showNotebook(false);return;}
     const switching=this.desk.notebookOpen;
     this.selectTab(tab);this.desk.showNotebook(true,tab==='contents');
-    if(switching)byId(tab==='contents'?'contentsTab':'notesTab').focus({preventScroll:true});
+    if(switching)byId(Object.entries(sidebarTabs).find(([,t])=>t===tab)![0]).focus({preventScroll:true});
   }
   private closeMenu(restoreFocus=false):void {
     if(byId('menu').hidden)return;

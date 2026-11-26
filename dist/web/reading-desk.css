@@ -767,13 +767,15 @@
 }
 
 #shortcutsDialog {
-  width: min(560px, calc(100vw - 24px));
-  max-height: 86vh;
+  width: min(820px, calc(100vw - 24px));
+  max-height: 92vh;
 }
 #shortcutsBody {
   display: grid;
-  gap: 14px;
-  padding: 14px 18px 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px 22px;
+  padding: 14px 18px 18px;
 }
 .shortcuts-group h3 {
   margin: 0 0 6px;
@@ -795,7 +797,7 @@
   text-align: start;
 }
 .shortcuts-table td {
-  padding: 7px 8px 7px 0;
+  padding: 5px 8px 5px 0;
   border-top: 1px solid var(--line);
   color: var(--desk-ink);
   vertical-align: top;
@@ -848,7 +850,7 @@
   .pdf-reading-text { padding-block: 12px 24px; }
   #menu { top: 51px; }
   #closeDialog, #closeShortcuts, #pageJump .btn, #card[data-selection] :is(.word-head, .chat-heading) .icon-btn { min-width: 44px; min-height: 44px; height: 44px; }
-  #shortcutsBody { padding: 12px 14px 18px; gap: 12px; }
+  #shortcutsBody { grid-template-columns: minmax(0, 1fr); padding: 12px 14px 18px; gap: 12px; }
   .shortcuts-table td:first-child { width: 44%; }
   #selectionDock { --dock-height: min(50dvh, 430px); }
   #card[data-docked="true"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }

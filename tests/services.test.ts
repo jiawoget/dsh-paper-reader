@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createServices, type ServiceOptions } from '../src/server/services.js';
@@ -325,4 +326,39 @@ test('unified createServices wires web.open, library.updateMeta, and library.del
   assert.equal((await act('state')).notes.length, 1);
   assert.deepEqual(await act('library.delete', { id: opened.doc.id }), { id: opened.doc.id, deleted: true });
   assert.equal((await act('state')).notes.length, 0);
+});
+
+test('doc_meta upgrades legacy 7-table v2 DBs and powers progress, triage, and cross-library search', async t => {
+  const { act, root } = await setup(t);
+  await act('state');
+  const db = new DatabaseSync(path.join(root, 'reader.sqlite'));
+  db.exec('DROP TABLE doc_meta');
+  const legacyNoteId = '11111111-1111-4111-8111-111111111111', now = new Date().toISOString();
+  db.prepare('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+    legacyNoteId, 'note', 'legacy-id', 'pagedattention', 'PagedAttention.pdf', 6, 'p6', 'http://127.0.0.1/a', 'Legacy 100%_note \\ Über', 'Page 6', 'block tables', '', '', now, now
+  );
+  db.close();
+  assert.equal((await act('library.list')).docs.find(d => d.id === 'pagedattention')?.meta, undefined);
+  assert.equal((await act('state')).notes.some(n => n.id === legacyNoteId), true);
+  const web = await act('web.import', { title: 'Attention Article', url: 'https://example.org/attn', paragraphs: ['Intro paragraph.'] });
+  const p1 = await act('library.progress.save', { docId: 'pagedattention', lastPage: 20, pageCount: 16, scrollFraction: 1.4 });
+  assert.deepEqual([p1.meta.status, p1.meta.lastPage, p1.meta.pageCount, p1.meta.scrollFraction], ['reading', 16, 16, 1]);
+  assert.ok(typeof p1.meta.lastOpenedAt === 'number');
+  const t1 = await act('library.triage', { docId: 'pagedattention', status: 'done', starred: true, tags: ['Systems', ' systems ', '', 'KV\u0007Cache'] });
+  assert.deepEqual(t1.meta.tags, ['Systems', 'KV Cache']);
+  assert.equal((await act('library.progress.save', { docId: 'pagedattention', lastPage: 5 })).meta.status, 'done');
+  assert.equal((await act('library.get', { id: 'pagedattention' })).doc.meta?.starred, true);
+  assert.equal((await act('library.list')).docs.find(d => d.id === web.doc.id)?.meta, undefined);
+  for (const bad of [{ status: 'archived' }, { starred: 'yes' }, { tags: [123] }]) await assert.rejects(act('library.triage', { docId: 'pagedattention', ...bad }), { status: 400 });
+  await assert.rejects(act('library.progress.save', { docId: 'pagedattention', scrollFraction: Number.NaN }), { status: 400 });
+  const liveId = '22222222-2222-4222-8222-222222222222', deadId = '33333333-3333-4333-8333-333333333333';
+  await act('annotation.save', { id: liveId, docId: web.doc.id, title: web.doc.title, page: 1, anchor: 'p-1', label: 'p. 1', sourceUrl: 'http://127.0.0.1/w', kind: 'highlight', color: 'yellow', quote: 'sparse attention', text: 'live mark note' });
+  const dead = await act('annotation.save', { id: deadId, docId: web.doc.id, title: web.doc.title, page: 1, anchor: 'p-1', label: 'p. 1', sourceUrl: 'http://127.0.0.1/w', kind: 'highlight', color: 'green', quote: 'tombstone-secret', text: 'gone' });
+  await act('annotation.delete', { docId: web.doc.id, id: deadId, expectedUpdatedAt: dead.annotation.updatedAt });
+  assert.equal((await act('library.search', { query: 'kv cache' })).hits.some(h => h.kind === 'doc' && h.docId === 'pagedattention'), true);
+  assert.equal((await act('library.search', { query: '100%_note \\' })).hits.some(h => h.kind === 'note' && h.id === legacyNoteId), true);
+  assert.equal((await act('library.search', { query: 'über' })).hits.some(h => h.kind === 'note' && h.id === legacyNoteId), true);
+  assert.equal((await act('library.search', { query: 'sparse attention' })).hits.some(h => h.kind === 'mark' && h.id === liveId && h.quote === 'sparse attention'), true);
+  assert.equal((await act('library.search', { query: 'tombstone-secret' })).hits.length, 0);
+  for (const jsonKey of ['yellow', 'quote']) assert.equal((await act('library.search', { query: jsonKey })).hits.some(h => h.kind === 'mark'), false);
 });

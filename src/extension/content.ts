@@ -71,12 +71,14 @@ if (!world.dshPaperReaderReady) {
       if (!open) throw new Error(t('Select a word or sentence on the page to translate.', '请先在网页中选中要翻译的词句。'));
       await open.translate();
     }
-    if (command === 'capture') {
+    if (command === 'capture' || command === 'save') {
       const pick = currentPick();
       const previous = card?.source.pick;
       const same = previous && pick && previous.range.startContainer === pick.range.startContainer &&
         previous.range.startOffset === pick.range.startOffset && previous.text === pick.text;
-      await (same && card ? card.source : new WebSource(pick)).open();
+      const source = same && card ? card.source : new WebSource(pick);
+      if (command === 'save') await source.collect();
+      else await source.open();
     }
     return { enabled };
   }
