@@ -56,7 +56,7 @@ async function fetchWatchPapers(entry: WatchlistEntry, docs: DocumentInfo[], ctx
   }
   const localDoc = entry.docId ? docs.find(d => d.id === entry.docId) : undefined, oaId0 = shortOaId(workId), docDoi = cleanDoi(localDoc?.doi), workDoi = workId && !oaId0 ? cleanDoi(workId) : undefined, axId = workId && !oaId0 && !workDoi?.startsWith('10.') ? extractArxivId(workId) : undefined;
   let oaId = oaId0, s2Key = workDoi?.startsWith('10.') ? 'DOI:' + workDoi : axId ? 'ARXIV:' + axId : (workId && !oaId ? workId : (docDoi ? 'DOI:' + docDoi : ''));
-  for (const k of [oaId && 'oa:' + oaId, docDoi && 'doi:' + docDoi.toLowerCase(), workDoi && 'doi:' + workDoi.toLowerCase(), axId && 'arxiv:' + axId.toLowerCase()]) if (k) selfKeys.add(k);
+  for (const k of [oaId && 'oa:' + oaId, docDoi && 'doi:' + docDoi.toLowerCase(), workDoi?.startsWith('10.') && 'doi:' + workDoi.toLowerCase(), axId && 'arxiv:' + axId.toLowerCase()]) if (k) selfKeys.add(k);
   if ((entry.sources.includes('openalex') && !oaId) || (entry.sources.includes('s2') && !s2Key)) {
     const resolved = await resolveAcademicPaper((!oaId && workId) || docDoi || localDoc?.url || localDoc?.paperTitle || localDoc?.title || entry.query, ctx);
     for (const d of resolved.degraded) degraded.add(d);

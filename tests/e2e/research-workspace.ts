@@ -402,7 +402,7 @@ async function run(): Promise<void> {
         res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
         const runNo = ++dsRunCount, curve1 = [{ round: 1, evaluated: 12, matched: 1, newMatches: 1 }];
         res.write(JSON.stringify({ type: 'progress', round: 1, totalRounds: 2, stage: 'score', evaluatedCount: 12, matchedCount: 1, newMatches: 1, saturationCurve: curve1, degraded: ['s2'], message: 'Round 1 scored', candidates: [dsC1] }) + '\n');
-        if (runNo === 1) { const tmr = setTimeout(() => res.end(), 20_000); req.on('close', () => clearTimeout(tmr)); return; }
+        if (runNo <= 2) { const tmr = setTimeout(() => res.end(), 20_000); req.on('close', () => clearTimeout(tmr)); return; }
         const curve2 = [...curve1, { round: 2, evaluated: 24, matched: 2, newMatches: 1 }];
         res.end(JSON.stringify({ type: 'result', result: { query: 'Eliminate KV fragmentation', overview: 'Key advances include [#1] (Wu, 2024) and [#2] (Patel, 2025).', categories: ['Block Paging', 'Prefix Sharing'], candidates: [dsC1, dsC2], roundsCompleted: 2, totalEvaluated: 24, saturationCurve: curve2, degraded: ['s2'], aborted: false } }) + '\n');
       });
@@ -425,19 +425,26 @@ async function run(): Promise<void> {
       await ws.locator('.ds-query-input').fill('Eliminate KV fragmentation');
       await ws.locator('.ds-clarify-btn').click();
       await ws.locator('.ds-q-card').first().waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-q-card').count(), 2);
-      await ws.locator('.ds-opt-chip', { hasText: 'Single GPU' }).click();
-      await ws.locator('.ds-start-btn').click();
-      await ws.locator('.ds-curve-svg').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-scoping').count(), 0);
+      await ws.locator('.ds-opt-chip', { hasText: 'Single GPU' }).focus(); await page.keyboard.press('Enter');
+      assert.ok(await ws.evaluate(() => document.activeElement?.classList.contains('ds-opt-chip') && document.activeElement.getAttribute('aria-pressed') === 'true'));
+      await ws.locator('.ds-start-btn').click(); await ws.locator('.ds-curve-svg').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-scoping').count(), 0);
       await page.waitForFunction(() => document.querySelector('.ds-kpi[data-kpi="evaluated"] .ds-kpi-val')?.textContent === '12');
-      await ws.locator('.ds-stop-btn').click();
-      await ws.locator('.ds-partial-banner').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-card').count(), 1);
+      await ws.locator('.ds-stop-btn').click(); await ws.locator('.ds-partial-banner').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-card').count(), 1);
       await ws.locator('.ds-edit-scope-btn').click(); await ws.locator('.ds-skip-btn').click();
-      await ws.locator('.ds-cite-ref[data-rank="1"]').waitFor({ state: 'visible' });
-      await ws.locator('.ds-cat-chip[data-cat="Prefix Sharing"]').click(); assert.equal(await ws.locator('.ds-card').count(), 1);
+      await page.waitForFunction(() => document.querySelector('.ds-kpi[data-kpi="evaluated"] .ds-kpi-val')?.textContent === '12');
+      await ws.locator('.rw-nav-btn[data-view="citation-map"]').click(); await ws.locator('.rw-nav-btn[data-view="deep-search"]').click();
+      await ws.locator('.ds-partial-banner').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-telemetry').count(), 0);
+      await ws.locator('.ds-edit-scope-btn').click(); await ws.locator('.ds-skip-btn').click(); await ws.locator('.ds-cite-ref[data-rank="1"]').waitFor({ state: 'visible' });
+      assert.ok(await ws.evaluate(() => [...document.querySelectorAll('.ds-sel-wrap, a.ds-title-link')].every(e => { const r = e.getBoundingClientRect(); return r.width >= 24 && r.height >= 24; })));
+      await ws.locator('.ds-cat-chip[data-cat="Prefix Sharing"]').focus(); await page.keyboard.press('Enter');
+      assert.equal(await ws.locator('.ds-card').count(), 1); assert.equal(await ws.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.cat), 'Prefix Sharing');
       await ws.locator('.ds-cite-ref[data-rank="1"]').click(); assert.equal(await ws.locator('.ds-card').count(), 2);
       assert.equal(await ws.locator('.ds-card[data-rank="1"] .ds-match-pill').innerText(), '★ 94%');
-      await ws.locator('.ds-card[data-rank="1"] .ds-abs-toggle').click(); await ws.locator('.ds-card[data-rank="1"] .ds-abs-text').waitFor({ state: 'visible' });
-      await ws.locator('.ds-card[data-rank="1"] .ds-save-abs').click(); await ws.locator('.ds-card[data-rank="1"] .ds-open-btn').waitFor({ state: 'visible' });
+      await ws.locator('.ds-card[data-rank="1"] .ds-abs-toggle').focus(); await page.keyboard.press('Enter'); await ws.locator('.ds-card[data-rank="1"] .ds-abs-text').waitFor({ state: 'visible' });
+      assert.ok(await ws.evaluate(() => document.activeElement?.matches('.ds-card[data-rank="1"] .ds-abs-toggle')));
+      await ws.locator('.ds-card[data-rank="1"] .ds-sel-check').focus(); await page.keyboard.press('Space');
+      assert.ok(await ws.evaluate(() => document.activeElement?.matches('.ds-card[data-rank="1"] .ds-sel-check') && !(document.querySelector('.ds-batch-save-btn') as HTMLButtonElement).disabled));
+      await ws.locator('.ds-card[data-rank="1"] .ds-save-abs').click(); await ws.locator('.ds-card[data-rank="1"] .ds-open-btn').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-batch-save-btn').isDisabled(), true);
       await ws.locator('.ds-wl-btn').click(); await ws.locator('.wl-drawer').waitFor({ state: 'visible' });
       await ws.locator('.wl-add-input').fill('KV Paging Watch'); await ws.locator('.wl-add-btn').click();
       await ws.locator('.wl-check-one').click(); await ws.locator('.wl-unread-badge').waitFor({ state: 'visible' });

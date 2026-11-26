@@ -20,7 +20,7 @@ export class WatchlistDrawer {
   private readonly statusEl = el('div', 'wl-status'); private readonly listEl = el('div', 'wl-list');
   private entries: WatchlistEntry[] = []; private readonly expanded = new Set<string>();
   private readonly savingIds = new Set<string>(); private readonly itemSlots = new Map<string, HTMLElement>();
-  private busy = false; private mounted = true; private prevFocus: HTMLElement | null = null;
+  private busy = false; private mounted = true; private ver = 0; private prevFocus: HTMLElement | null = null;
 
   constructor(private readonly cb: WatchlistCallbacks) {
     this.backdrop.hidden = this.root.hidden = true; this.backdrop.addEventListener('click', () => this.close());
@@ -45,8 +45,9 @@ export class WatchlistDrawer {
   open(): void { if (this.isOpen()) return; this.prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null; this.backdrop.hidden = this.root.hidden = false; this.render(); this.addInput.focus({ preventScroll: true }); void this.refresh(); }
   close(): void { if (!this.isOpen()) return; this.backdrop.hidden = this.root.hidden = true; if (this.prevFocus?.isConnected) this.prevFocus.focus({ preventScroll: true }); this.prevFocus = null; this.cb.onClose(); }
   async refresh(): Promise<void> {
-    try { const { entries } = await api('watchlist.list', {}); if (!this.mounted) return; this.entries = entries; this.emitUnread(); if (this.isOpen()) this.render(); }
-    catch (err) { if (this.mounted && this.isOpen()) this.statusEl.textContent = message(err); }
+    if (this.busy) return; const v = ++this.ver;
+    try { const { entries } = await api('watchlist.list', {}); if (!this.mounted || v !== this.ver) return; this.entries = entries; this.emitUnread(); if (this.isOpen()) this.render(); }
+    catch (err) { if (this.mounted && v === this.ver && this.isOpen()) this.statusEl.textContent = message(err); }
   }
   async watchQuery(rawQuery: string, clearInput = false): Promise<void> {
     const query = rawQuery.trim(); if (!query || this.busy) return;
@@ -60,14 +61,14 @@ export class WatchlistDrawer {
   syncPaperInLibrary(paperId: string, inLib: boolean, docId?: string): void {
     for (const e of this.entries) for (const item of e.unread) if ((paperId && item.paper.id === paperId) || (docId && item.paper.docId === docId)) {
       item.paper.inLibrary = inLib; item.paper.docId = inLib ? docId : undefined;
-      const slot = this.itemSlots.get(`${e.id}:${item.key}`); if (this.mounted && slot) this.renderItemSlot(slot, e.id, item);
+      const slot = this.itemSlots.get(`${e.id}:${item.key}`); if (this.mounted && slot) this.renderItemSlot(slot, item);
     }
   }
 
   private emitUnread(): void { this.cb.onUnreadChange(this.entries.reduce((sum, e) => sum + e.unread.length, 0)); }
   private setBusy(next: boolean): void { this.busy = next; this.addSubmit.disabled = this.watchCurBtn.disabled = next; this.checkAllBtn.disabled = next || !this.entries.length; }
   private async runAction(fn: () => Promise<void>): Promise<void> {
-    if (this.busy) return; this.setBusy(true);
+    if (this.busy) return; ++this.ver; this.setBusy(true);
     try { await fn(); } catch (err) { if (this.mounted) { this.statusEl.textContent = message(err); toast(message(err)); } }
     finally { if (this.mounted) { this.setBusy(false); this.render(); } }
   }
@@ -77,21 +78,19 @@ export class WatchlistDrawer {
       const res = await api('watchlist.check', id ? { id } : {}); if (!this.mounted) return;
       this.entries = res.entries; for (const e of this.entries) if (e.unread.length && (!id || e.id === id)) this.expanded.add(e.id);
       this.emitUnread();
-      const deg = formatDegradedSources(res.degraded), msg = res.newItemsCount > 0 ? t(`Found ${res.newItemsCount} new paper(s).`, `发现 ${res.newItemsCount} 篇新文献。`) : t('Up to date — no new papers since cursor.', '已是最新，游标后暂无新文献。');
+      const deg = formatDegradedSources(res.degraded), msg = res.newItemsCount > 0 ? t(`Found ${res.newItemsCount} new paper(s).`, `发现 ${res.newItemsCount} 篇新文献。`) : t('Up to date: no new papers since cursor.', '已是最新，游标后暂无新文献。');
       this.statusEl.textContent = deg ? `${msg} ${deg}` : msg;
     });
   }
-  private renderItemSlot(slot: HTMLElement, entryId: string, item: WatchlistItem): void {
+  private renderItemSlot(slot: HTMLElement, item: WatchlistItem): void {
     const p = item.paper;
-    renderPaperActions(slot, p, { prefix: 'wl', busy: this.savingIds.has(p.id), openLabel: t('Open in Reader', '打开精读'), onOpen: docId => { void this.cb.shell()?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: mode => { void this.saveItemPaper(entryId, item, mode); } });
+    renderPaperActions(slot, p, { prefix: 'wl', busy: this.savingIds.has(p.id), openLabel: t('Open in Reader', '打开精读'), onOpen: docId => { void this.cb.shell()?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: mode => { void this.saveItemPaper(item, mode); } });
   }
-  private async saveItemPaper(entryId: string, item: WatchlistItem, mode: 'abstract' | 'oa-pdf'): Promise<void> {
-    const p = item.paper, key = `${entryId}:${item.key}`; if (this.savingIds.has(p.id)) return;
-    const prevIn = Boolean(p.inLibrary), prevDoc = p.docId; this.savingIds.add(p.id); p.inLibrary = true;
-    const s0 = this.itemSlots.get(key); if (s0) this.renderItemSlot(s0, entryId, item);
-    try { const doc = await saveGraphPaper(p, mode, this.cb.shell()); this.savingIds.delete(p.id); p.inLibrary = true; p.docId = doc.id; this.cb.onPaperSaved?.(p, doc.id); }
-    catch (err) { this.savingIds.delete(p.id); p.inLibrary = prevIn; p.docId = prevDoc; toast(message(err)); }
-    const s1 = this.itemSlots.get(key); if (this.mounted && s1) this.renderItemSlot(s1, entryId, item);
+  private async saveItemPaper(item: WatchlistItem, mode: 'abstract' | 'oa-pdf'): Promise<void> {
+    const p = item.paper; if (this.savingIds.has(p.id)) return;
+    const prevIn = Boolean(p.inLibrary), prevDoc = p.docId; this.savingIds.add(p.id); this.syncPaperInLibrary(p.id, true, prevDoc);
+    try { const doc = await saveGraphPaper(p, mode, this.cb.shell()); this.savingIds.delete(p.id); this.syncPaperInLibrary(p.id, true, doc.id); this.cb.onPaperSaved?.(p, doc.id); }
+    catch (err) { this.savingIds.delete(p.id); this.syncPaperInLibrary(p.id, prevIn, prevDoc); toast(message(err)); }
   }
   render(): void {
     const curQ = this.cb.currentQuery().trim();
@@ -104,7 +103,7 @@ export class WatchlistDrawer {
       const meta = el('p', 'wl-entry-meta', t(`Cursor ${e.cursorDate}`, `游标 ${e.cursorDate}`) + (e.lastCheckedAt ? t(` · Checked ${e.lastCheckedAt.slice(0, 10)}`, ` · 已检 ${e.lastCheckedAt.slice(0, 10)}`) : ''));
       const chkBtn = mkBtn('btn wl-check-one', t('Check', '检查'), () => { void this.check(e.id); }); chkBtn.disabled = this.busy; actions.append(chkBtn);
       if (e.unread.length) {
-        const exp = this.expanded.has(e.id), togBtn = mkBtn('btn wl-toggle-unread', exp ? t('Hide new', '收起新文献') : t(`${e.unread.length} new`, `${e.unread.length} 篇新文献`), () => { if (exp) this.expanded.delete(e.id); else this.expanded.add(e.id); this.render(); });
+        const exp = this.expanded.has(e.id), togBtn = mkBtn('btn wl-toggle-unread', exp ? t('Hide new', '收起新文献') : t(`${e.unread.length} new`, `${e.unread.length} 篇新文献`), () => { if (exp) this.expanded.delete(e.id); else this.expanded.add(e.id); this.render(); this.listEl.querySelector<HTMLElement>(`.wl-entry[data-entry-id="${CSS.escape(e.id)}"] .wl-toggle-unread`)?.focus({ preventScroll: true }); });
         togBtn.setAttribute('aria-expanded', String(exp));
         const rdBtn = mkBtn('btn wl-mark-read', t('Mark read', '标为已读'), () => { void this.runAction(async () => { const { entry } = await api('watchlist.markRead', { id: e.id }); if (!this.mounted) return; this.entries = this.entries.map(x => x.id === e.id ? entry : x); this.expanded.delete(e.id); this.emitUnread(); }); });
         rdBtn.disabled = this.busy; actions.append(togBtn, rdBtn);
@@ -116,7 +115,7 @@ export class WatchlistDrawer {
         for (const item of e.unread) {
           const row = el('div', 'wl-item'), slot = el('div', 'wl-item-actions'), sub = [item.paper.firstAuthor, item.paper.year ? String(item.paper.year) : '', item.paper.venue ?? ''].filter(Boolean).join(' · ');
           row.append(el('div', 'wl-item-title', item.paper.title), ...(sub ? [el('div', 'wl-item-meta', sub)] : []), slot);
-          this.renderItemSlot(slot, e.id, item); this.itemSlots.set(`${e.id}:${item.key}`, slot); list.append(row);
+          this.renderItemSlot(slot, item); this.itemSlots.set(`${e.id}:${item.key}`, slot); list.append(row);
         }
         card.append(list);
       }

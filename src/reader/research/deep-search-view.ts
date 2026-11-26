@@ -19,7 +19,7 @@ const seedOf = (p: GraphPaper): string => p.openAlexId || p.doi || (p.arxivId ? 
 const matchTier = (score: number): { tier: 'high' | 'mid' | 'low'; mark: string } => score >= 80 ? { tier: 'high', mark: '★' } : score >= 60 ? { tier: 'mid', mark: '●' } : { tier: 'low', mark: '○' };
 
 function buildSaturationSvg(curve: readonly DeepSearchRoundMetric[], totalRounds: number, compact = false): SVGSVGElement {
-  const w = 460, h = compact ? 112 : 148, pl = 40, pr = 22, pt = 18, pb = 28, iw = w - pl - pr, ih = h - pt - pb, maxR = Math.max(totalRounds, curve.length, 2), maxY = Math.max(4, ...curve.map(c => c.matched));
+  const w = 460, h = compact ? 112 : 148, pl = 40, pr = 22, pt = 18, pb = 28, iw = w - pl - pr, ih = h - pt - pb, maxR = Math.max(totalRounds, ...curve.map(c => c.round), 2), maxY = Math.max(4, ...curve.map(c => c.matched));
   const summary = curve.length ? curve.map(c => `R${c.round}: ${c.matched}`).join(', ') : t('Collecting Round 1', '正在收集第 1 轮');
   const svg = svgEl('svg', { class: `ds-curve-svg${compact ? ' is-compact' : ''}`, viewBox: `0 0 ${w} ${h}`, role: 'img', 'aria-label': t(`Discovery saturation curve (${summary})`, `发现饱和度曲线（${summary}）`) });
   const xAt = (r: number) => pl + (r / maxR) * iw, yAt = (v: number) => pt + ih - (v / maxY) * ih;
@@ -50,7 +50,7 @@ function linkOverviewCitations(body: HTMLElement, maxRank: number, onJump: (rank
 
 export function createDeepSearchView(): ResearchViewModule {
   let mounted = false, lastOpenCtx: ResearchOpenContext | undefined, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
-  let mode: DeepSearchMode = 'scoping', query = '', rounds = 2, clarifying = false, sendingReview = false, activeCat = '', unreadCount = 0;
+  let mode: DeepSearchMode = 'scoping', query = '', rounds = 2, clarifying = false, sendingReview = false, batchSaving = false, activeCat = '', unreadCount = 0;
   let questions: DeepSearchQuestion[] = [], answers: Record<string, string> = {}, result: DeepSearchResult | null = null;
   let tel: TelemetryState = { round: 1, totalRounds: 2, stage: 'decompose', evaluated: 0, matched: 0, message: '', curve: [], degraded: [], candidates: [] };
   const selectedIds = new Set<string>(), expandedAbs = new Set<string>(), savingIds = new Set<string>(), cardSlots = new Map<string, HTMLElement>();
@@ -73,12 +73,14 @@ export function createDeepSearchView(): ResearchViewModule {
     );
     headActionsEl.append(wlBtnEl); syncWatchlistBadge();
   };
+  const syncBatchSaveBtn = () => { const btn = bodyEl?.querySelector<HTMLButtonElement>('.ds-batch-save-btn'); if (btn) btn.disabled = batchSaving || !result?.candidates.some(c => selectedIds.has(c.id) && !c.inLibrary); };
   const syncCandidateInLibrary = (paperId: string, inLib: boolean, docId?: string) => {
     if (!result) return;
     for (const c of result.candidates) if ((paperId && c.id === paperId) || (docId && c.docId === docId)) {
       c.inLibrary = inLib; c.docId = inLib ? docId : undefined;
       const slot = cardSlots.get(c.id); if (mounted && slot) renderCardSlot(slot, c);
     }
+    syncBatchSaveBtn();
   };
   const renderCardSlot = (slot: HTMLElement, cand: DeepSearchCandidate) => renderPaperActions(slot, cand, { prefix: 'ds', busy: savingIds.has(cand.id), openLabel: t('Open in Reader', '打开精读'), onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: saveMode => { void saveCandidateInPlace(cand, saveMode); } });
   const saveCandidateInPlace = async (cand: DeepSearchCandidate, saveMode: 'abstract' | 'oa-pdf'): Promise<string | undefined> => {
@@ -126,8 +128,8 @@ export function createDeepSearchView(): ResearchViewModule {
       const chosen = selectedIds.size ? result.candidates.filter(c => selectedIds.has(c.id)) : result.candidates.slice(0, 5), topic = shell.activeTopic();
       const docs = topic ? (await api('library.list', {}).catch(() => ({ docs: [] }))).docs : [], byId = new Map(docs.map(d => [d.id, d]));
       for (const c of chosen) {
-        const docId = c.inLibrary ? c.docId : await saveCandidateInPlace(c, 'abstract');
-        if (docId && c.inLibrary && topic) { const tags = byId.get(docId)?.meta?.tags ?? []; if (!tags.includes(topic)) await api('library.triage', { docId, tags: [...tags, topic] }).catch(() => undefined); }
+        const wasIn = Boolean(c.inLibrary), docId = wasIn ? c.docId : await saveCandidateInPlace(c, 'abstract');
+        if (docId && wasIn && topic) { const tags = byId.get(docId)?.meta?.tags ?? []; if (!tags.includes(topic)) await api('library.triage', { docId, tags: [...tags, topic] }).catch(() => undefined); }
       }
       if (mounted) shell.openView('review-table');
     } finally { sendingReview = false; }
@@ -172,7 +174,7 @@ export function createDeepSearchView(): ResearchViewModule {
         panel.append(el('h2', 'ds-clarify-title', t('Refine search scope', '确认检索范围')));
         for (const q of questions) {
           const card = el('div', 'ds-q-card'), opts = el('div', 'ds-q-options'); card.append(el('p', 'ds-q-text', q.question));
-          for (const opt of q.options) { const chip = mkBtn('btn ds-opt-chip', opt, () => { if (answers[q.id] === opt) delete answers[q.id]; else answers[q.id] = opt; renderScoping(); }); chip.setAttribute('aria-pressed', String(answers[q.id] === opt)); opts.append(chip); }
+          for (const opt of q.options) { const chip = mkBtn('btn ds-opt-chip', opt, () => { if (answers[q.id] === opt) delete answers[q.id]; else answers[q.id] = opt; for (const b of opts.querySelectorAll<HTMLButtonElement>('.ds-opt-chip')) b.setAttribute('aria-pressed', String(b === chip && answers[q.id] === opt)); }); chip.setAttribute('aria-pressed', String(answers[q.id] === opt)); opts.append(chip); }
           card.append(opts); panel.append(card);
         }
         const refine = el('input', 'search ds-refine-input'), actRow = el('div', 'ds-clarify-actions');
@@ -200,12 +202,12 @@ export function createDeepSearchView(): ResearchViewModule {
     foot.append(mkBtn('btn ds-stop-btn', t('Stop & keep partial results', '停止并保留已有结果'), stopAndKeepPartial)); wrap.append(foot); bodyEl.replaceChildren(wrap);
   };
 
-  const renderResults = () => {
+  const renderResults = (focusSel?: string) => {
     if (!bodyEl || !result) return;
     const prevTop = bodyEl.scrollTop, res = result; cardSlots.clear(); const wrap = el('div', 'ds-results');
     if (res.aborted) {
       const pBar = el('div', 'ds-partial-banner'), btns = el('div', 'ds-partial-actions'); pBar.setAttribute('role', 'status');
-      const txt = res.candidates.length ? t(`Stopped early — showing ${res.candidates.length} partial matches.`, `已提前停止——保留 ${res.candidates.length} 篇部分命中结果。`) : t('Stopped before any batch finished scoring.', '在首批文献完成评分前已停止。');
+      const txt = res.candidates.length ? t(`Stopped early: showing ${res.candidates.length} partial matches.`, `已提前停止，保留 ${res.candidates.length} 篇部分命中结果。`) : t('Stopped before any batch finished scoring.', '在首批文献完成评分前已停止。');
       btns.append(mkBtn('btn', t('Back to scope', '返回修改范围'), () => { mode = 'scoping'; render(); }), mkBtn('btn primary', t('Retry', '重试'), () => { void startSearch(false); }));
       pBar.append(el('span', '', txt), btns); wrap.append(pBar);
     }
@@ -221,16 +223,21 @@ export function createDeepSearchView(): ResearchViewModule {
     ovBody.dir = 'auto'; ovBody.innerHTML = answerMarkdown(res.overview, 0); linkOverviewCitations(ovBody, res.candidates.length, jumpToRank);
     ovCard.append(ovHead, ovBody, ...(res.saturationCurve.length ? [buildSaturationSvg(res.saturationCurve, res.roundsCompleted, true)] : []));
     const catBar = el('div', 'ds-cat-bar'); catBar.setAttribute('role', 'group'); catBar.ariaLabel = t('Filter by category', '按主题分类筛选');
-    const allChip = mkBtn('btn ds-cat-chip', t(`All (${res.candidates.length})`, `全部 (${res.candidates.length})`), () => { activeCat = ''; renderResults(); });
+    const allChip = mkBtn('btn ds-cat-chip', t(`All (${res.candidates.length})`, `全部 (${res.candidates.length})`), () => { activeCat = ''; renderResults('.ds-cat-chip[data-cat=""]'); });
     allChip.dataset.cat = ''; allChip.setAttribute('aria-pressed', String(!activeCat)); catBar.append(allChip);
-    for (const cat of res.categories) { const cnt = res.candidates.filter(c => c.category === cat).length; if (!cnt) continue; const chip = mkBtn('btn ds-cat-chip', `${cat} (${cnt})`, () => { activeCat = activeCat === cat ? '' : cat; renderResults(); }); chip.dataset.cat = cat; chip.setAttribute('aria-pressed', String(activeCat === cat)); catBar.append(chip); }
+    for (const cat of res.categories) { const cnt = res.candidates.filter(c => c.category === cat).length; if (!cnt) continue; const nth = catBar.children.length + 1, chip = mkBtn('btn ds-cat-chip', `${cat} (${cnt})`, () => { activeCat = activeCat === cat ? '' : cat; renderResults(`.ds-cat-bar > :nth-child(${nth})`); }); chip.dataset.cat = cat; chip.setAttribute('aria-pressed', String(activeCat === cat)); catBar.append(chip); }
     const visible = res.candidates.map((cand, idx) => ({ cand, rank: idx + 1 })).filter(x => !activeCat || x.cand.category === activeCat);
     const batch = el('div', 'ds-batch-bar'), selAllLbl = el('label', 'ds-sel-wrap'), selAllIn = el('input', 'ds-sel-check');
     selAllIn.type = 'checkbox'; selAllIn.checked = visible.length > 0 && visible.every(x => selectedIds.has(x.cand.id)); selAllIn.indeterminate = !selAllIn.checked && visible.some(x => selectedIds.has(x.cand.id));
-    selAllIn.addEventListener('change', () => { for (const x of visible) if (selAllIn.checked) selectedIds.add(x.cand.id); else selectedIds.delete(x.cand.id); renderResults(); });
+    selAllIn.addEventListener('change', () => { for (const x of visible) if (selAllIn.checked) selectedIds.add(x.cand.id); else selectedIds.delete(x.cand.id); renderResults('.ds-batch-bar .ds-sel-check'); });
     selAllLbl.append(selAllIn, el('span', 'ds-sel-count', t(`${selectedIds.size} selected`, `已选 ${selectedIds.size} 篇`)));
-    const unsavedSel = res.candidates.filter(c => selectedIds.has(c.id) && !c.inLibrary);
-    const batchSave = mkBtn('btn ds-batch-save-btn', t('Save selected Abstract only', '批量仅摘要入库'), () => { void (async () => { for (const c of unsavedSel) await saveCandidateInPlace(c, 'abstract'); renderResults(); })(); }); batchSave.disabled = !unsavedSel.length;
+    const batchSave = mkBtn('btn ds-batch-save-btn', t('Save selected Abstract only', '批量仅摘要入库'), () => {
+      if (batchSaving || !result) return;
+      const toSave = result.candidates.filter(c => selectedIds.has(c.id) && !c.inLibrary); if (!toSave.length) return;
+      batchSaving = true; batchSave.disabled = true;
+      void (async () => { try { for (const c of toSave) if (!c.inLibrary) await saveCandidateInPlace(c, 'abstract'); } finally { batchSaving = false; if (mounted && mode === 'results') renderResults(); } })();
+    });
+    batchSave.disabled = batchSaving || !res.candidates.some(c => selectedIds.has(c.id) && !c.inLibrary);
     const toRev = mkBtn('btn primary ds-to-review-btn', t('Send to Review Table', '送入文献筛选与提取'), () => { void sendToReviewTable(); }); toRev.disabled = sendingReview;
     batch.append(selAllLbl, batchSave, toRev, mkBtn('btn ds-to-map-btn', t('Open in Citation Map', '在引文脉络中查看'), () => openInCitationMap()));
     const list = el('div', 'ds-cards');
@@ -238,7 +245,7 @@ export function createDeepSearchView(): ResearchViewModule {
       const card = el('article', 'ds-card'), top = el('div', 'ds-card-top'), chkLbl = el('label', 'ds-sel-wrap'), chk = el('input', 'ds-sel-check');
       card.dataset.rank = String(rank); card.dataset.paperId = cand.id;
       chk.type = 'checkbox'; chk.checked = selectedIds.has(cand.id); chk.ariaLabel = t(`Select result #${rank}`, `勾选第 ${rank} 条结果`);
-      chk.addEventListener('change', () => { if (chk.checked) selectedIds.add(cand.id); else selectedIds.delete(cand.id); renderResults(); });
+      chk.addEventListener('change', () => { if (chk.checked) selectedIds.add(cand.id); else selectedIds.delete(cand.id); renderResults(`.ds-card[data-rank="${rank}"] .ds-sel-check`); });
       chkLbl.append(chk, el('span', 'ds-rank-num', `#${rank}`));
       const { tier, mark } = matchTier(cand.matchScore), pill = el('span', 'ds-match-pill', `${mark} ${cand.matchScore}%`); pill.dataset.tier = tier;
       top.append(chkLbl, pill, ...(cand.category ? [el('span', 'ds-cat-tag', cand.category)] : []), el('span', 'ds-round-tag', t(`R${cand.foundRound}`, `第 ${cand.foundRound} 轮`)));
@@ -251,13 +258,13 @@ export function createDeepSearchView(): ResearchViewModule {
       const meta = [auth, cand.year ? String(cand.year) : '', cand.venue ?? '', cand.citationCount !== undefined ? t(`${cand.citationCount} citations`, `${cand.citationCount} 次被引`) : ''].filter(Boolean).join(' · ');
       card.append(top, titleNode, el('p', 'ds-rationale', cand.rationale), el('p', 'ds-card-meta', meta));
       if (cand.abstract) {
-        const exp = expandedAbs.has(cand.id), absWrap = el('div', 'ds-abs-wrap'), absBtn = mkBtn('text-btn ds-abs-toggle', exp ? t('Hide abstract', '收起摘要') : t('Show abstract', '展开摘要'), () => { if (exp) expandedAbs.delete(cand.id); else expandedAbs.add(cand.id); renderResults(); });
+        const exp = expandedAbs.has(cand.id), absWrap = el('div', 'ds-abs-wrap'), absBtn = mkBtn('text-btn ds-abs-toggle', exp ? t('Hide abstract', '收起摘要') : t('Show abstract', '展开摘要'), () => { if (exp) expandedAbs.delete(cand.id); else expandedAbs.add(cand.id); renderResults(`.ds-card[data-rank="${rank}"] .ds-abs-toggle`); });
         absBtn.setAttribute('aria-expanded', String(exp)); absWrap.append(absBtn, ...(exp ? [el('p', 'ds-abs-text', cand.abstract)] : [])); card.append(absWrap);
       }
       const actions = el('div', 'ds-card-actions'), slot = el('div', 'ds-intake-slot'); renderCardSlot(slot, cand); cardSlots.set(cand.id, slot);
       actions.append(slot, mkBtn('btn ds-card-map-btn', researchViewName('citation-map'), () => openInCitationMap(cand))); card.append(actions); list.append(card);
     }
-    wrap.append(ovCard, catBar, batch, list); bodyEl.replaceChildren(wrap); bodyEl.scrollTop = prevTop;
+    wrap.append(ovCard, catBar, batch, list); bodyEl.replaceChildren(wrap); bodyEl.scrollTop = prevTop; if (focusSel) bodyEl.querySelector<HTMLElement>(focusSel)?.focus({ preventScroll: true });
   };
 
   const render = () => { renderHeaderActions(); if (mode === 'scoping') renderScoping(); else if (mode === 'telemetry') renderTelemetry(); else renderResults(); };
@@ -269,14 +276,17 @@ export function createDeepSearchView(): ResearchViewModule {
       if (startQ && openCtx !== lastOpenCtx) { lastOpenCtx = openCtx; query = startQ; questions = []; answers = {}; mode = 'scoping'; }
       const view = el('section', 'ds-view'), top = el('header', 'ds-top'); view.setAttribute('aria-label', researchViewName('deep-search'));
       headActionsEl = el('div', 'ds-head-actions');
-      wlBtnEl = mkBtn('btn ds-wl-btn', t('Watchlist', 'Watchlist'), () => { if (watchlist?.isOpen()) watchlist.close(); else watchlist?.open(); });
+      wlBtnEl = mkBtn('btn ds-wl-btn', t('Watchlist', 'Watchlist'), () => { if (watchlist?.isOpen()) watchlist.close(); else { watchlist?.open(); wlBtnEl?.setAttribute('aria-expanded', 'true'); } });
       wlBadgeEl = el('span', 'ds-wl-badge'); wlBadgeEl.hidden = true; wlBtnEl.append(wlBadgeEl); wlBtnEl.setAttribute('aria-expanded', 'false');
       top.append(el('h1', 'ds-title', researchViewName('deep-search')), headActionsEl); bodyEl = el('div', 'ds-body');
       watchlist = new WatchlistDrawer({ shell: () => shell, currentQuery: () => (mode === 'results' && result?.query) || query, onClose: () => wlBtnEl?.setAttribute('aria-expanded', 'false'), onUnreadChange: n => { unreadCount = n; syncWatchlistBadge(); }, onPaperSaved: (p, docId) => syncCandidateInLibrary(p.id, true, docId) });
-      const origOpen = watchlist.open.bind(watchlist); watchlist.open = () => { origOpen(); wlBtnEl?.setAttribute('aria-expanded', 'true'); };
       view.append(top, bodyEl, watchlist.backdrop, watchlist.root); host.replaceChildren(view); render(); void watchlist.refresh();
     },
-    unmount() { mounted = false; abortActive(); watchlist?.unmount(); watchlist = undefined; cardSlots.clear(); },
+    unmount() {
+      mounted = false; abortActive();
+      if (mode === 'telemetry') { if (tel.candidates.length) { result = buildPartialResult(); mode = 'results'; } else mode = 'scoping'; }
+      watchlist?.unmount(); watchlist = undefined; cardSlots.clear();
+    },
     saveState: (): SavedDeepSearchState => ({ mode: mode === 'telemetry' ? (tel.candidates.length ? 'results' : 'scoping') : mode, query, rounds, questions: questions.map(q => ({ ...q, options: [...q.options] })), answers: { ...answers }, result: mode === 'telemetry' && tel.candidates.length ? buildPartialResult() : result, activeCat, selectedIds: [...selectedIds], expandedAbs: [...expandedAbs], scrollTop: bodyEl?.scrollTop ?? 0 }),
     restoreState(raw) {
       if (!raw || typeof raw !== 'object') return;

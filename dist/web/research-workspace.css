@@ -460,7 +460,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
 .ds-cite-ref { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 0 6px; margin: 0 1px; border-radius: 5px; font-size: 12px; font-weight: 650; }
 .ds-cite-ref { background: var(--lavender); color: var(--purple); } .ds-cite-ref:hover { background: var(--lavender-strong); text-decoration: underline; }
 .ds-batch-bar { padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
-.ds-sel-wrap { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.ds-sel-wrap { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; min-width: 24px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .ds-sel-check { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-solid); } .ds-batch-bar .ds-sel-wrap { margin-inline-end: auto; }
 .ds-cards { display: grid; gap: 10px; } .ds-card { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .ds-card.is-focused { border-color: var(--focus-ring); box-shadow: 0 0 0 2px var(--focus-ring); } .ds-card-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
@@ -469,7 +469,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
 .ds-match-pill[data-tier="mid"] { background: var(--lavender); color: var(--purple); border: 1px solid var(--quote-border); }
 .ds-match-pill[data-tier="low"] { background: var(--surface-sunken); color: var(--muted); border: 1px solid var(--line); }
 .ds-title-btn, .ds-title-link, .ds-title-text { margin: 0; font-size: 14.5px; font-weight: 650; line-height: 1.38; color: var(--desk-ink); text-align: start; text-decoration: none; overflow-wrap: anywhere; }
-.ds-title-btn { padding: 2px 0; min-height: 24px; } :is(.ds-title-btn, .ds-title-link):hover { color: var(--purple); text-decoration: underline; }
+.ds-title-btn, .ds-title-link { display: inline-flex; align-items: center; padding: 2px 0; min-height: 24px; } :is(.ds-title-btn, .ds-title-link):hover { color: var(--purple); text-decoration: underline; }
 .ds-rationale { margin: 0; padding: 6px 10px; border: 1px solid var(--quote-border); border-radius: 6px; background: var(--surface-tint); font-size: 13px; line-height: 1.5; color: var(--desk-ink); overflow-wrap: anywhere; }
 .ds-card-meta { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .ds-abs-wrap { display: grid; gap: 5px; justify-items: start; } .ds-abs-toggle { font-size: 12.5px; min-height: 24px; }
@@ -505,7 +505,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
   .lc-view :is(button, a[href], select, input:not([type="checkbox"]), textarea), .ds-view :is(button, a[href], select, input:not([type="checkbox"]), textarea) { min-height: 44px; min-width: 44px; }
   .lc-group-check, .lc-doc-row, .ds-sel-wrap { min-height: 44px; min-width: 44px; align-items: center; gap: 9px; }
   .lc-check, .ds-sel-check { width: 24px; height: 24px; margin: 0; }
-  .cm-crumb, .cm-row-title, .ft-paper-title, .ds-title-link { display: inline-flex; align-items: center; }
+  .cm-crumb, .cm-row-title, .ft-paper-title { display: inline-flex; align-items: center; }
   #expandResearch { min-width: 44px; min-height: 44px; height: 44px; }
   #returnWorkspace { border-radius: 22px; max-width: calc(100% - 24px); }
   .return-workspace-go { display: flex; align-items: center; white-space: normal; text-align: start; line-height: 1.3; padding: 6px 10px; border-radius: 20px; }
