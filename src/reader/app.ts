@@ -84,6 +84,7 @@ class Reader implements ReaderPort {
   );
   private placingPin=false;
   private capturing=false;
+  private attachingPdf=false;
   private beforeCapture?: ReadingPosition;
   private captureOrigin?: { suspended: boolean; returnTo?: ReadingPosition };
   private epoch=0;
@@ -522,7 +523,7 @@ class Reader implements ReaderPort {
       view = pdf ? await pdf.render(options)
         : doc.kind === 'abstract' ? renderAbstractView({
             doc, sourceEl, translationEl, translations, targetLanguage, onSelect,
-            onAttached: upgraded => this.handleAttachedPdf(upgraded)
+            onAttach: file => this.attachAbstractPdf(file, true)
           })
         : renderArticle({...options,zoom:this.zoom==='fit-page'?1:this.zoom});
     }
@@ -618,6 +619,16 @@ class Reader implements ReaderPort {
     const doc=this.doc,page=this.page,version=this.epoch,view=this.view;
     await runRetranslate({docId:doc.id,page,isPdf:Boolean(this.pdf),target:this.targetLanguage,settings:this.state.settings,view,blockIds,isActive:()=>version===this.epoch&&this.view===view},
       translations=>{this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.syncRetranslate();},()=>settingsDialog(this,'ai'));
+  }
+  private async attachAbstractPdf(file: File, rethrow = false): Promise<void> {
+    if (this.attachingPdf) return;
+    const targetId = this.doc.id, version = this.epoch, active = () => this.doc.id === targetId && this.epoch === version;
+    this.attachingPdf = true;
+    try {
+      const { doc } = await attachPdfToAbstract(targetId, file);
+      if (active()) await this.handleAttachedPdf(doc); else toast(label('PDF attached and indexed.', '已附加 PDF 并建立全文索引。'));
+    } catch (error) { if (rethrow) throw error; if (active()) toast(message(error)); }
+    finally { this.attachingPdf = false; }
   }
   private async handleAttachedPdf(upgraded: DocumentInfo): Promise<void> {
     await this.navigate(upgraded.id, 1, '', '', undefined, undefined, { opened: upgraded, forceReload: true, skipHistory: true });
@@ -855,10 +866,7 @@ class Reader implements ReaderPort {
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
     this.desk.connect(mode=>this.pdfView?.setFocusMode(mode), () => refreshNotebookHighlights(this));
     bindPdfDropTarget(byId('reader'), files => {
-      if (this.doc.kind === 'abstract' && files.length === 1) {
-        void attachPdfToAbstract(this.doc.id, files[0]).then(({ doc }) => this.handleAttachedPdf(doc), e => toast(message(e)));
-        return;
-      }
+      if (this.doc.kind === 'abstract' && files.length === 1) { void this.attachAbstractPdf(files[0]); return; }
       void this.importFiles(files, text => toast(text)).catch(e => toast(message(e)));
     }, { isBlocked: () => Boolean(document.querySelector('dialog[open]')) });
     byId('menu').addEventListener('focusout',event=>{

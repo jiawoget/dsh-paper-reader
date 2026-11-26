@@ -32,6 +32,9 @@ test('parseBulkRefs parses BibTeX with nested braces, quotes, LaTeX escapes, and
   assert.equal(parsed[0].abstract, 'Virtual memory paging for KV cache.');
   assert.equal(parsed[1].venue, 'NEJM');
   assert.equal(parsed[1].year, '2021');
+  const edge = parseBulkRefs('@article{k1, title = {Set \\{a, b\\} and "quoted"}, doi = {10.1000/foo--bar_baz}}', 'bibtex');
+  assert.equal(edge[0].title, 'Set {a, b} and "quoted"');
+  assert.equal(edge[0].doi, '10.1000/foo--bar_baz');
 });
 
 test('parseBulkRefs parses multi-record RIS and RFC 4180 CSV with quotes, commas, and newlines', () => {
@@ -87,6 +90,11 @@ test('exportBulkRefs round-trips BibTeX/RIS/CSV and neutralizes CSV formula inje
   const csvRt = parseBulkRefs(csvOut, 'csv');
   assert.deepEqual(csvRt[0].tags, ['llm', 'serving']);
   assert.equal(csvRt[1].title, "'=CMD() Injection");
+  const wsCsv = exportBulkRefs([
+    { id: 'abs-3', kind: 'abstract', title: 'Normal', meta: { status: 'unread', starred: false, tags: [' =CMD()'] } },
+    { id: 'abs-4', kind: 'abstract', title: 'Newline', meta: { status: 'unread', starred: false, tags: ['\n+1'] } }
+  ], 'csv');
+  assert.ok(wsCsv.includes("Normal,,,,,,,' =CMD()\n") && wsCsv.includes('Newline,,,,,,,"\'\n+1"\n'));
 });
 
 test('library.importRefs and library.exportRefs deduplicate, tag, index FTS5, and export', async t => {

@@ -1947,7 +1947,7 @@ function makeEntry(r) {
   };
 }
 function unescapeLatex(raw) {
-  return raw.replace(/\\textbraceleft\{\}/g, "\uE000").replace(/\\textbraceright\{\}/g, "\uE001").replace(/\\textbackslash\{\}/g, "\uE002").replace(/\\textasciitilde\{\}/g, "~").replace(/\\textasciicircum\{\}/g, "^").replace(/\\([%&#_$])/g, "$1").replace(/\\(['`^"~=.])\{?([A-Za-z])\}?/g, (_, c, ch) => (ch + ACCENTS[c]).normalize("NFC")).replace(/\\([cvuHrk])(?:\{([A-Za-z])\}|\s+([A-Za-z]))/g, (_, c, a, b) => ((a || b) + ACCENTS[c]).normalize("NFC")).replace(/\\(ss|ae|AE|oe|OE|aa|AA|o|O|l|L)(?:\{\}|(?![A-Za-z]))/g, (_, k) => SPECIAL[k] ?? k).replace(/---/g, "\u2014").replace(/--/g, "\u2013").replace(/[{}]/g, "").replace(/\uE000/g, "{").replace(/\uE001/g, "}").replace(/\uE002/g, "\\").replace(/\s+/g, " ").trim();
+  return raw.replace(/\\textbraceleft\{\}|\\\{/g, "\uE000").replace(/\\textbraceright\{\}|\\\}/g, "\uE001").replace(/\\textbackslash\{\}/g, "\uE002").replace(/\\textasciitilde\{\}/g, "~").replace(/\\textasciicircum\{\}/g, "^").replace(/\\([%&#_$])/g, "$1").replace(/\\(['`^"~=.])\{?([A-Za-z])\}?/g, (_, c, ch) => (ch + ACCENTS[c]).normalize("NFC")).replace(/\\([cvuHrk])(?:\{([A-Za-z])\}|\s+([A-Za-z]))/g, (_, c, a, b) => ((a || b) + ACCENTS[c]).normalize("NFC")).replace(/\\(ss|ae|AE|oe|OE|aa|AA|o|O|l|L)(?:\{\}|(?![A-Za-z]))/g, (_, k) => SPECIAL[k] ?? k).replace(/---/g, "\u2014").replace(/--/g, "\u2013").replace(/[{}]/g, "").replace(/\uE000/g, "{").replace(/\uE001/g, "}").replace(/\uE002/g, "\\").replace(/\s+/g, " ").trim();
 }
 function splitBibAuthors(raw) {
   const parts = [];
@@ -2049,7 +2049,7 @@ function parseBibTeX(text2) {
       venue: venueRaw ? clean2(unescapeLatex(venueRaw)) : void 0,
       publisher: f.publisher ? clean2(unescapeLatex(f.publisher)) : void 0,
       year: extractYear(f.year, f.date),
-      doi: f.doi ? clean2(unescapeLatex(f.doi)) : void 0,
+      doi: f.doi ? clean2(f.doi.replace(/\\([%&#_$])/g, "$1").replace(/[{}]/g, "")) : void 0,
       url: clean2(f.url) ?? (eprint && /arxiv/i.test(f.archiveprefix ?? "") ? `https://arxiv.org/abs/${eprint}` : void 0),
       abstract: f.abstract ? clean2(unescapeLatex(f.abstract)) : void 0,
       tags: splitTags(f.keywords || f.tags)
@@ -2146,7 +2146,7 @@ function parseBulkRefs(text2, format = "auto") {
   return resolved === "bibtex" ? parseBibTeX(trimmed) : resolved === "ris" ? parseRIS(trimmed) : parseCsv(trimmed);
 }
 var csvCell = (v) => {
-  const s = /^[=+\-@\t\r]/.test(v) ? "'" + v : v;
+  const s = /^(?:[\t\r\n]|\s*[=+\-@])/.test(v) ? "'" + v : v;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 function exportBulkRefs(docs, format) {

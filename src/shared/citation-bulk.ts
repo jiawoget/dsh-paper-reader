@@ -27,7 +27,7 @@ function makeEntry(r: Partial<BulkRefEntry>): BulkRefEntry | undefined {
 }
 function unescapeLatex(raw: string): string {
   return raw
-    .replace(/\\textbraceleft\{\}/g, '\uE000').replace(/\\textbraceright\{\}/g, '\uE001').replace(/\\textbackslash\{\}/g, '\uE002')
+    .replace(/\\textbraceleft\{\}|\\\{/g, '\uE000').replace(/\\textbraceright\{\}|\\\}/g, '\uE001').replace(/\\textbackslash\{\}/g, '\uE002')
     .replace(/\\textasciitilde\{\}/g, '~').replace(/\\textasciicircum\{\}/g, '^').replace(/\\([%&#_$])/g, '$1')
     .replace(/\\(['`^"~=.])\{?([A-Za-z])\}?/g, (_, c: string, ch: string) => (ch + ACCENTS[c]).normalize('NFC'))
     .replace(/\\([cvuHrk])(?:\{([A-Za-z])\}|\s+([A-Za-z]))/g, (_, c: string, a: string, b: string) => ((a || b) + ACCENTS[c]).normalize('NFC'))
@@ -94,7 +94,7 @@ function parseBibTeX(text: string): BulkRefEntry[] {
     const entry = makeEntry({
       title: f.title ? unescapeLatex(f.title) : undefined, authors: f.author ? splitBibAuthors(f.author) : undefined,
       venue: venueRaw ? clean(unescapeLatex(venueRaw)) : undefined, publisher: f.publisher ? clean(unescapeLatex(f.publisher)) : undefined,
-      year: extractYear(f.year, f.date), doi: f.doi ? clean(unescapeLatex(f.doi)) : undefined,
+      year: extractYear(f.year, f.date), doi: f.doi ? clean(f.doi.replace(/\\([%&#_$])/g, '$1').replace(/[{}]/g, '')) : undefined,
       url: clean(f.url) ?? (eprint && /arxiv/i.test(f.archiveprefix ?? '') ? `https://arxiv.org/abs/${eprint}` : undefined),
       abstract: f.abstract ? clean(unescapeLatex(f.abstract)) : undefined, tags: splitTags(f.keywords || f.tags)
     });
@@ -155,7 +155,7 @@ export function parseBulkRefs(text: string, format: BulkRefFormat | 'auto' = 'au
     : /^\s*@[a-z]+\s*[{(]/im.test(trimmed) ? 'bibtex' : /^\s*TY\s{1,2}-/m.test(trimmed) ? 'ris' : 'csv';
   return resolved === 'bibtex' ? parseBibTeX(trimmed) : resolved === 'ris' ? parseRIS(trimmed) : parseCsv(trimmed);
 }
-const csvCell = (v: string) => { const s = /^[=+\-@\t\r]/.test(v) ? "'" + v : v; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const csvCell = (v: string) => { const s = /^(?:[\t\r\n]|\s*[=+\-@])/.test(v) ? "'" + v : v; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 export function exportBulkRefs(docs: readonly DocumentInfo[], format: BulkRefFormat): string {
   if (format === 'bibtex') return docs.map(d => formatBibTeX(buildCitationMetadata(d))).join('\n\n') + (docs.length ? '\n' : '');
   if (format === 'ris') return docs.map(d => formatRIS(buildCitationMetadata(d))).join('\n\n') + (docs.length ? '\n' : '');

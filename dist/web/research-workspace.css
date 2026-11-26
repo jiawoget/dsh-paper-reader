@@ -1,17 +1,14 @@
-.abstract-reader {
-  max-width: 720px; margin: 18px auto 36px; padding: 24px 28px; border-radius: 10px;
-  border: 1px solid var(--line); background: var(--paper); color: var(--desk-ink); box-shadow: var(--shadow-sheet);
-}
+.abstract-reader { width: 100%; box-sizing: border-box; margin: 0; padding: clamp(22px, 4%, 36px) clamp(18px, 4.5%, 40px); background: var(--paper); color: var(--desk-ink); }
 .abstract-header { display: grid; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 .abstract-badge-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .abstract-badge, .library-kind-badge {
-  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.4;
   background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border);
-  font-size: 12px; font-weight: 600; line-height: 1.4;
 }
 .abstract-title { font-size: 21px; line-height: 1.32; font-weight: 650; overflow-wrap: anywhere; }
 .abstract-byline { color: var(--muted); font-size: 13px; line-height: 1.5; }
 .abstract-links { display: flex; flex-wrap: wrap; gap: 12px; }
+.abstract-links a { display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; }
 .abstract-body { margin-top: 18px; display: grid; gap: 12px; }
 .abstract-section-title { font-size: 13px; font-weight: 650; color: var(--muted); letter-spacing: 0.02em; }
 .abstract-paragraph { font-size: 15px; line-height: 1.72; overflow-wrap: anywhere; }
@@ -21,29 +18,28 @@
   background: var(--active-line); border-radius: 5px; box-shadow: 0 0 0 4px var(--active-line);
 }
 .abstract-attach-zone {
-  margin-top: 24px; padding: 20px 18px; border: 2px dashed var(--border-strong); border-radius: 10px;
-  background: var(--surface-sunken); display: flex; flex-direction: column; align-items: center;
-  text-align: center; gap: 8px; color: var(--desk-ink);
+  margin-top: 24px; padding: 20px 18px; border: 2px dashed var(--border-strong); border-radius: 10px; background: var(--surface-sunken);
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; color: var(--desk-ink);
 }
 .abstract-attach-zone > svg { color: var(--purple); }
 .abstract-attach-zone[data-drop="active"] { border-color: var(--purple); background: var(--surface-tint); }
+#reader:has(.abstract-attach-zone[data-drop="active"]) > .pdf-drop-overlay { opacity: 0; }
 .abstract-attach-title { font-size: 14px; font-weight: 650; }
-.abstract-attach-hint { max-width: 440px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.abstract-attach-hint { max-width: 440px; color: var(--muted); font-size: 13px; line-height: 1.5; text-wrap: balance; }
 .abstract-attach-error {
-  margin-top: 4px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--danger-border);
-  background: var(--danger-bg); color: var(--danger); font-size: 13px; line-height: 1.45;
+  margin-top: 4px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--danger-border); background: var(--danger-bg); color: var(--danger); font-size: 13px; line-height: 1.45;
 }
 .library-bulk-bar {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
-  margin-top: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-sunken);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-sunken);
 }
 .library-bulk-export { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .library-bulk-label { color: var(--muted); font-size: 12px; font-weight: 600; }
 .library-row-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 @media (pointer: coarse), (max-width: 700px) {
-  .abstract-reader { margin: 10px 8px 24px; padding: 16px 14px; }
+  .abstract-reader { padding: 16px 14px; }
   .abstract-title { font-size: 18px; }
-  .abstract-attach-zone .btn, .library-bulk-bar .btn { min-height: 44px; min-width: 44px; }
+  .abstract-attach-zone .btn, .library-bulk-bar .btn, .abstract-links a { min-height: 44px; min-width: 44px; }
   .library-bulk-bar { flex-direction: column; align-items: stretch; }
 }
 @media (prefers-reduced-motion: no-preference) {

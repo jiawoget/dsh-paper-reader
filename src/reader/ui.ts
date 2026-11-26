@@ -92,7 +92,14 @@ const localizedErrors: Record<string, string> = {
   'The model returned the original English passage. Retry the page translation.': '模型返回了英文原文而非译文，请重试本页翻译。',
   'Enter a valid 4-digit year.': '请输入有效的 4 位年份。',
   'Enter a valid DOI.': '请输入有效的 DOI。',
-  'The bundled sample paper metadata cannot be edited.': '内置示例论文的元数据不可编辑。'
+  'The bundled sample paper metadata cannot be edited.': '内置示例论文的元数据不可编辑。',
+  'Choose a PDF file.': '请选择 PDF 文件。',
+  'Choose a valid PDF of up to 80 MB.': '请选择不超过 80 MB 的有效 PDF 文件。',
+  'The uploaded PDF is damaged or unreadable.': '上传的 PDF 已损坏或无法读取。',
+  'The uploaded PDF has no readable pages.': '上传的 PDF 中没有可读取的页面。',
+  'Only abstract-only records can attach a PDF.': '仅「仅摘要」文献支持附加 PDF。',
+  'The file exceeds the size limit.': '文件超过了大小限制。',
+  'Import at most 500 references at once.': '单次最多导入 500 条文献引文。'
 };
 export const message = (error: unknown) => {
   if (!(error instanceof Error)) return readerLabel('The request failed.', '请求失败。');

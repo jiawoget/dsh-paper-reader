@@ -4,7 +4,7 @@ import { button, el, icon, message, readerLabel as label, responseJson, safeWeb 
 
 interface AbstractViewOptions {
   doc: DocumentInfo; sourceEl: HTMLElement; translationEl: HTMLElement; translations?: Record<string, string>;
-  targetLanguage?: string; onSelect: (hit: SelectionHit) => void; onAttached: (upgraded: DocumentInfo) => Promise<void>;
+  targetLanguage?: string; onSelect: (hit: SelectionHit) => void; onAttach: (file: File) => Promise<void>;
 }
 const PDF_LIMIT = 80 * 1024 * 1024;
 export const abstractOnlyLabel = () => label('Abstract only', '仅摘要');
@@ -17,14 +17,10 @@ export async function attachPdfToAbstract(docId: string, file: File): Promise<{ 
   }));
 }
 
-function externalLink(href: string, text: string): HTMLAnchorElement {
-  const link = el('a', 'external', text);
-  link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer';
-  return link;
-}
+const externalLink = (href: string, text: string) => Object.assign(el('a', 'external', text), { href, target: '_blank', rel: 'noopener noreferrer' });
 
 export function renderAbstractView({
-  doc, sourceEl, translationEl, translations = {}, targetLanguage = DEFAULT_TARGET_LANGUAGE, onSelect, onAttached
+  doc, sourceEl, translationEl, translations = {}, targetLanguage = DEFAULT_TARGET_LANGUAGE, onSelect, onAttach
 }: AbstractViewOptions): PageView {
   const events = new AbortController(), ev = { signal: events.signal }, titleText = doc.paperTitle || doc.title;
   const paragraphs = (doc.abstract ?? '').split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
@@ -75,21 +71,25 @@ export function renderAbstractView({
   const submitFile = async (file: File) => {
     if (busy) return;
     busy = true; attachBtn.disabled = true; errorEl.hidden = true; errorEl.textContent = '';
-    try { const { doc: upgraded } = await attachPdfToAbstract(doc.id, file); if (!events.signal.aborted) await onAttached(upgraded); }
+    try { await onAttach(file); }
     catch (error) { if (!events.signal.aborted) { errorEl.textContent = message(error); errorEl.hidden = false; } }
     finally { busy = false; attachBtn.disabled = false; fileInput.value = ''; }
   };
   fileInput.addEventListener('change', () => { const picked = fileInput.files?.[0]; if (picked) void submitFile(picked); }, ev);
   const hasFiles = (e: DragEvent) => Boolean(e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files'));
-  const clearOverlay = () => document.getElementById('reader')?.removeAttribute('data-pdf-drop');
-  zone.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); clearOverlay(); depth++; zone.dataset.drop = 'active'; }, ev);
-  zone.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.stopPropagation(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; zone.dataset.drop = 'active'; }, ev);
-  zone.addEventListener('dragleave', e => { e.stopPropagation(); depth = Math.max(0, depth - 1); if (!depth) delete zone.dataset.drop; }, ev);
+  const clearZone = () => { depth = 0; delete zone.dataset.drop; };
+  zone.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; zone.dataset.drop = 'active'; }, ev);
+  zone.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; zone.dataset.drop = 'active'; }, ev);
+  zone.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) delete zone.dataset.drop; }, ev);
   zone.addEventListener('drop', e => {
     if (!hasFiles(e)) return;
-    e.preventDefault(); e.stopPropagation(); clearOverlay(); depth = 0; delete zone.dataset.drop;
-    const dropped = e.dataTransfer?.files?.[0]; if (dropped) void submitFile(dropped);
+    e.preventDefault(); clearZone();
+    const files = e.dataTransfer?.files;
+    if (!files?.length) return;
+    if (files.length > 1) { errorEl.textContent = label('Drop a single PDF file to attach.', '请拖入单个 PDF 文件。'); errorEl.hidden = false; return; }
+    void submitFile(files[0]);
   }, ev);
+  window.addEventListener('dragend', clearZone, ev);
   zone.append(
     icon('import', 22), el('strong', 'abstract-attach-title', label('Attach PDF for full-text reading', '附加 PDF 以阅读与检索全文')),
     el('p', 'abstract-attach-hint', label('Drop a PDF here (up to 80 MB) or choose a file. Tags, notes, and metadata are preserved.', '拖入 PDF（最大 80 MB）或点击选择文件。标签、笔记与元数据将完整保留。')),
