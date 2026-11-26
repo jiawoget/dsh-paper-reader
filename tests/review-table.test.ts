@@ -46,11 +46,14 @@ test('screening respects strictCriterion/threshold/manualOverride, syncs doc_met
   const mem = new DatabaseSync(':memory:'); t.after(() => mem.close());
   for (const sql of ['CREATE TABLE doc_pages(docId TEXT, page INTEGER, text TEXT, updatedAt INTEGER)', 'CREATE VIRTUAL TABLE doc_pages_fts USING fts5(docId, page, text)', 'CREATE TABLE topics(id TEXT PRIMARY KEY)', 'CREATE TABLE graph_cache(cacheKey TEXT PRIMARY KEY)', 'CREATE TABLE paper_cards(doc_id TEXT PRIMARY KEY)']) mem.exec(sql);
   assert.equal(hasResearchSchema(mem), false); ensureResearchSchema(mem); assert.equal(hasResearchSchema(mem), true);
-
-  const ctx = fakeHost((_sys, data) => JSON.stringify({ criteria: {
-    c1: { decision: 'yes', quote: 'randomized controlled clinical trial', page: null, reasoning: 'RCT' },
-    c2: { decision: String((data.paper as { title?: string })?.title ?? '').includes('Alpha') ? 'yes' : 'no', quote: 'semaglutide 2.4 mg', page: null, reasoning: 'Dose' }
-  } }));
+  let onScreen: (() => Promise<void>) | undefined;
+  const ctx = fakeHost(async (_sys, data) => {
+    if (onScreen) { const fn = onScreen; onScreen = undefined; await fn(); }
+    return JSON.stringify({ criteria: {
+      c1: { decision: 'yes', quote: 'randomized controlled clinical trial', page: null, reasoning: 'RCT' },
+      c2: { decision: String((data.paper as { title?: string })?.title ?? '').includes('Alpha') ? 'yes' : 'no', quote: 'semaglutide 2.4 mg', page: null, reasoning: 'Dose' }
+    } });
+  });
   const store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id)), act = createServices({ root, ctx, library, store });
   assert.equal((await act('review.get', {})).table.preset, 'cs_ai');
   const d1 = await act('library.createAbstract', { title: 'Alpha Trial', authors: 'A et al.', year: '2024', abstract: 'A randomized controlled clinical trial of semaglutide 2.4 mg in adults.' });
@@ -61,21 +64,24 @@ test('screening respects strictCriterion/threshold/manualOverride, syncs doc_met
   assert.equal(scr.processedDocs, 2);
   assert.ok(store.listDocMeta(d1.doc.id).get(d1.doc.id)?.tags.includes('screen:yes') && store.listDocMeta(d2.doc.id).get(d2.doc.id)?.tags.includes('screen:no'));
   const d2Cells = scr.cells.filter(c => c.docId === d2.doc.id && c.colId !== '__screen__');
-  assert.equal(computeScreeningStatus(saved.table.criteria, d2Cells, true, 0.4).decision, 'no');
-  assert.equal(computeScreeningStatus(saved.table.criteria, d2Cells, false, 0.4).decision, 'yes');
+  assert.equal(computeScreeningStatus(saved.table.criteria, d2Cells, true, 0.4).decision, 'no'); assert.equal(computeScreeningStatus(saved.table.criteria, d2Cells, false, 0.4).decision, 'yes');
   assert.equal(computeScreeningStatus(saved.table.criteria, d2Cells, false, 0.8).decision, 'no');
+  assert.deepEqual(computeScreeningStatus([{ id: 'c1', label: 'RCT' }, { id: 'c2', label: 'Semaglutide', required: true }], d2Cells, false, 0.4), { decision: 'no', score: 0.5, manualOverride: false, included: false });
   const locked = await act('review.setCell', { docId: d2.doc.id, colId: '__screen__', value: 'maybe', reasoning: 'Borderline' });
   assert.equal(locked.cell.manualOverride, true); assert.ok(locked.meta?.tags.includes('screen:maybe') && !store.listDocMeta(d2.doc.id).get(d2.doc.id)?.tags.includes('screen:no'));
-  await act('review.screen', { docIds: [d2.doc.id], force: true });
-  assert.ok(store.listDocMeta(d2.doc.id).get(d2.doc.id)?.tags.includes('screen:maybe'));
-  for (const bad of [{ preset: 'bogus' }, { threshold: 1.5 }, { columns: [] }, { columns: [{ id: '__screen__', name: 'X', prompt: 'Y', type: 'text' }] }]) {
+  await act('review.screen', { docIds: [d2.doc.id], force: true }); assert.ok(store.listDocMeta(d2.doc.id).get(d2.doc.id)?.tags.includes('screen:maybe'));
+  onScreen = async () => { await act('review.setCell', { docId: d1.doc.id, colId: 'screen:c1', value: 'no', page: 5 }); };
+  await act('review.screen', { docIds: [d1.doc.id], force: true });
+  const d1Cells = new Map((await act('review.get', {})).cells.filter(c => c.docId === d1.doc.id).map(c => [c.colId, c]));
+  assert.equal(d1Cells.get('screen:c1')?.value, 'no'); assert.equal(d1Cells.get('screen:c1')?.manualOverride, true); assert.equal(d1Cells.get('screen:c1')?.page, null);
+  assert.equal(d1Cells.get('__screen__')?.value, 'no'); assert.ok(store.listDocMeta(d1.doc.id).get(d1.doc.id)?.tags.includes('screen:no'));
+  for (const bad of [{ preset: 'bogus' }, { threshold: 1.5 }, { columns: [] }, { columns: [{ id: '__screen__', name: 'X', prompt: 'Y', type: 'text' }] }])
     await assert.rejects(() => Promise.resolve(act('review.saveTable', bad)), statusIs(400));
-  }
 });
 
 test('extraction enforces manualOverride lock, Pilot(3), Abort/resume, Attach PDF upgrade, delete cascade, and safe CSV/MD export', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'reader-review-ext-')); t.after(() => rm(root, { recursive: true, force: true }));
-  let calls = 0, active = 0, maxActive = 0, siblingAborted = false, abortMode = false, deleteMidId = '';
+  let calls = 0, active = 0, maxActive = 0, siblingAborted = false, abortMode = false, deleteMidId = '', deleteQueuedId = '';
   const calledTitles: string[] = [], store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id));
   const ctx = fakeHost(async (_sys, data, sig) => {
     calls++; active++; maxActive = Math.max(maxActive, active);
@@ -83,6 +89,7 @@ test('extraction enforces manualOverride lock, Pilot(3), Abort/resume, Attach PD
     try {
       if (abortMode) await new Promise<void>((res, rej) => { const tm = setTimeout(res, paper.title === 'Doc 0' ? 10 : 80); sig?.addEventListener('abort', () => { clearTimeout(tm); siblingAborted = true; rej(new Error('aborted')); }, { once: true }); });
       if (deleteMidId && paper.title === 'Doc 4') { await act('library.delete', { id: deleteMidId }); deleteMidId = ''; }
+      if (deleteQueuedId) { if (paper.title === 'Doc 0') { await act('library.delete', { id: deleteQueuedId }); deleteQueuedId = ''; } else if (paper.title === 'Doc 1') await new Promise(r => setTimeout(r, 20)); }
       return JSON.stringify({ cells: {
         method: { value: `M-${paper.sourceKind}-${calls}`, quote: paper.sourceKind === 'pdf' ? 'block table' : 'Semaglutide 2.4 mg weekly', page: paper.sourceKind === 'pdf' ? 6 : null, reasoning: 'R' },
         limitations: { value: '=CMD|"/C calc"', quote: 'hallucinated quote text', page: 99, reasoning: 'L' }
@@ -101,7 +108,9 @@ test('extraction enforces manualOverride lock, Pilot(3), Abort/resume, Attach PD
   assert.equal(pilot.processedDocs, 3); assert.equal(pilot.skippedDocs, 1); assert.equal(calledTitles.includes('Doc 0'), false);
   deleteMidId = docs[4].id; await act('review.extract', { mode: 'all', docIds: docs.map(d => d.id) });
   const db = new DatabaseSync(path.join(root, 'reader.sqlite'), { readOnly: true }); t.after(() => db.close());
-  assert.equal(Number((db.prepare('SELECT COUNT(*) AS n FROM extraction_cells WHERE doc_id=?').get(docs[4].id) as { n: number }).n), 0);
+  const cellCount = (id: string) => Number((db.prepare('SELECT COUNT(*) AS n FROM extraction_cells WHERE doc_id=?').get(id) as { n: number }).n);
+  deleteQueuedId = docs[2].id; const qRes = await act('review.extract', { mode: 'reextract', docIds: docs.slice(0, 4).map(d => d.id) });
+  assert.equal(cellCount(docs[4].id), 0); assert.equal(cellCount(docs[2].id), 0); assert.equal(qRes.processedDocs, 3); assert.equal(qRes.failedDocs, 0); assert.equal(new Set(qRes.cells.map(c => c.docId)).size, 3);
 
   await act('review.setCell', { docId: docs[0].id, colId: 'method', value: 'MANUAL-LOCK, "quoted"\nline2', reasoning: 'Human' });
   const beforeCalls = calls;
@@ -120,10 +129,9 @@ test('extraction enforces manualOverride lock, Pilot(3), Abort/resume, Attach PD
   const injCells: ExtractionCell[] = ['=1+1', '+2', '-3', '@SUM(A1)', '\t=1', '\r+1', '  =EVIL()'].map((v, i) => ({ tableId: 't', docId: `d${i}`, colId: 'c', value: v, quote: '', page: null, reasoning: '', verified: false, manualOverride: false, sourceKind: 'abstract', status: 'done', updatedAt: 0 }));
   const injCsv = exportReviewCsv(injTbl, injCells.map(c => ({ id: c.docId, kind: 'abstract', title: 'P' })), injCells);
   for (const tok of ["'=1+1", "'+2", "'-3", "'@SUM(A1)", "'  =EVIL()"]) assert.ok(injCsv.includes(tok));
-  assert.ok(exportReviewMarkdown(injTbl, [{ id: 'd0', kind: 'abstract', title: 'A|B\nC' }], injCells.slice(0, 1)).includes('A\\|B C'));
+  assert.ok(exportReviewMarkdown(injTbl, [{ id: 'd0', kind: 'abstract', title: 'A|B\n\\|x\\|' }], injCells.slice(0, 1)).includes('A\\|B \\|x\\|'));
 
-  await act('library.delete', { id: docs[0].id });
-  assert.equal(Number((db.prepare('SELECT COUNT(*) AS n FROM extraction_cells WHERE doc_id=?').get(docs[0].id) as { n: number }).n), 0);
+  await act('library.delete', { id: docs[0].id }); assert.equal(cellCount(docs[0].id), 0);
 
   const prevHome = process.env.PAPER_READER_HOME; process.env.PAPER_READER_HOME = root;
   t.after(() => { if (prevHome === undefined) delete process.env.PAPER_READER_HOME; else process.env.PAPER_READER_HOME = prevHome; });

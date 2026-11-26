@@ -4813,7 +4813,8 @@ function computeScreeningStatus(criteria, cells, strictCriterion, threshold) {
     return { decision: fb, score: 0, manualOverride: false, included: fb !== "no" };
   }
   const t = Math.max(0.1, Math.min(1, Number.isFinite(threshold) ? threshold : 0.6));
-  const decision = strictCriterion && evaluated.includes("no") || evaluated.every((d) => d === "no") ? "no" : score >= t ? "yes" : evaluated.includes("maybe") && score >= t * 0.5 ? "maybe" : "no";
+  const reqNo = criteria.some((c) => c.required && asDecision(map.get(`screen:${c.id}`)?.value ?? "") === "no");
+  const decision = strictCriterion && evaluated.includes("no") || reqNo || evaluated.every((d) => d === "no") ? "no" : score >= t ? "yes" : evaluated.includes("maybe") && score >= t * 0.5 ? "maybe" : "no";
   return { decision, score, manualOverride: false, included: decision !== "no" };
 }
 function indexCellsByDoc(cells) {
@@ -4840,7 +4841,7 @@ function buildExportRows(table, docs, cells) {
 function exportReviewCsv(table, docs, cells) {
   return buildExportRows(table, docs, cells).map((row) => row.map(csvCell).join(",")).join("\n") + "\n";
 }
-var mdCell = (v) => v.replace(/\r?\n|\r/g, " ").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+var mdCell = (v) => v.replace(/\r?\n|\r/g, " ").replace(/(?<!\\)\|/g, "\\|").replace(/\s+/g, " ").trim();
 function exportReviewMarkdown(table, docs, cells) {
   const [header, ...rows] = buildExportRows(table, docs, cells), line = (cols) => "| " + cols.map(mdCell).join(" | ") + " |";
   return [line(header), "| " + header.map(() => "---").join(" | ") + " |", ...rows.map(line)].join("\n") + "\n";
@@ -4904,10 +4905,9 @@ function writeCell(db, c, preserveManual) {
   const existing = db.prepare("SELECT * FROM extraction_cells WHERE table_id=? AND doc_id=? AND col_id=?").get(c.tableId, c.docId, c.colId);
   return existing ? decodeCell(existing) : c;
 }
-function syncScreeningMeta(deps, docId, decision) {
-  if (!deps.library.hasSync(docId)) return void 0;
-  const kept = (deps.store.listDocMeta(docId).get(docId)?.tags ?? []).filter((t) => !/^screen:(yes|no|maybe)$/i.test(t)).slice(0, 19);
-  return deps.store.updateDocTriage({ docId, tags: [...kept, `screen:${decision}`] });
+function syncScreeningMeta(db, docId, decision) {
+  const kept = (listDocMeta(db, docId).get(docId)?.tags ?? []).filter((t) => !/^screen:(yes|no|maybe)$/i.test(t)).slice(0, 19);
+  return updateDocTriage(db, { docId, tags: [...kept, `screen:${decision}`] });
 }
 function parseIdItems(raw, label, min, max, map) {
   if (!Array.isArray(raw) || raw.length < min || raw.length > max) throw new ServiceError(400, `Provide ${min} to ${max} ${label}.`);
@@ -4982,41 +4982,50 @@ async function resolveDocIds(raw, deps, required) {
   if (required && !ids.length) throw new ServiceError(400, "No selected papers were found in the library.");
   return ids;
 }
-async function runBatchJobs(tableId, kind, jobs, skippedDocs, preserveManual, deps, options, runJob) {
+async function runBatchJobs(table, kind, jobs, skippedDocs, preserveManual, deps, options, runJob) {
   const savedAll = [], runAc = new AbortController(), onAbort = () => runAc.abort();
   let processedDocs = 0, failedDocs = 0, cursor = 0;
-  if (options?.signal?.aborted) return { tableId, cells: [], processedDocs: 0, skippedDocs, failedDocs: 0, aborted: true };
+  if (options?.signal?.aborted) return { tableId: table.id, cells: [], processedDocs: 0, skippedDocs, failedDocs: 0, aborted: true };
   options?.signal?.addEventListener("abort", onAbort, { once: true });
   const worker2 = async () => {
     while (cursor < jobs.length && !runAc.signal.aborted) {
-      const job = jobs[cursor++], prep = await preparePaper(job.docId, deps, job.hints, job.forceIndex);
-      if (runAc.signal.aborted) return;
+      const job = jobs[cursor++];
+      let sourceKind = "pdf";
+      if (!deps.library.hasSync(job.docId)) continue;
       try {
-        const res = await runJob(job, prep, runAc.signal);
+        const prep = await preparePaper(job.docId, deps, job.hints, job.forceIndex);
+        sourceKind = prep.sourceKind;
+        if (runAc.signal.aborted) return;
+        const cells = await runJob(job, prep, runAc.signal);
         if (runAc.signal.aborted || !deps.library.hasSync(job.docId)) continue;
-        const persisted = deps.store.withDb(true, (db) => res.cells.map((c) => writeCell(db, c, preserveManual)));
-        if (res.screenDecision) {
-          const eff = persisted.find((c) => c.colId === "__screen__")?.value;
-          syncScreeningMeta(deps, job.docId, isDecision(eff) ? eff : res.screenDecision);
-        }
+        const persisted = deps.store.withDb(true, (db) => {
+          const saved = cells.map((c) => writeCell(db, c, preserveManual));
+          if (kind === "screen") {
+            const st = computeScreeningStatus(table.criteria, listTableCells(db, table.id, [job.docId]), table.strictCriterion, table.threshold);
+            const sum = writeCell(db, summaryCell(table.id, job.docId, st, saved.some((c) => c.verified), sourceKind, Date.now()), true);
+            saved.push(sum);
+            syncScreeningMeta(db, job.docId, isDecision(sum.value) ? sum.value : st.decision);
+          }
+          return saved;
+        });
         savedAll.push(...persisted);
         processedDocs++;
         options?.onDelta?.(JSON.stringify({ kind, docId: job.docId, processedDocs, totalDocs: jobs.length, cells: persisted }));
       } catch (err) {
-        if (runAc.signal.aborted) return;
+        if (runAc.signal.aborted || !deps.library.hasSync(job.docId)) continue;
         failedDocs++;
-        if (!deps.library.hasSync(job.docId)) continue;
         const now = Date.now(), msg = (err instanceof Error ? err.message : "Request failed.").slice(0, 500);
-        savedAll.push(...deps.store.withDb(true, (db) => job.errorColIds.map((colId) => writeCell(db, { tableId, docId: job.docId, colId, value: "", quote: "", page: null, reasoning: msg, verified: false, manualOverride: false, sourceKind: prep.sourceKind, status: "error", updatedAt: now }, preserveManual))));
+        savedAll.push(...deps.store.withDb(true, (db) => job.errorColIds.map((colId) => writeCell(db, { tableId: table.id, docId: job.docId, colId, value: "", quote: "", page: null, reasoning: msg, verified: false, manualOverride: false, sourceKind, status: "error", updatedAt: now }, preserveManual))));
       }
     }
   };
   try {
     await Promise.all(Array.from({ length: Math.min(REVIEW_CONCURRENCY, jobs.length) }, worker2));
   } finally {
+    runAc.abort();
     options?.signal?.removeEventListener("abort", onAbort);
   }
-  return { tableId, cells: savedAll, processedDocs, skippedDocs, failedDocs, aborted: runAc.signal.aborted };
+  return { tableId: table.id, cells: savedAll, processedDocs, skippedDocs, failedDocs, aborted: Boolean(options?.signal?.aborted) };
 }
 async function getReviewTable(input, deps) {
   const { table, tables } = ensureTable(deps.store, optTableId(input)), docIds = (await deps.library.list()).map((d) => d.id);
@@ -5052,19 +5061,15 @@ async function runReviewScreening(input, deps, options) {
       skippedDocs++;
       return void 0;
     }
-    return { docId, needed, map, hints: needed.map((c) => c.label), errorColIds: needed.map((c) => `screen:${c.id}`) };
+    return { docId, needed, hints: needed.map((c) => c.label), errorColIds: needed.map((c) => `screen:${c.id}`) };
   }).filter((j) => Boolean(j));
-  return runBatchJobs(table.id, "screen", jobs, skippedDocs, true, deps, options, async (job, prep, signal) => {
+  return runBatchJobs(table, "screen", jobs, skippedDocs, true, deps, options, async (job, prep, signal) => {
     const rawMap = await callJsonMap(deps, SCREEN_SYSTEM, { paper: prep.material, criteria: job.needed }, "criteria", { signal, questionModel: input.questionModel });
-    const now = Date.now(), nextMap = new Map(job.map);
-    const batch = job.needed.map((cr) => {
+    const now = Date.now();
+    return job.needed.map((cr) => {
       const entry = isObject(rawMap[cr.id]) ? rawMap[cr.id] : {}, dec = typeof entry.decision === "string" ? entry.decision.trim().toLowerCase() : "maybe";
-      const cell = verifiedCell(table.id, job.docId, `screen:${cr.id}`, isDecision(dec) ? dec : "maybe", entry, prep, now);
-      nextMap.set(cell.colId, cell);
-      return cell;
+      return verifiedCell(table.id, job.docId, `screen:${cr.id}`, isDecision(dec) ? dec : "maybe", entry, prep, now);
     });
-    const st = computeScreeningStatus(table.criteria, nextMap, table.strictCriterion, table.threshold);
-    return { cells: [...batch, summaryCell(table.id, job.docId, st, batch.some((c) => c.verified), prep.sourceKind, now)], screenDecision: st.decision };
   });
 }
 async function runReviewExtraction(input, deps, options) {
@@ -5093,16 +5098,16 @@ async function runReviewExtraction(input, deps, options) {
       skippedDocs++;
       return void 0;
     }
-    return { docId, cols, hints: cols.map((c) => `${c.name} ${c.prompt}`), errorColIds: cols.map((c) => c.id), forceIndex: mode === "reextract" };
+    return { docId, cols, hints: cols.map((c) => c.name), errorColIds: cols.map((c) => c.id), forceIndex: mode === "reextract" };
   }).filter((j) => Boolean(j));
   if (mode === "pilot") jobs = jobs.slice(0, PILOT_LIMIT);
-  return runBatchJobs(table.id, "extract", jobs, skippedDocs, preserveManual, deps, options, async (job, prep, signal) => {
+  return runBatchJobs(table, "extract", jobs, skippedDocs, preserveManual, deps, options, async (job, prep, signal) => {
     const rawCells = await callJsonMap(deps, EXTRACT_SYSTEM, { paper: prep.material, columns: job.cols }, "cells", { signal, questionModel: input.questionModel });
     const now = Date.now();
-    return { cells: job.cols.map((col2) => {
+    return job.cols.map((col2) => {
       const entry = isObject(rawCells[col2.id]) ? rawCells[col2.id] : {};
       return verifiedCell(table.id, job.docId, col2.id, cellText(entry.value) || "Not reported", entry, prep, now);
-    }) };
+    });
   });
 }
 async function setReviewCell(input, deps) {
@@ -5115,19 +5120,15 @@ async function setReviewCell(input, deps) {
   const value = isSum || isCrit ? rawVal.toLowerCase() : rawVal, sourceKind = doc.kind === "abstract" ? "abstract" : "pdf";
   const prevRow = deps.store.withDb(false, (db) => db.prepare("SELECT * FROM extraction_cells WHERE table_id=? AND doc_id=? AND col_id=?").get(table.id, docId, colId)), prev = prevRow ? decodeCell(prevRow) : void 0;
   const quote = input.quote !== void 0 ? stringValue(input.quote, "quote", 2e3) : prev?.quote ?? "", reasoning = input.reasoning !== void 0 ? stringValue(input.reasoning, "reasoning", 2e3) : prev?.reasoning ?? "";
-  const reqPage = input.page === void 0 ? prev?.page ?? null : input.page === null ? null : pageNumber(input.page);
+  const reqPage = sourceKind === "abstract" || input.page === null ? null : input.page === void 0 ? prev?.page ?? null : pageNumber(input.page);
   const check = input.quote !== void 0 ? verifyQuote({ quote, page: reqPage, sourceKind, pages: sourceKind === "pdf" ? deps.store.withDb(false, (db) => getDocPages(db, docId)) : [], abstract: doc.abstract }) : void 0;
-  const cell = deps.store.withDb(true, (db) => writeCell(db, { tableId: table.id, docId, colId, value, quote, page: check ? check.page : reqPage, reasoning, verified: check ? check.verified : prev?.verified ?? false, manualOverride: true, sourceKind, status: "done", updatedAt: Date.now() }, false));
-  let meta;
-  if (isSum) meta = syncScreeningMeta(deps, docId, value);
-  else if (isCrit) {
-    const st = computeScreeningStatus(table.criteria, deps.store.withDb(false, (db) => listTableCells(db, table.id, [docId])), table.strictCriterion, table.threshold);
-    if (!st.manualOverride) {
-      deps.store.withDb(true, (db) => writeCell(db, summaryCell(table.id, docId, st, cell.verified, sourceKind, Date.now()), true));
-      meta = syncScreeningMeta(deps, docId, st.decision);
-    }
-  }
-  return { cell, ...meta ? { meta } : {} };
+  return deps.store.withDb(true, (db) => {
+    const cell = writeCell(db, { tableId: table.id, docId, colId, value, quote, page: check ? check.page : reqPage, reasoning, verified: check ? check.verified : prev?.verified ?? false, manualOverride: true, sourceKind, status: "done", updatedAt: Date.now() }, false);
+    const st = isCrit ? computeScreeningStatus(table.criteria, listTableCells(db, table.id, [docId]), table.strictCriterion, table.threshold) : void 0;
+    if (st && !st.manualOverride) writeCell(db, summaryCell(table.id, docId, st, cell.verified, sourceKind, Date.now()), true);
+    const dec = isSum ? value : st && !st.manualOverride ? st.decision : void 0;
+    return { cell, ...dec ? { meta: syncScreeningMeta(db, docId, dec) } : {} };
+  });
 }
 async function exportReviewTable(input, deps) {
   const format = input.format;

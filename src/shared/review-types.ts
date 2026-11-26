@@ -86,7 +86,8 @@ export function computeScreeningStatus(
   if (sum?.manualOverride && sumVal) return { decision: sumVal, score, manualOverride: true, included: sumVal !== 'no' };
   if (!evaluated.length) { const fb = sumVal ?? 'maybe'; return { decision: fb, score: 0, manualOverride: false, included: fb !== 'no' }; }
   const t = Math.max(0.1, Math.min(1, Number.isFinite(threshold) ? threshold : 0.6));
-  const decision: ReviewDecision = (strictCriterion && evaluated.includes('no')) || evaluated.every(d => d === 'no') ? 'no'
+  const reqNo = criteria.some(c => c.required && asDecision(map.get(`screen:${c.id}`)?.value ?? '') === 'no');
+  const decision: ReviewDecision = (strictCriterion && evaluated.includes('no')) || reqNo || evaluated.every(d => d === 'no') ? 'no'
     : score >= t ? 'yes' : evaluated.includes('maybe') && score >= t * 0.5 ? 'maybe' : 'no';
   return { decision, score, manualOverride: false, included: decision !== 'no' };
 }
@@ -111,7 +112,7 @@ function buildExportRows(table: ReviewTable, docs: readonly DocumentInfo[], cell
 export function exportReviewCsv(table: ReviewTable, docs: readonly DocumentInfo[], cells: readonly ExtractionCell[]): string {
   return buildExportRows(table, docs, cells).map(row => row.map(csvCell).join(',')).join('\n') + '\n';
 }
-const mdCell = (v: string): string => v.replace(/\r?\n|\r/g, ' ').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
+const mdCell = (v: string): string => v.replace(/\r?\n|\r/g, ' ').replace(/(?<!\\)\|/g, '\\|').replace(/\s+/g, ' ').trim();
 export function exportReviewMarkdown(table: ReviewTable, docs: readonly DocumentInfo[], cells: readonly ExtractionCell[]): string {
   const [header, ...rows] = buildExportRows(table, docs, cells), line = (cols: string[]) => '| ' + cols.map(mdCell).join(' | ') + ' |';
   return [line(header), '| ' + header.map(() => '---').join(' | ') + ' |', ...rows.map(line)].join('\n') + '\n';
