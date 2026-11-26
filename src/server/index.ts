@@ -160,7 +160,9 @@ export function apply(ctx:ReaderHost):void {
       }
       case 'ai':
       case 'chat.ask':
-      case 'library.chat': {
+      case 'library.chat':
+      case 'review.screen':
+      case 'review.extract': {
         const op = body.op;
         if (req.headers.get('accept')?.includes('application/x-ndjson')) {
           const encoder = new TextEncoder();

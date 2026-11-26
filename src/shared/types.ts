@@ -8,6 +8,10 @@ import type {
   LibraryChatInput, LibraryChatResult, PaperCardsInput, PaperCardsResult,
   TrendPapersInput, TrendPapersResult, TrendQueryInput, TrendQueryResult
 } from './research-types.js';
+import type {
+  ReviewBatchResult, ReviewExportInput, ReviewExportResult, ReviewExtractInput, ReviewGetInput, ReviewGetResult,
+  ReviewSaveTableInput, ReviewSaveTableResult, ReviewScreenInput, ReviewSetCellInput, ReviewSetCellResult
+} from './review-types.js';
 
 export type ReadingSide = 'source' | 'translation';
 
@@ -203,6 +207,12 @@ export interface Operations {
   'trends.papers': [TrendPapersInput, TrendPapersResult];
   'library.cards': [PaperCardsInput, PaperCardsResult];
   'library.chat': [LibraryChatInput, LibraryChatResult];
+  'review.get': [ReviewGetInput, ReviewGetResult];
+  'review.saveTable': [ReviewSaveTableInput, ReviewSaveTableResult];
+  'review.screen': [ReviewScreenInput, ReviewBatchResult];
+  'review.extract': [ReviewExtractInput, ReviewBatchResult];
+  'review.setCell': [ReviewSetCellInput, ReviewSetCellResult];
+  'review.export': [ReviewExportInput, ReviewExportResult];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
