@@ -200,6 +200,70 @@ async function run(): Promise<void> {
       await ws.locator('.cm-mobile-tabs').getByRole('button', { name: 'List', exact: true }).click();
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await page.unroute('**/api/paper-reader/action');
+
+      let trendsQueryCount = 0;
+      const mkCells = (spec: [number, number, number | null, boolean, number][]) =>
+        spec.map(([year, volume, yoyGrowth, lowBase, citationHeat]) => ({ year, volume, isYtd: year === 2026, yoyGrowth, lowBase, citations: citationHeat * 20, citationHeat }));
+      const ftPaper = { id: 'FT1', openAlexId: 'W901', title: 'Draft-Verify Decoding for Fast LLMs', authors: ['Jane Doe', 'John Roe'], firstAuthor: 'Jane Doe', lastAuthor: 'John Roe', year: 2025, venue: 'ICML', citationCount: 185, source: 'openalex', inLibrary: false, oaPdfUrl: 'https://arxiv.org/pdf/2501.00001.pdf', abstract: 'Speculative decoding accelerates generation.' };
+      const ftTopics = [
+        { topicId: 'T1', topicName: 'KV Cache Compression', totalVolume: 480, recent2yr: 300, prior2yr: 120, growth: 1.5, lowBase: false, citationHeat: 64.2, localCount: 1, localDocIds: ['pagedattention'], cells: mkCells([[2022, 40, 0.25, false, 45], [2023, 80, 1, false, 70], [2024, 130, 0.625, false, 90], [2025, 170, 0.308, false, 60], [2026, 60, null, false, 15]]) },
+        { topicId: 'T2', topicName: 'Speculative Decoding', totalVolume: 95, recent2yr: 60, prior2yr: 6, growth: 9, lowBase: true, citationHeat: 42.5, localCount: 0, localDocIds: [], cells: mkCells([[2022, 2, 0, true, 10], [2023, 4, 1, true, 20], [2024, 24, 5, true, 40], [2025, 48, 1, false, 55], [2026, 17, null, false, 12]]) }
+      ];
+      await page.route('**/api/paper-reader/action', async route => {
+        const body = route.request().postDataJSON() as { op?: string; payload?: { query?: string; topicId?: string; year?: number; sort?: string } };
+        if (body.op === 'trends.query') {
+          trendsQueryCount++;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: body.payload?.query ?? 'LLM inference', source: 'openalex', windowYears: 5, years: [2022, 2023, 2024, 2025, 2026], ytdYear: 2026, metric: 'volume', sort: 'fastest_growing', blindSpotsOnly: false, topics: ftTopics, degraded: [], fromCache: true, cachedAt: Date.now() }) });
+          return;
+        }
+        if (body.op === 'trends.papers') {
+          const isLib = body.payload?.sort === 'library', papers = isLib ? [{ ...seedP, localDocId: 'pagedattention', primaryTopicId: 'T1', primaryTopicName: 'KV Cache Compression' }] : [{ ...ftPaper, primaryTopicId: body.payload?.topicId ?? 'T2', primaryTopicName: 'Speculative Decoding' }];
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: 'LLM inference', topicId: body.payload?.topicId ?? 'T2', topicName: isLib ? 'KV Cache Compression' : 'Speculative Decoding', year: body.payload?.year ?? 2025, source: 'openalex', sort: body.payload?.sort ?? 'representative', papers, degraded: [], fromCache: false }) });
+          return;
+        }
+        await route.fallback();
+      });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await ws.locator('.rw-nav-btn[data-view="field-trends"]').click();
+      assert.equal(await ws.getAttribute('data-rail-collapsed'), 'true');
+      await ws.locator('.ft-starter-chip', { hasText: 'LLM inference' }).click();
+      await ws.locator('.ft-table').waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.ft-col-year.is-ytd').innerText(), '2026* YTD');
+      assert.equal(await ws.locator('.ft-drill').isVisible(), false);
+      assert.equal(await ws.locator('.ft-pill.is-cache').count(), 1);
+      await ws.locator('.ft-seg-btn[data-metric="growth"]').click();
+      assert.equal(await ws.locator('.ft-cell[data-topic-id="T2"][data-year="2024"]').getAttribute('data-low-base'), 'true');
+      assert.equal((await ws.locator('.ft-cell[data-topic-id="T1"][data-year="2026"]').innerText()).trim(), 'YTD*');
+      await ws.locator('.ft-seg-btn[data-metric="citations"]').click();
+      assert.equal((await ws.locator('.ft-cell[data-topic-id="T1"][data-year="2024"]').innerText()).trim(), '90');
+      await ws.locator('.ft-sort').selectOption('blind_spots_first');
+      assert.equal((await ws.locator('.ft-topic-name').first().innerText()).trim(), 'Speculative Decoding');
+      await ws.locator('.ft-blind-btn').click(); assert.equal(await ws.locator('.ft-topic-name').count(), 1);
+      await ws.locator('.ft-blind-btn').click(); assert.equal(await ws.locator('.ft-topic-name').count(), 2);
+      assert.equal(trendsQueryCount, 1);
+      await ws.locator('.ft-cell[data-topic-id="T2"][data-year="2024"]').focus(); await page.keyboard.press('ArrowRight');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.year), '2025');
+      await ws.locator('.ft-cell[data-topic-id="T2"][data-year="2025"]').click(); await ws.locator('.ft-drill').waitFor({ state: 'visible' });
+      await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-save-abs').click();
+      await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-open-btn').waitFor({ state: 'visible' });
+      assert.equal((await ws.locator('tr', { hasText: 'Speculative Decoding' }).locator('.ft-lib-btn').innerText()).trim(), '★ 1');
+      await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-open-btn').click();
+      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      assert.match(await page.locator('.return-workspace-go').innerText(), /Field Trends/);
+      await page.locator('.return-workspace-go').click(); await ws.locator('.ft-drill').waitFor({ state: 'visible' });
+      await page.keyboard.press('Escape'); await ws.locator('.ft-drill').waitFor({ state: 'hidden' }); assert.equal(await ws.isVisible(), true);
+      await ws.locator('tr', { hasText: 'KV Cache Compression' }).locator('.ft-lib-btn').click();
+      await ws.locator('.ft-drill-tab[data-sort="library"][aria-pressed="true"]').waitFor({ state: 'visible' });
+      await page.setViewportSize({ width: 1024, height: 768 });
+      assert.ok(await ws.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1 && document.querySelector('.ft-col-topic')!.getBoundingClientRect().width / document.querySelector('.ft-matrix-pane')!.getBoundingClientRect().width <= 0.31));
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
+      const ftMob = await ws.evaluate(() => ({ top: document.querySelector('.ft-matrix-scroll')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth }));
+      assert.ok(ftMob.top <= 150 && ftMob.ov <= 1, JSON.stringify(ftMob));
+      await assertMobilePanelTargets(page, '#researchWorkspace');
+      await ws.locator('.ft-deep-btn').click();
+      assert.equal(await ws.locator('.rw-nav-btn[aria-current="page"]').getAttribute('data-view'), 'deep-search');
+      assert.match(await ws.locator('.rw-search-input').inputValue(), /KV Cache Compression/);
+      await page.unroute('**/api/paper-reader/action');
       await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
@@ -214,6 +278,8 @@ async function run(): Promise<void> {
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '#rwTopicSelect option:not([value=""])'), 'zh-CN Research Workspace');
       await zhPage.locator('.rw-nav-btn[data-view="citation-map"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select'), 'zh-CN Citation Map');
+      await zhPage.locator('.rw-nav-btn[data-view="field-trends"]').click();
+      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.ft-starter-chip, .ft-topic-name'), 'zh-CN Field Trends');
       await zhCtx.close();
       assert.deepEqual(pageErrors, []); assert.deepEqual(consoleErrors, []);
     } finally { await browser.close(); }
