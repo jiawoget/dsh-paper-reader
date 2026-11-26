@@ -162,8 +162,9 @@ export function apply(ctx:ReaderHost):void {
       case 'chat.ask':
       case 'library.chat':
       case 'review.screen':
-      case 'review.extract': {
-        const op = body.op;
+      case 'review.extract':
+      case 'deepSearch.run': {
+        const op = body.op, structured = op === 'deepSearch.run';
         if (req.headers.get('accept')?.includes('application/x-ndjson')) {
           const encoder = new TextEncoder();
           const controller = new AbortController();
@@ -174,8 +175,14 @@ export function apply(ctx:ReaderHost):void {
               const sendLine = (value: unknown) => {
                 if (!controller.signal.aborted) sink.enqueue(encoder.encode(JSON.stringify(value) + '\n'));
               };
-              void service(op, input, { signal: controller.signal, onDelta: delta => sendLine({ delta }) }).then(
-                result => { sendLine(result); if (!controller.signal.aborted) sink.close(); },
+              void service(op, input, {
+                signal: controller.signal,
+                onDelta: delta => {
+                  if (structured) { try { sendLine(JSON.parse(delta)); } catch {} }
+                  else sendLine({ delta });
+                }
+              }).then(
+                result => { sendLine(structured ? { type: 'result', result } : result); if (!controller.signal.aborted) sink.close(); },
                 error => {
                   if (!controller.signal.aborted) {
                     const msg = error instanceof Error ? error.message : 'The request failed.';

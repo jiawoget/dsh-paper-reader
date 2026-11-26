@@ -196,6 +196,13 @@ export interface ServiceResults {
   'review.extract': Operations['review.extract'][1];
   'review.setCell': Operations['review.setCell'][1];
   'review.export': Operations['review.export'][1];
+  'deepSearch.clarify': Operations['deepSearch.clarify'][1];
+  'deepSearch.run': Operations['deepSearch.run'][1];
+  'watchlist.list': Operations['watchlist.list'][1];
+  'watchlist.save': Operations['watchlist.save'][1];
+  'watchlist.delete': Operations['watchlist.delete'][1];
+  'watchlist.check': Operations['watchlist.check'][1];
+  'watchlist.markRead': Operations['watchlist.markRead'][1];
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];

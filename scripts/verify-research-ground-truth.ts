@@ -105,7 +105,11 @@ try {
   const openLive = async (prefix: string) => {
     const llm = loadDshWebLlmConfig(), tempRoot = await mkdtemp(path.join(tmpdir(), prefix));
     const store = new ReaderStore(tempRoot), library = new Library(tempRoot, publicResource, id => store.deleteDocument(id));
-    const act = createServices({ root: tempRoot, store, library, fetchImpl: (u, init) => { const h = new Headers(init?.headers); for (const [k, v] of Object.entries(llm.extraHeaders)) h.set(k, v); return fetch(u, { ...init, headers: h }); } });
+    const act = createServices({ root: tempRoot, store, library, fetchImpl: (u, init) => {
+      const urlStr = typeof u === 'string' ? u : u instanceof URL ? u.href : u.url;
+      if (!urlStr.startsWith(llm.baseUrl)) return fetch(u, init);
+      const h = new Headers(init?.headers); for (const [k, v] of Object.entries(llm.extraHeaders)) h.set(k, v); return fetch(u, { ...init, headers: h });
+    } });
     await act('settings.save', { baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey });
     return { llm, tempRoot, store, library, act };
   };
@@ -183,6 +187,24 @@ try {
       assert.equal(pop.value, 'LOCKED: 1961 adults without diabetes (STEP 1)'); assert.equal(pop.manualOverride, true);
       assert.equal(intv.sourceKind, 'pdf'); assert.equal(outc.sourceKind, 'pdf');
       console.log(`PASS PR-4 live ground-truth (${llm.model}): PagedAttention verified=${csVer.length}/3 (${csVer.map(c => `${c.colId}:p.${c.page}`).join(', ')}) | NEJMoa2032183 abstract verified=${medAbs.cells.filter(c => c.verified).length}/3 -> Attach PDF reextract upgraded intervention/outcome to pdf while population manualOverride stayed locked`);
+    } finally { await rm(tempRoot, { recursive: true, force: true }); }
+  }
+
+  if (shouldRun('5')) {
+    const { llm, tempRoot, act } = await openLive('reader-gt-pr5-');
+    try {
+      const csQuery = 'eliminating GPU KV-cache memory fragmentation in LLM serving via OS virtual memory paging';
+      const medQuery = 'once-weekly GLP-1 receptor agonist subcutaneous treatment for weight reduction in adults with obesity without diabetes';
+      const clarified = await act('deepSearch.clarify', { query: csQuery });
+      assert.ok(clarified.questions.length >= 2 && clarified.questions.length <= 4, `expected 2-4 clarify questions, got ${clarified.questions.length}`);
+      const csRes = await act('deepSearch.run', { query: csQuery, rounds: 2, maxResults: 20 });
+      const pagedHit = csRes.candidates.find(c => c.arxivId?.startsWith('2309.06180') || /pagedattention|efficient memory management for large language model serving/i.test(c.title));
+      assert.ok(pagedHit, `CS/AI non-keyword deep search missed PagedAttention (got ${csRes.candidates.length} candidates; degraded=${csRes.degraded.join(',')}; top=${csRes.candidates.slice(0, 5).map(c => c.title).join(' | ')})`);
+      assert.ok(csRes.candidates.length >= 2 && csRes.overview.length >= 40, `CS/AI deep search returned too few results (${csRes.candidates.length})`);
+      const medRes = await act('deepSearch.run', { query: medQuery, rounds: 2, maxResults: 20 });
+      const medHits = medRes.candidates.filter(c => /semaglutide|tirzepatide|glp-1|incretin|weight|obesity/i.test(c.title + ' ' + (c.abstract ?? '')));
+      assert.ok(medHits.length >= 2 && medRes.overview.length >= 40, `Medicine non-keyword deep search returned insufficient clinical literature (matched=${medHits.length}, degraded=${medRes.degraded.join(',')})`);
+      console.log(`PASS PR-5 live ground-truth (${llm.model}): clarify=${clarified.questions.length}q | CS/AI hit "${pagedHit.title}" (score=${pagedHit.matchScore}, round=${pagedHit.foundRound}, total=${csRes.candidates.length}, degraded=[${csRes.degraded.join(',')}]) | Med hits=${medHits.length}/${medRes.candidates.length} (top: "${medHits[0].title}", score=${medHits[0].matchScore}, degraded=[${medRes.degraded.join(',')}])`);
     } finally { await rm(tempRoot, { recursive: true, force: true }); }
   }
 } finally { db.close(); }
