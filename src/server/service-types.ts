@@ -79,11 +79,16 @@ export interface PrivateSettings {
   zoteroLibraryType: 'user' | 'group';
   zoteroApiKey: string;
   zoteroMode?: 'web' | 'desktop';
+  openAlexEmail?: string;
+  openAlexApiKey?: string;
+  semanticScholarApiKey?: string;
+  ncbiApiKey?: string;
 }
 export const initialSettings: Readonly<PrivateSettings> = {
   baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '',
   targetLanguage: DEFAULT_TARGET_LANGUAGE, glossary: '', customPrompts: '', vaultPath: '',
-  zoteroLibraryId: '', zoteroLibraryType: 'user', zoteroApiKey: ''
+  zoteroLibraryId: '', zoteroLibraryType: 'user', zoteroApiKey: '',
+  openAlexEmail: '', openAlexApiKey: '', semanticScholarApiKey: '', ncbiApiKey: ''
 };
 export function zoteroModeFor(settings: PrivateSettings): 'desktop' | 'web' {
   return !settings.zoteroLibraryId || settings.zoteroMode === 'desktop' ? 'desktop' : 'web';
@@ -117,12 +122,18 @@ export function mergeSettings(current: PrivateSettings, input: Input): PrivateSe
   const targetLanguage = input.targetLanguage === undefined ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
   const glossary = input.glossary === undefined ? current.glossary : readMultilinePref(input.glossary, 'glossary', 'Glossary contains invalid control characters.');
   const customPrompts = input.customPrompts === undefined ? current.customPrompts : readMultilinePref(input.customPrompts, 'custom prompts', 'Custom prompts contain invalid control characters.');
+  const openAlexEmail = single(input.openAlexEmail ?? current.openAlexEmail ?? '', 'OpenAlex email', 254);
+  if (openAlexEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(openAlexEmail)) throw new ServiceError(400, 'Enter a valid email address for OpenAlex polite pool.');
   return {
     questionModel: input.questionModel === undefined ? current.questionModel : readQuestionModel(input.questionModel),
     model, baseUrl, apiKey: updatedSecret(sameOrigin ? current.apiKey : '', input.apiKey, input.clearApiKey),
     targetLanguage, glossary, customPrompts,
     vaultPath: vault ? path.resolve(vault) : '', zoteroLibraryType: type, zoteroLibraryId: id, zoteroMode,
-    zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
+    zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey),
+    openAlexEmail,
+    openAlexApiKey: updatedSecret(current.openAlexApiKey ?? '', input.openAlexApiKey, input.clearOpenAlexApiKey),
+    semanticScholarApiKey: updatedSecret(current.semanticScholarApiKey ?? '', input.semanticScholarApiKey, input.clearSemanticScholarApiKey),
+    ncbiApiKey: updatedSecret(current.ncbiApiKey ?? '', input.ncbiApiKey, input.clearNcbiApiKey)
   };
 }
 
@@ -172,6 +183,9 @@ export interface ServiceResults {
   'topics.list': Operations['topics.list'][1];
   'topics.save': Operations['topics.save'][1];
   'topics.delete': Operations['topics.delete'][1];
+  'graph.resolve': Operations['graph.resolve'][1];
+  'graph.explore': Operations['graph.explore'][1];
+  'graph.savePaper': Operations['graph.savePaper'][1];
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];

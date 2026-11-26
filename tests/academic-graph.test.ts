@@ -1,0 +1,122 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { computeCitationMapLayout, rankEarlierByCoCitation, reconstructInvertedAbstract } from '../src/shared/graph-layout.js';
+import type { GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
+import { exploreCitationGraph, resolveAcademicPaper, type GraphContext } from '../src/server/academic-graph.js';
+import { Library } from '../src/server/library.js';
+import { ReaderStore } from '../src/server/reader-store.js';
+import { ensureResearchSchema, getGraphCache, setGraphCache } from '../src/server/research-store.js';
+import { createServices } from '../src/server/services.js';
+
+const jsonRes = (body: unknown, status = 200, headers?: Record<string, string>) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+const makeOa = (id: string, title: string, year: number, citations: number, refs: string[] = [], extra: Record<string, unknown> = {}) => ({
+  id: `https://openalex.org/${id}`, title, publication_year: year, cited_by_count: citations,
+  authorships: [{ author: { display_name: 'Alice Smith' } }, { author: { display_name: 'Bob Zhang' } }],
+  referenced_works: refs.map(r => `https://openalex.org/${r}`), related_works: [], ...extra
+});
+
+test('reconstructInvertedAbstract handles multi-position words, punctuation, and empty inputs', () => {
+  assert.equal(reconstructInvertedAbstract(null), '');
+  assert.equal(reconstructInvertedAbstract({}), '');
+  assert.equal(reconstructInvertedAbstract({ 'KV-cache': [2, 6], PagedAttention: [0], reduces: [1], 'fragmentation,': [3], improving: [4], shared: [5], 'throughput.': [7] }),
+    'PagedAttention reduces KV-cache fragmentation, improving shared KV-cache throughput.');
+});
+
+test('exploreCitationGraph batches 60 OpenAlex refs in <=2 requests and ranks Earlier by co-citation intersection', async () => {
+  const db = new DatabaseSync(':memory:');
+  ensureResearchSchema(db);
+  const refsA = Array.from({ length: 60 }, (_, i) => `W${1000 + i}`), batchUrls: string[] = [];
+  const fetchFn: typeof fetch = async input => {
+    const url = String(input);
+    if (url.includes('/works/W1?')) return jsonRes(makeOa('W1', 'Seed A', 2023, 200, refsA));
+    if (url.includes('/works/W2?')) return jsonRes(makeOa('W2', 'Seed B', 2024, 150, ['W1005', 'W1009']));
+    if (url.includes('filter=openalex')) {
+      batchUrls.push(url);
+      const ids = decodeURIComponent(new URL(url).searchParams.get('filter') ?? '').replace('openalex:', '').split('|').filter(Boolean);
+      return jsonRes({ results: ids.map(id => makeOa(id, `Ref ${id}`, 2019, id === 'W1000' ? 9000 : id === 'W1009' ? 500 : 100)) });
+    }
+    return jsonRes({}, 404);
+  };
+  try {
+    const res = await exploreCitationGraph({ seeds: ['W1', 'W2'], direction: 'earlier', limit: 25 }, { withDb: (_, run) => run(db), fetchFn });
+    assert.ok(batchUrls.length === 2 && res.nodes.length <= 25 && res.nodes.length >= 20);
+    const earlier = res.nodes.filter(n => !n.isSeed);
+    assert.deepEqual(earlier.slice(0, 2).map(n => n.id), ['W1009', 'W1005']);
+    assert.ok(earlier[0].coCitations === 2 && earlier[0].firstAuthor === 'Alice Smith' && earlier[0].lastAuthor === 'Bob Zhang');
+    assert.deepEqual(rankEarlierByCoCitation([earlier[2], earlier[1], earlier[0]], new Map([['W1005', 2], ['W1009', 2], [earlier[2].id, 1]]), 2).map(p => p.id), ['W1009', 'W1005']);
+  } finally { db.close(); }
+});
+
+test('429 retry-after backoff succeeds; persistent failures use stale SQLite cache and graceful degradation', async () => {
+  const db = new DatabaseSync(':memory:');
+  ensureResearchSchema(db);
+  const sleeps: number[] = [];
+  let calls = 0;
+  const ctx: GraphContext = {
+    withDb: (_, run) => run(db), sleepFn: async ms => { sleeps.push(ms); },
+    fetchFn: async input => {
+      const url = String(input);
+      if (url.includes('/works/W42')) return ++calls === 1 ? jsonRes({}, 429, { 'retry-after': '1' }) : jsonRes(makeOa('W42', 'Recovered Paper', 2022, 321, [], { doi: 'https://doi.org/10.1000/rec', abstract_inverted_index: { Recovered: [0], text: [1] }, related_works: ['https://openalex.org/W77'] }));
+      return url.includes('W77') ? jsonRes({ results: [makeOa('W77', 'OA Related Fallback', 2023, 88)] }) : jsonRes({}, 429);
+    }
+  };
+  try {
+    const first = await resolveAcademicPaper('W42', ctx);
+    assert.ok(first.paper?.title === 'Recovered Paper' && !first.fromCache);
+    assert.deepEqual(sleeps, [1000]);
+    assert.equal((await resolveAcademicPaper('W42', { ...ctx, fetchFn: async () => { throw new Error('cache miss'); } })).fromCache, true);
+    const sim = await exploreCitationGraph({ seeds: ['W42'], direction: 'similar' }, ctx);
+    assert.ok(sim.degraded.includes('s2') && sim.nodes.some(n => n.id === 'W77'));
+    setGraphCache(db, 'oa:id:W99', 'openalex', makeOa('W99', 'Stale Cached Paper', 2021, 55), 1000);
+    db.prepare('UPDATE graph_cache SET fetchedAt=? WHERE cacheKey=?').run(Date.now() - 10_000, 'oa:id:W99');
+    assert.equal(getGraphCache(db, 'oa:id:W99')?.stale, true);
+    const staleSleeps: number[] = [];
+    const degraded = await resolveAcademicPaper('W99', { withDb: (_, run) => run(db), fetchFn: async () => jsonRes({}, 429), sleepFn: async ms => { staleSleeps.push(ms); } });
+    assert.ok(degraded.paper?.title === 'Stale Cached Paper' && degraded.fromCache && degraded.degraded.includes('openalex'));
+    assert.deepEqual(staleSleeps, [250, 500]);
+  } finally { db.close(); }
+});
+
+test('computeCitationMapLayout produces finite, bounded, non-overlapping SVG coordinates for 1..45 nodes', () => {
+  for (const count of [1, 12, 45]) {
+    const nodes: GraphNode[] = Array.from({ length: count }, (_, i) => ({
+      id: `W${i}`, title: `Paper ${i}`, authors: ['A. Author'], firstAuthor: 'A. Author', lastAuthor: 'A. Author',
+      year: 2018 + (i % 7), citationCount: (i + 1) * 40, source: 'openalex', isSeed: i === 0, direction: i === 0 ? 'seed' : 'earlier'
+    }));
+    const edges: GraphEdge[] = nodes.slice(1).map(n => ({ source: 'W0', target: n.id, kind: 'cites' }));
+    for (const mode of ['timeline', 'network'] as const) {
+      const laid = computeCitationMapLayout(nodes, edges, mode, 820, 520);
+      assert.equal(laid.length, count);
+      for (let i = 0; i < laid.length; i++) {
+        const a = laid[i];
+        assert.ok(Number.isFinite(a.x) && Number.isFinite(a.y) && a.x >= 20 && a.x <= 800 && a.y >= 20 && a.y <= 500);
+        for (let j = i + 1; j < laid.length; j++) assert.ok(Math.hypot(a.x - laid[j].x, a.y - laid[j].y) >= a.radius + laid[j].radius - 0.5, `${mode} overlap`);
+      }
+    }
+  }
+});
+
+test('graph.savePaper deduplicates abstract saves, tags doc_meta, upgrades on oa-pdf, and keeps API keys private', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-graph-save-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ReaderStore(root), pdfBytes = await readFile(path.resolve('public/assets/pagedattention.pdf'));
+  const readResource = async (url: unknown) => ({ url: new URL(String(url)), type: 'application/pdf', bytes: pdfBytes });
+  const act = createServices({ root, library: new Library(root, readResource, id => store.deleteDocument(id)), store, readResource });
+  const saved = await act('settings.save', { openAlexEmail: 'user@example.edu', openAlexApiKey: 'oa-secret', semanticScholarApiKey: 's2-secret', ncbiApiKey: 'ncbi-secret' });
+  assert.ok(saved.settings.openAlexEmail === 'user@example.edu' && saved.settings.hasOpenAlexApiKey && saved.settings.hasSemanticScholarApiKey && saved.settings.hasNcbiApiKey && !JSON.stringify(saved).includes('oa-secret'));
+  const paper: GraphPaper = {
+    id: 'W3127371223', title: 'Once-Weekly Semaglutide in Adults with Overweight or Obesity', authors: ['John Wilding'], firstAuthor: 'John Wilding', lastAuthor: 'John Wilding',
+    year: 2021, venue: 'NEJM', doi: '10.1056/NEJMoa2032183', abstract: 'Semaglutide reduced body weight.', oaPdfUrl: 'https://example.org/p.pdf', source: 'openalex'
+  };
+  const first = await act('graph.savePaper', { paper, mode: 'abstract', topicTag: 'glp-1' });
+  const second = await act('graph.savePaper', { paper, mode: 'abstract', topicTag: 'clinical' });
+  assert.ok(first.doc.id === second.doc.id && first.doc.kind === 'abstract');
+  assert.deepEqual(second.doc.meta?.tags, ['glp-1', 'clinical']);
+  const upgraded = await act('graph.savePaper', { paper, mode: 'oa-pdf', topicTag: 'glp-1' });
+  assert.ok(upgraded.doc.id === first.doc.id && upgraded.doc.kind === 'pdf' && upgraded.upgraded === true);
+});

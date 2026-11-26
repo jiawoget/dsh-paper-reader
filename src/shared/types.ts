@@ -36,6 +36,18 @@ export interface TopicRecord {
   id: string; name: string; tag: string; zoteroCollection: string; description: string; createdAt: string; updatedAt: string;
 }
 export interface CreateAbstractInput extends DocMetadata { title: string; url?: string }
+export type GraphDirection = 'earlier' | 'later' | 'similar';
+export type GraphSource = 'openalex' | 's2' | 'europepmc' | 'arxiv';
+export interface GraphPaper {
+  id: string; title: string; authors: string[]; firstAuthor: string; lastAuthor: string;
+  year?: number; venue?: string; doi?: string; arxivId?: string; pmid?: string;
+  openAlexId?: string; s2Id?: string; abstract?: string; citationCount?: number;
+  oaPdfUrl?: string; url?: string; source: GraphSource; inLibrary?: boolean; docId?: string; score?: number;
+}
+export interface GraphNode extends GraphPaper { isSeed?: boolean; direction?: GraphDirection | 'seed'; coCitations?: number }
+export interface GraphEdge { source: string; target: string; kind: 'cites' | 'related' }
+export interface PositionedGraphNode extends GraphNode { x: number; y: number; radius: number }
+export interface GraphExploreResult { seeds: GraphPaper[]; nodes: GraphNode[]; edges: GraphEdge[]; degraded: string[]; fromCache: boolean }
 export interface DocumentInfo extends DocMetadata {
   id: string;
   kind: 'pdf' | 'web' | 'abstract';
@@ -143,6 +155,7 @@ export interface Settings {
   questionModel?: QuestionModel;
   hostProvider?: string; hostModel?: string; vaultPath: string; zoteroLibraryType: 'user' | 'group';
   zoteroLibraryId: string; hasZoteroKey: boolean; zoteroMode?: 'web' | 'desktop';
+  openAlexEmail?: string; hasOpenAlexApiKey?: boolean; hasSemanticScholarApiKey?: boolean; hasNcbiApiKey?: boolean;
 }
 export interface ReaderState { notes: JournalNote[]; vocabulary: WordRecord[]; history: WordRecord[]; settings: Settings }
 export interface ZoteroItem {
@@ -179,6 +192,9 @@ export interface Operations {
   'topics.list': [Record<string, never>, { topics: TopicRecord[] }];
   'topics.save': [{ id?: string; name: string; tag?: string; zoteroCollection?: string; description?: string }, { topic: TopicRecord }];
   'topics.delete': [{ id: string }, { id: string; deleted: boolean }];
+  'graph.resolve': [{ query?: string; docId?: string }, { paper: GraphPaper | null; degraded: string[]; fromCache: boolean }];
+  'graph.explore': [{ seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, GraphExploreResult];
+  'graph.savePaper': [{ paper: GraphPaper; mode: 'abstract' | 'oa-pdf'; topicTag?: string }, { doc: DocumentInfo; upgraded?: boolean; mode: 'abstract' | 'oa-pdf' }];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
@@ -205,7 +221,11 @@ export interface Operations {
   'vocab.save': [SourceRecord & { text: string; meaning: string; context: string }, { word: WordRecord }];
   'vocab.delete': [{ id: string }, unknown];
   'history.add': [SourceRecord & { text: string; meaning: string; context?: string }, unknown];
-  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'customPrompts'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'>> & { apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean }, { settings: Settings }];
+  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'customPrompts'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'|'openAlexEmail'>> & {
+    apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean;
+    openAlexApiKey?: string; clearOpenAlexApiKey?: boolean; semanticScholarApiKey?: string; clearSemanticScholarApiKey?: boolean;
+    ncbiApiKey?: string; clearNcbiApiKey?: boolean;
+  }, { settings: Settings }];
   'obsidian.export': [NotebookRequest, { path: string; notes?: number; words?: number; annotations?: number }];
   'zotero.collections': [{library?: string}, { collections: Collection[]; library: string }];
   'zotero.browse': [{query?: string; collection?: string; start?: number; library?: string},

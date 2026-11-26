@@ -136,7 +136,9 @@ export class ReaderModel {
       localTranslationAvailable: localTranslationAvailable(),
       aiMode: route.kind, hostProvider: route.kind === 'dsh' ? route.provider : '', hostModel: route.kind === 'dsh' ? route.model : '',
       vaultPath: settings.vaultPath, zoteroLibraryId: settings.zoteroLibraryId,
-      zoteroLibraryType: settings.zoteroLibraryType, hasZoteroKey: Boolean(settings.zoteroApiKey), zoteroMode: zoteroModeFor(settings)
+      zoteroLibraryType: settings.zoteroLibraryType, hasZoteroKey: Boolean(settings.zoteroApiKey), zoteroMode: zoteroModeFor(settings),
+      openAlexEmail: settings.openAlexEmail || '', hasOpenAlexApiKey: Boolean(settings.openAlexApiKey),
+      hasSemanticScholarApiKey: Boolean(settings.semanticScholarApiKey), hasNcbiApiKey: Boolean(settings.ncbiApiKey)
     };
   }
   async #native(route: NativeRoute, system: string, serialized: string, region?: RegionCompletion, streamOptions?: StreamOptions): Promise<string> {
