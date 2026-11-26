@@ -595,7 +595,7 @@
   .rail-head { padding-inline: 8px; }
   .rail-head [role="tablist"] { gap: 6px; }
 }
-@container reading-area (max-width: 1130px) {
+@container reading-area (max-width: 1240px) {
   .topbar { gap: 5px; padding-inline: 12px; }
   .topbar :is(#library, #contentsToggle, #mobileRail, #more) { gap: 4px; padding: 0 6px; }
   .topbar #captureRegion { gap: 4px; padding-inline: 7px; }
@@ -605,7 +605,7 @@
   #pageCount { min-width: 40px; }
   .reader-mode-switch :is(#originalMode, #parallel) { padding: 3px 6px; }
 }
-@container reading-area (max-width: 1030px) {
+@container reading-area (max-width: 1060px) {
   .topbar :is(#library, #contentsToggle, #captureRegion, #mobileRail) > span { display: none; }
   .topbar :is(#library, #contentsToggle, #captureRegion, #mobileRail) { min-width: 34px; padding-inline: 6px; }
 }
