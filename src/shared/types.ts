@@ -16,6 +16,10 @@ import type {
   DeepSearchClarifyInput, DeepSearchClarifyResult, DeepSearchResult, DeepSearchRunInput,
   WatchlistCheckResult, WatchlistEntry, WatchlistSaveInput
 } from './deep-search-types.js';
+import type {
+  CitationAnalyzeInput, CitationReclassifyInput, CitationReclassifyResult,
+  CitationReport, CitationSummary, CitationSummaryInput
+} from './citation-stance-types.js';
 
 export type ReadingSide = 'source' | 'translation';
 
@@ -224,6 +228,9 @@ export interface Operations {
   'watchlist.delete': [{ id: string }, { id: string; deleted: boolean }];
   'watchlist.check': [{ id?: string }, WatchlistCheckResult];
   'watchlist.markRead': [{ id: string; keys?: string[] }, { entry: WatchlistEntry }];
+  'citations.analyze': [CitationAnalyzeInput, CitationReport];
+  'citations.summary': [CitationSummaryInput, CitationSummary];
+  'citations.reclassify': [CitationReclassifyInput, CitationReclassifyResult];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];

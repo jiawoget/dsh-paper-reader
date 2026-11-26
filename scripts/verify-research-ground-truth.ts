@@ -6,14 +6,17 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { exploreCitationGraph, resolveAcademicPaper, saveGraphPaper } from '../src/server/academic-graph.js';
+import { classifyCitationContexts } from '../src/server/citation-stance.js';
 import { queryFieldTrends, queryTrendPapers } from '../src/server/field-trends.js';
 import { Library } from '../src/server/library.js';
 import { extractDocumentPages, extractPdfPages } from '../src/server/pdf-text.js';
 import { publicResource } from '../src/server/public-resource.js';
+import { ReaderModel } from '../src/server/reader-model.js';
 import { ReaderStore } from '../src/server/reader-store.js';
 import { ensureResearchSchema, getDocPages, replaceDocPages, searchDocPagesFts } from '../src/server/research-store.js';
 import { createServices } from '../src/server/services.js';
 import { REVIEW_PRESETS, verifyQuote } from '../src/shared/review-types.js';
+import { CITATION_STANCE_GOLD } from './citation-stance-gold.js';
 
 if (process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy) setGlobalProxyFromEnv();
 const onlyArg = process.argv.find(a => a.startsWith('--only='))?.slice(7);
@@ -105,13 +108,14 @@ try {
   const openLive = async (prefix: string) => {
     const llm = loadDshWebLlmConfig(), tempRoot = await mkdtemp(path.join(tmpdir(), prefix));
     const store = new ReaderStore(tempRoot), library = new Library(tempRoot, publicResource, id => store.deleteDocument(id));
-    const act = createServices({ root: tempRoot, store, library, fetchImpl: (u, init) => {
+    const fetchImpl: typeof fetch = (u, init) => {
       const urlStr = typeof u === 'string' ? u : u instanceof URL ? u.href : u.url;
       if (!urlStr.startsWith(llm.baseUrl)) return fetch(u, init);
       const h = new Headers(init?.headers); for (const [k, v] of Object.entries(llm.extraHeaders)) h.set(k, v); return fetch(u, { ...init, headers: h });
-    } });
+    };
+    const model = new ReaderModel(undefined, fetchImpl), act = createServices({ root: tempRoot, store, library, fetchImpl });
     await act('settings.save', { baseUrl: llm.baseUrl, model: llm.model, apiKey: llm.apiKey });
-    return { llm, tempRoot, store, library, act };
+    return { llm, tempRoot, store, library, model, act };
   };
 
   if (shouldRun('3b')) {
@@ -205,6 +209,30 @@ try {
       const medHits = medRes.candidates.filter(c => /semaglutide|tirzepatide|glp-1|incretin|weight|obesity/i.test(c.title + ' ' + (c.abstract ?? '')));
       assert.ok(medHits.length >= 2 && medRes.overview.length >= 40, `Medicine non-keyword deep search returned insufficient clinical literature (matched=${medHits.length}, degraded=${medRes.degraded.join(',')})`);
       console.log(`PASS PR-5 live ground-truth (${llm.model}): clarify=${clarified.questions.length}q | CS/AI hit "${pagedHit.title}" (score=${pagedHit.matchScore}, round=${pagedHit.foundRound}, total=${csRes.candidates.length}, degraded=[${csRes.degraded.join(',')}]) | Med hits=${medHits.length}/${medRes.candidates.length} (top: "${medHits[0].title}", score=${medHits[0].matchScore}, degraded=[${medRes.degraded.join(',')}])`);
+    } finally { await rm(tempRoot, { recursive: true, force: true }); }
+  }
+
+  if (shouldRun('6')) {
+    const { llm, tempRoot, store, model, act } = await openLive('reader-gt-pr6-');
+    try {
+      const goldMap = await classifyCitationContexts({ store, model }, CITATION_STANCE_GOLD);
+      const misses = CITATION_STANCE_GOLD.filter(g => goldMap.get(g.id)?.stance !== g.expected).map(g => `${g.id}:${g.expected}->${goldMap.get(g.id)?.stance ?? 'none'}`);
+      const correct = CITATION_STANCE_GOLD.length - misses.length, macroAcc = correct / CITATION_STANCE_GOLD.length;
+      const conCases = CITATION_STANCE_GOLD.filter(g => g.expected === 'contrasting');
+      const conHits = conCases.filter(g => goldMap.get(g.id)?.stance === 'contrasting').length, conRecall = conHits / conCases.length;
+      assert.ok(macroAcc >= 0.85, `gold macro accuracy ${(macroAcc * 100).toFixed(1)}% < 85% (${correct}/${CITATION_STANCE_GOLD.length}; misses: ${misses.join(', ')})`);
+      assert.ok(conRecall >= 0.8, `contrasting recall ${(conRecall * 100).toFixed(1)}% < 80% (${conHits}/${conCases.length}; misses: ${misses.join(', ')})`);
+      const paged = await act('citations.analyze', { query: 'arXiv:2309.06180', limit: 20 });
+      const pagedClassified = paged.statements.filter(s => s.context.length >= 20 && s.stance !== 'unclassified');
+      assert.ok(paged.sciteUrl.startsWith('https://scite.ai/reports/'), `invalid PagedAttention sciteUrl: ${paged.sciteUrl}`);
+      assert.ok(pagedClassified.length >= 1, `PagedAttention live citations returned 0 classified contexts (total=${paged.statements.length}, degraded=[${paged.degraded.join(',')}])`);
+      const nejm = await act('citations.analyze', { doi: '10.1056/NEJMoa2032183', limit: 20 });
+      const nejmClassified = nejm.statements.filter(s => s.context.length >= 20 && s.stance !== 'unclassified');
+      assert.equal(nejm.sciteUrl, 'https://scite.ai/reports/10.1056%2FNEJMoa2032183');
+      assert.ok(nejmClassified.length >= 1, `NEJMoa2032183 live citations returned 0 classified contexts (total=${nejm.statements.length}, degraded=[${nejm.degraded.join(',')}])`);
+      console.log(`PASS PR-6 live ground-truth (${llm.model}): gold=${correct}/${CITATION_STANCE_GOLD.length} (${(macroAcc * 100).toFixed(1)}%), contrasting=${conHits}/${conCases.length} (${(conRecall * 100).toFixed(1)}%)${misses.length ? ` [misses: ${misses.join(', ')}]` : ''}`);
+      console.log(`  PagedAttention: ${paged.tallies.citingPapers} papers / ${paged.tallies.citationStatements} stmts (sup=${paged.tallies.supporting}, ext=${paged.tallies.extending}, con=${paged.tallies.contrasting}, men=${paged.tallies.mentioning}, unc=${paged.tallies.unclassified}) | scite=${paged.sciteUrl} | degraded=[${paged.degraded.join(',')}]`);
+      console.log(`  NEJMoa2032183: ${nejm.tallies.citingPapers} papers / ${nejm.tallies.citationStatements} stmts (sup=${nejm.tallies.supporting}, ext=${nejm.tallies.extending}, con=${nejm.tallies.contrasting}, men=${nejm.tallies.mentioning}, unc=${nejm.tallies.unclassified}) | scite=${nejm.sciteUrl} | degraded=[${nejm.degraded.join(',')}]`);
     } finally { await rm(tempRoot, { recursive: true, force: true }); }
   }
 } finally { db.close(); }

@@ -7,6 +7,7 @@ import { ensurePaperCards, runLibraryChat } from './library-chat.js';
 import { exportReviewTable, getReviewTable, runReviewExtraction, runReviewScreening, saveReviewTable, setReviewCell } from './review-table.js';
 import { clarifyDeepSearch, runDeepSearch } from './deep-search.js';
 import { checkWatchlist, deleteWatchlist, listWatchlist, markWatchlistRead, saveWatchlist } from './watchlist.js';
+import { analyzeCitations, reclassifyCitation, summarizeCitations } from './citation-stance.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
 import { publicResource } from './public-resource.js';
@@ -192,6 +193,9 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'watchlist.delete': input => deleteWatchlist(input, { store: database, library: documents, fetchFn: fetchImpl }),
     'watchlist.check': (input, options) => checkWatchlist(input, { store: database, library: documents, fetchFn: fetchImpl }, options?.signal),
     'watchlist.markRead': input => markWatchlistRead(input, { store: database, library: documents, fetchFn: fetchImpl }),
+    'citations.analyze': (input, options) => analyzeCitations({ store: database, library: documents, model, fetchFn: fetchImpl }, input, options),
+    'citations.summary': input => summarizeCitations({ store: database, library: documents }, input),
+    'citations.reclassify': input => reclassifyCitation({ store: database }, input),
     'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
