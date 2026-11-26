@@ -23,7 +23,7 @@ function loadDshWebLlmConfig(): { baseUrl: string; model: string; apiKey: string
   if (!existsSync(patchPath)) throw new Error(`Missing DSH profile config at ${patchPath}`);
   const yml = readFileSync(patchPath, 'utf8'), creds = existsSync(credsPath) ? readFileSync(credsPath, 'utf8') : '';
   for (const [provider, preferred] of [['internal', ['deepseek-v4-flash', 'qwen3.8']], ['onprem', ['gemma4-31b', 'qwen3.8-27B']]] as const) {
-    const block = yml.match(new RegExp(`^\\s{6}${provider}:\\n([\\s\\S]*?)(?=^\\s{6}\\w+:|^\\-\\s|\\Z)`, 'm'))?.[1];
+    const block = yml.match(new RegExp(`^\\s{6}${provider}:\\n([\\s\\S]*?)(?=^\\s{6}\\w+:|^\\-\\s|(?![\\s\\S]))`, 'm'))?.[1];
     if (!block) continue;
     const baseUrl = block.match(/baseURL:\s*(\S+)/)?.[1]?.trim() ?? '', keyEnv = block.match(/apiKeyEnv:\s*(\S+)/)?.[1]?.trim() ?? '';
     const apiKey = (process.env[keyEnv] ?? creds.match(new RegExp(`${keyEnv}:\\s*['"]?([^'"\\n\\r]+)`))?.[1] ?? '').trim();

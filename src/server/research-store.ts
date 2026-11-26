@@ -173,11 +173,6 @@ function decodePaperCard(row: Row): PaperCard | undefined {
   } catch { return undefined; }
 }
 
-export function getPaperCard(db: DatabaseSync, docId: string): PaperCard | undefined {
-  const row = db.prepare('SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards WHERE doc_id=?').get(docId);
-  return row ? decodePaperCard(row) : undefined;
-}
-
 export function setPaperCard(db: DatabaseSync, card: PaperCard): PaperCard {
   const docId = single(card.docId, 'document ID', 512, true), updatedAt = card.updatedAt || Date.now();
   const payload = JSON.stringify({

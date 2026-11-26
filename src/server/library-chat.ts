@@ -118,7 +118,7 @@ async function resolveScope(docIdsInput: unknown, deps: LibraryChatDeps): Promis
   for (const s of scopes) counts.set(`${s.authorLabel.toLowerCase()}|${s.year}`, (counts.get(`${s.authorLabel.toLowerCase()}|${s.year}`) ?? 0) + 1);
   for (const s of scopes) {
     const k = `${s.authorLabel.toLowerCase()}|${s.year}`;
-    if ((counts.get(k) ?? 0) > 1 && s.year !== 'n.d.') { const idx = seen.get(k) ?? 0; seen.set(k, idx + 1); s.year += String.fromCharCode(97 + idx); }
+    if ((counts.get(k) ?? 0) > 1) { const idx = seen.get(k) ?? 0; seen.set(k, idx + 1); s.year += (s.year === 'n.d.' ? '-' : '') + String.fromCharCode(97 + idx); }
   }
   return { scopes, truncatedCount: Math.max(0, present.length - MAX_LIBRARY_CHAT_DOCS) };
 }
@@ -158,22 +158,27 @@ async function ensureCardsForScope(
   const existing = new Map(deps.store.withDb(false, db => listPaperCards(db, scopes.map(s => s.doc.id))).map(c => [c.docId, c]));
   const cached = new Map<string, PaperCard>(), pending: ScopedDoc[] = [];
   for (const s of scopes) { const hit = existing.get(s.doc.id); if (!opts.refresh && hit && hit.sourceHash === s.sourceHash) cached.set(s.doc.id, hit); else pending.push(s); }
+  const runAc = new AbortController(), onAbort = () => runAc.abort();
+  if (opts.signal?.aborted) runAc.abort(); else opts.signal?.addEventListener('abort', onAbort, { once: true });
   let cursor = 0, generatedCount = 0;
   const worker = async () => {
     while (cursor < pending.length) {
-      if (opts.signal?.aborted) throw new ServiceError(499, 'Request canceled.');
+      if (runAc.signal.aborted) throw new ServiceError(499, 'Request canceled.');
       const scope = pending[cursor++], base = { title: scope.doc.paperTitle || scope.doc.title, authors: scope.doc.authors ?? '', year: scope.year };
       const material: Input = scope.doc.kind === 'abstract'
         ? { ...base, sourceKind: 'abstract', abstract: normSpace(scope.doc.abstract || scope.pages[0]?.text || '').slice(0, 4000) }
         : { ...base, sourceKind: 'pdf', pageCount: scope.pages.length, excerpts: selectCardExcerpts(scope.pages) };
-      const { text } = await completeWithBackoff(deps, CARD_SYSTEM, material, { signal: opts.signal, questionModel: opts.questionModel });
-      const card = parseCardJson(text, scope);
-      deps.store.withDb(true, db => setPaperCard(db, card));
-      cached.set(scope.doc.id, card);
-      generatedCount++;
+      try {
+        const { text } = await completeWithBackoff(deps, CARD_SYSTEM, material, { signal: runAc.signal, questionModel: opts.questionModel });
+        if (runAc.signal.aborted) throw new ServiceError(499, 'Request canceled.');
+        const card = parseCardJson(text, scope);
+        if (deps.library.hasSync(scope.doc.id)) deps.store.withDb(true, db => setPaperCard(db, card));
+        cached.set(scope.doc.id, card); generatedCount++;
+      } catch (err) { runAc.abort(); throw err; }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(CARD_CONCURRENCY, pending.length) }, worker));
+  try { await Promise.all(Array.from({ length: Math.min(CARD_CONCURRENCY, pending.length) }, worker)); }
+  finally { opts.signal?.removeEventListener('abort', onAbort); }
   return { cards: scopes.map(s => cached.get(s.doc.id)!), generatedCount };
 }
 export async function ensurePaperCards(input: Input, deps: LibraryChatDeps, options?: StreamOptions): Promise<PaperCardsResult> {
@@ -197,14 +202,14 @@ function extractVerifiedQuote(sourceText: string, claimContext: string): string 
   return best || clean.slice(0, 220);
 }
 function matchScopedDoc(scopes: readonly ScopedDoc[], authorRaw: string, yearRaw: string): ScopedDoc | undefined {
-  const normA = normSpace(authorRaw).toLowerCase(), normY = yearRaw.toLowerCase(), baseY = normY.replace(/[a-z]$/, '');
-  const exact = scopes.find(s => s.authorLabel.toLowerCase() === normA && s.year.toLowerCase() === normY);
-  if (exact) return exact;
+  const normA = normSpace(authorRaw).toLowerCase(), normY = yearRaw.toLowerCase(), baseY = normY.replace(/-?[a-z]$/, '');
+  const exact = scopes.filter(s => s.authorLabel.toLowerCase() === normA && s.year.toLowerCase() === normY);
+  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
   const surname = surnameFromAuthor(authorRaw).toLowerCase();
   if (!surname) return undefined;
   const byExact = scopes.filter(s => s.surname.toLowerCase() === surname && s.year.toLowerCase() === normY);
-  if (byExact.length === 1) return byExact[0];
-  const byBase = scopes.filter(s => s.surname.toLowerCase() === surname && s.year.toLowerCase().replace(/[a-z]$/, '') === baseY);
+  if (byExact.length) return byExact.length === 1 ? byExact[0] : undefined;
+  const byBase = scopes.filter(s => s.surname.toLowerCase() === surname && s.year.toLowerCase().replace(/-?[a-z]$/, '') === baseY);
   return byBase.length === 1 ? byBase[0] : undefined;
 }
 export function resolveLibraryCitations(
@@ -215,7 +220,7 @@ export function resolveLibraryCitations(
     return { doc: e.doc, pages: [...e.pages], pageMap: new Map(e.pages.map(p => [p.page, p.text])), authorLabel: e.authorLabel ?? d.label, surname: d.surname, year: e.year ?? yearForDoc(e.doc), sourceHash: '' };
   });
   const refs: LibraryCitationRef[] = [], seen = new Set<string>();
-  const itemRe = /^([^,;()]{2,80}?)(?:,\s*|\s+)((?:19|20)\d{2}[a-z]?|n\.d\.)(?:,\s*|\s+)(?:(?:(?:pp?\.?|pages?)\s*([\d,\s–-]+))|(abstract(?:\s+only)?))$/i;
+  const itemRe = /^([^,;()]{2,80}?)(?:,\s*|\s+)((?:19|20)\d{2}[a-z]?|n\.d\.(?:-[a-z])?)(?:,\s*|\s+)(?:(?:(?:pp?\.?|pages?)\s*([\d,\s–-]+))|(abstract(?:\s+only)?))$/i;
   for (const paren of answer.matchAll(/\(([^()]{6,260})\)/g)) {
     const off = paren.index ?? 0, claim = answer.slice(Math.max(0, off - 180), Math.min(answer.length, off + paren[0].length + 60));
     for (const part of paren[1].split(/\s*;\s*/)) {
