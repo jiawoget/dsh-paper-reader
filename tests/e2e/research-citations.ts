@@ -24,8 +24,9 @@ async function run(): Promise<void> {
       const pageErrors: string[] = [], consoleErrors: string[] = [];
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' });
       const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=5', { tag: 'cit-en', scope: { allowZotero503: true }, pageErrors, consoleErrors });
+      const yr = new Date().getFullYear();
       const created = await (await ctx.request.post(host.origin + '/api/paper-reader/action', {
-        data: { op: 'library.createAbstract', payload: { title: 'Adaptive Block Scheduling for Serving Pipelines', authors: 'Dana Park; Woosuk Kwon', year: '2025', doi: '10.1000/adaptive-kv', abstract: 'Building on arXiv:2309.06180 PagedAttention, we observe high page-table lookup latency under heterogeneous request batches.' } }
+        data: { op: 'library.createAbstract', payload: { title: 'Adaptive Block Scheduling for Serving Pipelines', authors: 'Dana Park; Woosuk Kwon', year: String(yr - 1), doi: '10.1000/adaptive-kv', abstract: 'Building on arXiv:2309.06180 PagedAttention, we observe high page-table lookup latency under heterogeneous request batches.' } }
       })).json() as { doc: { id: string } };
       const localDocId = created.doc.id;
       if (!(await page.locator('#rail').isVisible())) await page.locator('#mobileRail').click();
@@ -38,14 +39,14 @@ async function run(): Promise<void> {
       const longCtx = 'Unlike Kwon et al. (2023), PagedAttention incurs noticeable page-table indirection overhead on very long multi-turn prompts and degrades throughput when batch sequences mix short chat queries with 32k-token document contexts across heterogeneous worker GPUs in production serving clusters.';
       const target = { targetKey: 'arxiv:2309.06180', docId: 'pagedattention', title: 'PagedAttention: Efficient Memory Management', authors: ['Woosuk Kwon', 'Zhuohan Li'], year: 2023, arxivId: '2309.06180', sciteUrl: 'https://scite.ai/search?q=PagedAttention' };
       const citedStmts: CitationStatement[] = [
-        mkStmt({ citingKey: `local:${localDocId}:p1`, source: 'local', citingDocId: localDocId, citingPage: 1, citingTitle: 'Adaptive Block Scheduling for Serving Pipelines', citingAuthors: ['Dana Park', 'Woosuk Kwon'], citingYear: 2025, section: 'Methods', context: longCtx, stance: 'contrasting', rationale: 'Notes lookup overhead.', isInfluential: true, isSelfCitation: true }),
-        mkStmt({ citingKey: 'local:pagedattention:p6', source: 'local', citingDocId: 'pagedattention', citingPage: 6, citingTitle: 'Local Block Table Verification Note', citingAuthors: ['Elena Cho'], citingYear: 2026, section: 'Results', stance: 'supporting', rationale: 'Validates block tables.' }),
-        mkStmt({ citingKey: 's2:ext1', source: 's2', citingTitle: 'Disaggregated Prefix Paging', citingAuthors: ['Sam Patel'], citingYear: 2025, citingDoi: '10.1000/disagg-prefix', section: 'Introduction', context: 'We extend PagedAttention with prefix-aware remote KV pools.', stance: 'extending', rationale: 'Extends paging.', isInfluential: true }),
-        mkStmt({ citingKey: 's2:ext1#1', source: 's2', citingTitle: 'Disaggregated Prefix Paging', citingAuthors: ['Sam Patel'], citingYear: 2025, citingDoi: '10.1000/disagg-prefix', section: 'Discussion', context: 'PagedAttention is widely deployed in LLM serving frameworks.', stance: 'mentioning', rationale: 'Background mention.' }),
-        mkStmt({ citingKey: 's2:noctx', source: 's2', citingTitle: 'Survey of Inference Engines', citingAuthors: ['Lin Wu'], citingYear: 2021, citingDoi: '10.1000/survey-inf', section: 'Unknown', context: '', stance: 'unclassified', rationale: '' })
+        mkStmt({ citingKey: `local:${localDocId}:p1`, source: 'local', citingDocId: localDocId, citingPage: 1, citingTitle: 'Adaptive Block Scheduling for Serving Pipelines', citingAuthors: ['Dana Park', 'Woosuk Kwon'], citingYear: yr - 1, section: 'Methods', context: longCtx, stance: 'contrasting', rationale: 'Notes lookup overhead.', isInfluential: true, isSelfCitation: true }),
+        mkStmt({ citingKey: 'local:pagedattention:p6', source: 'local', citingDocId: 'pagedattention', citingPage: 6, citingTitle: 'Local Block Table Verification Note', citingAuthors: ['Elena Cho'], citingYear: yr, section: 'Results', stance: 'supporting', rationale: 'Validates block tables.' }),
+        mkStmt({ citingKey: 's2:ext1', source: 's2', citingTitle: 'Disaggregated Prefix Paging', citingAuthors: ['Sam Patel'], citingYear: yr - 1, citingDoi: '10.1000/disagg-prefix', section: 'Introduction', context: 'We extend PagedAttention with prefix-aware remote KV pools.', stance: 'extending', rationale: 'Extends paging.', isInfluential: true }),
+        mkStmt({ citingKey: 's2:ext1#1', source: 's2', citingTitle: 'Disaggregated Prefix Paging', citingAuthors: ['Sam Patel'], citingYear: yr - 1, citingDoi: '10.1000/disagg-prefix', section: 'Discussion', context: 'PagedAttention is widely deployed in LLM serving frameworks.', stance: 'mentioning', rationale: 'Background mention.' }),
+        mkStmt({ citingKey: 's2:noctx', source: 's2', citingTitle: 'Survey of Inference Engines', citingAuthors: ['Lin Wu'], citingYear: yr - 5, citingDoi: '10.1000/survey-inf', section: 'Unknown', context: '', stance: 'unclassified', rationale: '' })
       ];
       const refStmts = [mkStmt({ direction: 'references', citingKey: 'local:ref1:p6', source: 'local', citingDocId: localDocId, citingPage: 6, citingTitle: 'Orca: Iteration-Level Scheduling', citingAuthors: ['Gyeong-In Yu'], citingYear: 2022, section: 'Introduction', context: 'Continuous batching from Orca motivates paged KV management.', stance: 'extending', rationale: 'Builds on Orca.' })];
-      let forceOffline = false;
+      let forceOffline = false, delayReclass = false, releaseReclass = () => {};
       await page.route('**/api/paper-reader/action', async route => {
         const body = route.request().postDataJSON() as { op?: string; payload?: Record<string, unknown> };
         if (body.op === 'citations.summary') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ targetKey: target.targetKey, tallies: calcTallies(citedStmts), sciteUrl: target.sciteUrl, hasCachedExternal: true }) }); return; }
@@ -54,6 +55,7 @@ async function run(): Promise<void> {
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ target, direction: dir, tallies: calcTallies(list), statements: list, sciteUrl: target.sciteUrl, degraded: forceOffline ? ['s2'] : [], fromCache: !forceOffline, offline: forceOffline }) }); return;
         }
         if (body.op === 'citations.reclassify') {
+          if (delayReclass) { delayReclass = false; await new Promise<void>(r => { releaseReclass = r; }); }
           const row = citedStmts.find(s => s.citingKey === String(body.payload?.citingKey ?? '')); if (row) { row.stance = body.payload?.stance as CitationStance; row.manualOverride = true; }
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ statement: row, tallies: calcTallies(citedStmts) }) }); return;
         }
@@ -88,22 +90,39 @@ async function run(): Promise<void> {
       assert.equal(await expBtn.getAttribute('aria-expanded'), 'true');
       assert.ok(await ws.evaluate(() => document.activeElement?.matches('.cit-expand-btn')));
       assert.match(await ws.locator('.cit-card[data-stance="unclassified"] .cit-no-ctx').innerText(), /No context available/);
+      assert.ok(await ws.evaluate(() => document.querySelector('.cit-facet-select[data-facet="source"]')!.getBoundingClientRect().width <= document.querySelector('.cit-facet-select[data-facet="section"]')!.getBoundingClientRect().width + 1));
       const saveCard = ws.locator('.cit-card[data-citing-key="s2:ext1"]'); await saveCard.locator('.cit-save-abs').click(); await saveCard.locator('.cit-open-btn').waitFor({ state: 'visible' });
+      await ws.locator('.cit-card[data-citing-key="s2:ext1#1"] .cit-open-btn').waitFor({ state: 'visible' });
+      await ws.locator('.cit-tally-btn[data-stance="contrasting"]').click();
       await ws.locator(`.cit-reclass-select[data-citing-key="local:${localDocId}:p1"]`).selectOption('supporting');
       await page.waitForFunction(() => document.querySelector('.cit-tally-btn[data-stance="supporting"] .cit-tally-count')?.textContent === '2');
+      assert.ok(await ws.evaluate(() => document.activeElement?.matches('.cit-clear-btn')));
+      await ws.locator('.cit-clear-btn').click();
       assert.equal(await ws.locator(`.cit-card[data-citing-key="local:${localDocId}:p1"] .cit-manual-tag`).isVisible(), true);
-      await ws.locator('.cit-refresh-btn').click(); await page.waitForFunction(() => document.querySelector('.cit-tally-btn[data-stance="supporting"] .cit-tally-count')?.textContent === '2');
+      delayReclass = true;
+      await ws.locator('.cit-reclass-select[data-citing-key="s2:ext1"]').selectOption('supporting');
+      await ws.locator('.cit-dir-btn[data-dir="references"]').click(); await ws.locator('.cit-card', { hasText: 'Orca: Iteration-Level Scheduling' }).waitFor({ state: 'visible' });
+      releaseReclass(); await page.waitForTimeout(80);
+      assert.equal(await ws.locator('.cit-unit[data-unit="statements"]').innerText(), 'Citation Statements (1)');
+      await ws.locator('.cit-dir-btn[data-dir="cited_by"]').click(); await ws.locator('.cit-card').nth(4).waitFor({ state: 'visible' });
       forceOffline = true; await ws.locator('.cit-refresh-btn').click();
       await ws.locator('.cit-banner[data-kind="offline"]').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.cit-card').count(), 2);
       await ws.locator('.cit-card[data-citing-key="local:pagedattention:p6"] .cit-jump-btn').click();
       await page.locator('#returnWorkspace').waitFor({ state: 'visible' }); assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16');
       await page.locator('.return-workspace-go').click(); await ws.locator('.cit-banner[data-kind="offline"]').waitFor({ state: 'visible' });
+      await ws.locator('.cit-search-input').fill('nomatch-xyz'); assert.equal(await ws.locator('.cit-card').count(), 0);
+      await ws.locator('.rw-collapse-btn').click(); await ws.waitFor({ state: 'hidden' });
+      await page.locator('.ref-cit-all').click(); await ws.locator('.cit-card').first().waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.cit-search-input').inputValue(), ''); assert.equal(await ws.locator('.cit-card').count(), 2);
       await page.setViewportSize({ width: 1160, height: 900 });
       await page.waitForFunction(() => document.getElementById('researchWorkspace')?.getAttribute('data-rail-collapsed') === 'true');
       assert.ok(await ws.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
-      const mob = await ws.evaluate(() => ({ top: document.querySelector('.cit-body')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth }));
-      assert.ok(mob.top <= 150 && mob.ov <= 1, JSON.stringify(mob));
+      const mob = await ws.evaluate(() => {
+        const sub = document.querySelector('.cit-subbar')!, cb = document.querySelector('.cit-dir-btn[data-dir="cited_by"]')!.getBoundingClientRect(), rf = document.querySelector('.cit-dir-btn[data-dir="references"]')!.getBoundingClientRect();
+        return { top: document.querySelector('.cit-body')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth, subOv: sub.scrollWidth - sub.clientWidth, cbR: cb.right, rfR: rf.right };
+      });
+      assert.ok(mob.top <= 115 && mob.ov <= 1 && mob.subOv <= 1 && mob.cbR <= 390 && mob.rfR <= 390, JSON.stringify(mob));
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.cit-filters-toggle').click(); await ws.locator('.cit-facets').waitFor({ state: 'visible' });
       await assertMobilePanelTargets(page, '.cit-facets');

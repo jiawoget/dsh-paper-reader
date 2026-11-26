@@ -129,10 +129,17 @@ export function createCitationsView(): ResearchViewModule {
         void saveGraphPaper(paper, saveMode, shell).then(doc => {
           savingKeys.delete(stmt.citingKey); savedMap.set(stmt.citingKey, doc.id);
           if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs];
-          if (mounted) renderExternalActions(slot, stmt);
-        }).catch(err => { savingKeys.delete(stmt.citingKey); if (mounted) renderExternalActions(slot, stmt); toast(message(err)); });
+          if (mounted) { syncDocOptions(); syncExternalSlots(); }
+        }).catch(err => { savingKeys.delete(stmt.citingKey); if (mounted) syncExternalSlots(); toast(message(err)); });
       }
     });
+  };
+  const syncExternalSlots = () => {
+    if (!listEl || !report) return;
+    for (const slot of listEl.querySelectorAll<HTMLElement>('.cit-save-slot')) {
+      const s = report.statements.find(x => x.citingKey === slot.dataset.citingKey);
+      if (s) renderExternalActions(slot, s);
+    }
   };
   const buildCard = (stmt: CitationStatement): HTMLElement => {
     const card = el('article', 'cit-card'); card.dataset.citingKey = stmt.citingKey; card.dataset.stance = stmt.stance; card.dataset.source = stmt.source;
@@ -162,21 +169,28 @@ export function createCitationsView(): ResearchViewModule {
     const actions = el('div', 'cit-card-actions'), jumpDocId = stmt.source === 'local' ? (stmt.direction === 'references' ? (stmt.docId || report?.target.docId) : stmt.citingDocId) : undefined;
     if (jumpDocId && stmt.citingPage) actions.append(mkBtn('btn primary cit-jump-btn', t(`Jump to p. ${stmt.citingPage} ↗`, `跳转至第 ${stmt.citingPage} 页 ↗`), () => { void shell?.inspectInReader({ docId: jumpDocId, page: stmt.citingPage!, quote: cleanCtx.slice(0, 120) }).catch(err => toast(message(err))); }));
     const reclass = mkSelect('cit-reclass-select', STANCE_ITEMS.map(i => [i.key, `${i.icon} ${t(i.en, i.zh)}`] as const), async nextVal => {
-      const prev = stmt.stance, next = nextVal as CitationStance; if (next === prev) return;
+      const prev = stmt.stance, next = nextVal as CitationStance, snap = report; if (next === prev) return;
+      let removed = false;
       reclass.disabled = true;
       try {
         const res = await api('citations.reclassify', { targetKey: stmt.targetKey, direction: stmt.direction, citingKey: stmt.citingKey, stance: next });
-        if (!mounted || !report) return;
+        if (!mounted || !report || report.target.targetKey !== stmt.targetKey || report.direction !== stmt.direction) return;
+        if (report !== snap || !card.isConnected) { void loadReport(false); return; }
         const idx = report.statements.findIndex(x => x.citingKey === stmt.citingKey); if (idx >= 0) report.statements[idx] = res.statement;
         stmt = res.statement; report.tallies = res.tallies; syncTallies();
-        if (!matchesFilters(stmt)) { const scroll = listEl?.scrollTop ?? 0; renderList(); if (listEl) listEl.scrollTop = scroll; }
+        if (!matchesFilters(stmt)) { removed = true; const scroll = listEl?.scrollTop ?? 0; renderList(); if (listEl) listEl.scrollTop = scroll; }
         else { card.dataset.stance = badge.dataset.stance = stmt.stance; badge.textContent = stanceBadge(stmt.stance); manualTag.hidden = !stmt.manualOverride; rationale.textContent = stmt.rationale; rationale.hidden = !stmt.rationale; }
-      } catch (err) { reclass.value = prev; toast(message(err)); }
-      finally { reclass.disabled = false; if (mounted && reclass.isConnected) reclass.focus({ preventScroll: true }); }
+      } catch (err) { if (!mounted || report !== snap) return; reclass.value = prev; toast(message(err)); }
+      finally {
+        reclass.disabled = false;
+        if (!mounted) return;
+        if (reclass.isConnected) reclass.focus({ preventScroll: true });
+        else if (removed && report === snap) (listEl?.querySelector<HTMLElement>('.cit-reclass-select') ?? (clearBtn && !clearBtn.hidden && clearBtn.offsetParent ? clearBtn : searchInput))?.focus({ preventScroll: true });
+      }
     });
     reclass.ariaLabel = t('Reclassify citation stance', '重新分类引用立场'); reclass.dataset.citingKey = stmt.citingKey; reclass.value = stmt.stance;
     actions.append(reclass);
-    if (stmt.source !== 'local') { const slot = el('span', 'cit-save-slot'); renderExternalActions(slot, stmt); actions.append(slot); }
+    if (stmt.source !== 'local') { const slot = el('span', 'cit-save-slot'); slot.dataset.citingKey = stmt.citingKey; renderExternalActions(slot, stmt); actions.append(slot); }
     else if (stmt.citingUrl && safeWeb(stmt.citingUrl)) { const ext = el('a', 'external cit-ext-link', t('Source ↗', '来源 ↗')); ext.href = safeWeb(stmt.citingUrl)!; ext.target = '_blank'; ext.rel = 'noopener noreferrer'; actions.append(ext); }
     card.append(head, stanceRow, ctxBox, actions);
     return card;
@@ -223,6 +237,7 @@ export function createCitationsView(): ResearchViewModule {
         target = { docId: startCtx.docId ?? '', doi: startCtx.doi ?? '', arxivId: startCtx.arxivId ?? '', query: startCtx.query ?? '' };
         direction = startCtx.direction === 'references' ? 'references' : 'cited_by'; stanceFilter.clear();
         const initStance = startCtx.stance ?? startCtx.filter; if (isStance(initStance)) stanceFilter.add(initStance);
+        filters = { ...defaultFilters(), sort: filters.sort }; expandedKeys.clear();
         otherCount = null; report = null;
       } else if (!target.docId && !target.doi && !target.arxivId && !target.query) target.docId = ctx.activeDocId();
 
@@ -230,7 +245,7 @@ export function createCitationsView(): ResearchViewModule {
       const topEl = el('header', 'cit-top'), headRow = el('div', 'cit-head'), titleWrap = el('div', 'cit-title-wrap'), controls = el('div', 'cit-head-controls');
       titleEl = el('h1', 'cit-title', researchViewName('citations')); bylineEl = el('p', 'cit-byline'); bylineEl.hidden = true; titleWrap.append(titleEl, bylineEl);
       docSelect = el('select', 'cit-doc-select'); docSelect.ariaLabel = t('Select library paper', '选择库内文献');
-      docSelect.addEventListener('change', () => { if (!docSelect!.value) return; target = { docId: docSelect!.value, doi: '', arxivId: '', query: '' }; otherCount = null; report = null; expandedKeys.clear(); void loadReport(false); });
+      docSelect.addEventListener('change', () => { if (!docSelect!.value) return; target = { docId: docSelect!.value, doi: '', arxivId: '', query: '' }; otherCount = null; report = null; expandedKeys.clear(); renderAll(); void loadReport(false); });
       refreshBtn = mkBtn('btn cit-refresh-btn', t('Refresh', '刷新'), () => { void loadReport(true); });
       sciteLink = el('a', 'btn cit-scite-link', 'Scite ↗'); sciteLink.target = '_blank'; sciteLink.rel = 'noopener noreferrer'; sciteLink.ariaLabel = t('Open Scite report', '打开 Scite 报告'); sciteLink.hidden = true;
       mobileFiltersBtn = mkBtn('btn cit-filters-toggle', t('Filters', '筛选'), () => { mobileFiltersOpen = !mobileFiltersOpen; syncMobileFilters(); });
@@ -241,7 +256,7 @@ export function createCitationsView(): ResearchViewModule {
       citedByBtn = mkBtn('btn cit-dir-btn', t('Cited by', '被引'), () => switchDir('cited_by')); citedByBtn.dataset.dir = 'cited_by';
       refsBtn = mkBtn('btn cit-dir-btn', t('References', '参考文献'), () => switchDir('references')); refsBtn.dataset.dir = 'references';
       dirTabs.append(citedByBtn, refsBtn); subRow.append(unitsEl, dirTabs);
-      bannerEl = el('div', 'cit-banner'); bannerEl.setAttribute('role', 'status'); bannerEl.hidden = true; topEl.append(headRow, subRow);
+      bannerEl = el('div', 'cit-banner'); bannerEl.setAttribute('role', 'status'); bannerEl.hidden = true; topEl.append(headRow);
 
       const bodyEl = el('div', 'cit-body'), talliesWrap = el('div', 'cit-tallies-wrap'), talliesRow = el('div', 'cit-tallies');
       for (const item of STANCE_ITEMS) {
@@ -255,7 +270,7 @@ export function createCitationsView(): ResearchViewModule {
       const closeMobile = () => { mobileFiltersOpen = false; syncMobileFilters(); };
       facetsBackdrop = el('div', 'cit-facets-backdrop'); facetsBackdrop.hidden = true; facetsBackdrop.addEventListener('click', closeMobile);
       facetsEl.setAttribute('aria-label', t('Citation filters', '引用筛选'));
-      facetsEl.addEventListener('keydown', e => { if (e.key === 'Escape' && mobileFiltersOpen) { e.preventDefault(); e.stopPropagation(); closeMobile(); mobileFiltersBtn?.focus({ preventScroll: true }); } });
+      facetsEl.addEventListener('keydown', e => { if (e.key === 'Escape' && mobileFiltersOpen && window.innerWidth <= 700) { e.preventDefault(); e.stopPropagation(); closeMobile(); mobileFiltersBtn?.focus({ preventScroll: true }); } });
       const fHead = el('div', 'cit-facets-head'), fClose = mkBtn('icon-btn cit-facets-close', '×', closeMobile);
       fClose.ariaLabel = t('Close filters', '关闭筛选'); fHead.append(el('strong', '', t('Filters', '筛选条件')), fClose);
       const typeGroup = el('div', 'cit-facet-group'); typeGroup.append(el('div', 'cit-facet-title', t('Citation Type', '引用立场')));
@@ -287,8 +302,8 @@ export function createCitationsView(): ResearchViewModule {
       matchCountEl = el('span', 'cit-match-count'); toolbar.append(searchInput, sortSelect, matchCountEl);
       statusEl = el('p', 'cit-status'); statusEl.setAttribute('role', 'status'); listEl = el('div', 'cit-list');
       feedPane.append(toolbar, statusEl, listEl); splitEl.append(facetsBackdrop, facetsEl, feedPane);
-      bodyEl.append(bannerEl, talliesWrap, splitEl); viewEl.append(topEl, bodyEl); host.append(viewEl); renderAll();
-      void api('library.list', {}).then(({ docs: listed }) => { docs = listed; if (mounted) { syncDocOptions(); syncHeader(); } }).catch(() => undefined);
+      bodyEl.append(subRow, bannerEl, talliesWrap, splitEl); viewEl.append(topEl, bodyEl); host.append(viewEl); renderAll();
+      void api('library.list', {}).then(({ docs: listed }) => { docs = listed; if (mounted) { syncDocOptions(); syncHeader(); syncExternalSlots(); } }).catch(() => undefined);
       void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted && !restored) void loadReport(false); });
     },
     unmount() { mounted = false; abortPending(); tallyBtns.clear(); facetChecks.clear(); },
@@ -304,7 +319,7 @@ export function createCitationsView(): ResearchViewModule {
       if (searchInput) searchInput.value = filters.search; if (sortSelect) sortSelect.value = filters.sort;
       syncDocOptions(); renderAll(); if (listEl) listEl.scrollTop = s.listScrollTop ?? 0;
     },
-    handleEscape() { if (!mobileFiltersOpen) return false; mobileFiltersOpen = false; syncMobileFilters(); mobileFiltersBtn?.focus({ preventScroll: true }); return true; },
+    handleEscape() { if (!mobileFiltersOpen || window.innerWidth > 700) return false; mobileFiltersOpen = false; syncMobileFilters(); mobileFiltersBtn?.focus({ preventScroll: true }); return true; },
     onDocumentMutated(docId, deleted) {
       if (!deleted) return;
       docs = docs.filter(d => d.id !== docId); for (const [k, id] of savedMap) if (id === docId) savedMap.delete(k);
