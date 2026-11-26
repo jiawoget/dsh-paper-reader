@@ -37,6 +37,10 @@ import { bindPdfDropTarget, importPdfFiles } from './pdf-import.js';
 import { FigurePins } from './figure-pin.js';
 import { trackReadingProgress } from './reading-progress.js';
 import { copyRegionPng, saveRegionPng } from './region-png.js';
+import { researchIcon } from './research/icons.js';
+import { researchText, type ResearchViewId } from './research/labels.js';
+import { locateQuoteInView, type InspectTarget, type ResearchOpenContext, type ReturnAnchor } from './research/state.js';
+import { ResearchWorkspace } from './research/workspace-shell.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
 type SidebarTab = typeof sidebarTabs[keyof typeof sidebarTabs];
@@ -113,6 +117,13 @@ class Reader implements ReaderPort {
     isBilingual:()=>this.parallel, showSource:()=>this.setReadingMode('source'), showTranslation:()=>this.setReadingMode('bilingual'),
     navigateToPage:page=>this.navigate(this.doc.id,page), pushHistory:()=>this.jumpHistory.push(this.readingPosition(false)),
     focusBlock:id=>this.pdfView?.focusBlock?.(id)
+  });
+  private readonly research = new ResearchWorkspace({
+    activeDocId: () => this.doc.id,
+    capturePosition: () => { this.card.close(); this.closeMenu(); return this.readingPosition(true); },
+    restorePosition: anchor => this.restoreReading(anchor),
+    inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
+    focusAfterCollapse: () => (this.desk.notebookOpen ? byId('expandResearch') : byId('library')).focus({ preventScroll: true })
   });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
 
@@ -269,6 +280,7 @@ class Reader implements ReaderPort {
   }
   discardDocument(docId: string): void {
     discardNotebook(this, docId);
+    this.research.notifyDocumentMutated(docId);
     if (this.doc.id === docId) {
       this.jumpHistory.clear(); this.pins.clear(); this.search.reset(); this.leaveBookReading?.(false); this.leaveProgress?.(false);
       this.leaveBookReading = undefined; this.leaveProgress = undefined;
@@ -343,7 +355,7 @@ class Reader implements ReaderPort {
     return this.navigate(opened.doc.id,opened.page,opened.anchor,'',undefined,undefined,{opened:opened.doc});
   }
   async navigate(id:string,page?:number,anchor='',quote='',target?:TranslatedLocator,range?:SavedSelectionRange,
-    options?:{opened?:DocumentInfo;restoreWithinPage?:boolean;fromContents?:boolean;skipHistory?:boolean;forceReload?:boolean}):Promise<void>{
+    options?:{opened?:DocumentInfo;restoreWithinPage?:boolean;fromContents?:boolean;skipHistory?:boolean;keepHistory?:boolean;forceReload?:boolean}):Promise<void>{
     if(!options?.skipHistory && this.view && this.loadedId===id && ((page??this.page)!==this.page || Boolean(anchor) || Boolean(options?.fromContents && byId('paperScroll').scrollTop>4)))this.jumpHistory.push(this.readingPosition(false));
     this.cancelCapture(false); this.beforeCapture=undefined;
     this.cancelPin();this.marks.closePageEditor();
@@ -360,6 +372,7 @@ class Reader implements ReaderPort {
     else if(readingLink && !translatedSource && this.desk.isNarrow)this.setReadingMode('source');
     if(!options?.forceReload && !revealTranslation && this.view && !this.navigating && id===this.loadedId && (page??this.page)===this.page){
       if(anchor)this.locateAnchor(this.view,anchor,quote,target,range);
+      else if(quote)locateQuoteInView(this.view,quote);
       else if(this.doc.book && page && options?.opened)byId('paperScroll').scrollTop=0;
       this.remember(anchor,quote,target,range);return;
     }
@@ -400,7 +413,7 @@ class Reader implements ReaderPort {
         const previous=this.pdf;this.pdf=pdf;if(previous && previous!==pdf)void previous.destroy().catch(()=>undefined);
         this.doc=doc;this.loadedId=id;this.page=number;
         if(changed){
-          this.jumpHistory.clear(); this.pins.clear(); const last=localStorage.getItem('reader.tab.'+doc.id);
+          if(!options?.keepHistory)this.jumpHistory.clear(); this.pins.clear(); const last=localStorage.getItem('reader.tab.'+doc.id);
           this.tab=Object.values(sidebarTabs).find(tab=>tab===last) ?? (doc.book?'contents':'notes');
         }
         this.desk.setDocument(Boolean(pdf),Boolean(doc.book));
@@ -547,6 +560,7 @@ class Reader implements ReaderPort {
     byId('paperScroll').scrollTop=0;
     this.remember(anchor,quote,target,range);
     if(anchor)this.locateAnchor(view,anchor,quote,target,range);
+    else if(quote)locateQuoteInView(view,quote);
   }
   private async translatePdf(view: PdfPageView, doc: DocumentInfo, page: number): Promise<void> {
     const version = this.epoch;
@@ -631,6 +645,7 @@ class Reader implements ReaderPort {
     finally { this.attachingPdf = false; }
   }
   private async handleAttachedPdf(upgraded: DocumentInfo): Promise<void> {
+    this.research.notifyDocumentMutated(upgraded.id);
     await this.navigate(upgraded.id, 1, '', '', undefined, undefined, { opened: upgraded, forceReload: true, skipHistory: true });
     toast(label('PDF attached and indexed.', '已附加 PDF 并建立全文索引。'), {
       label: label('Re-extract matrix cells', '重抽该篇矩阵列'),
@@ -761,8 +776,15 @@ class Reader implements ReaderPort {
     if(!explicit || !initial || initial.doc!==this.doc.id)return;
     void this.restoreReading(initial).catch(error=>toast(message(error)));
   }
+  openResearchWorkspace(view?: ResearchViewId, ctx?: ResearchOpenContext): void { this.research.open(view, ctx); }
+  private toggleResearchWorkspace(): void { if (this.research.isOpen()) void this.research.collapse(); else this.research.open(); }
+  private async inspectFromWorkspace(target: InspectTarget, returnAnchor?: ReturnAnchor): Promise<void> {
+    const origin = returnAnchor ?? this.readingPosition(false);
+    if (origin.doc !== target.docId || origin.page !== target.page) this.jumpHistory.push(origin);
+    await this.navigate(target.docId, target.page, target.anchor ?? '', target.quote ?? '', undefined, undefined, { keepHistory: true, skipHistory: true });
+  }
   private async restoreReading(initial:ReadingPosition):Promise<void> {
-    if(initial.doc!==this.doc.id || initial.page!==this.page)await this.navigate(initial.doc,initial.page,'','',undefined,undefined,{skipHistory:true});
+    if(initial.doc!==this.doc.id || initial.page!==this.page)await this.navigate(initial.doc,initial.page,'','',undefined,undefined,{skipHistory:true,keepHistory:true});
     if(initial.doc!==this.doc.id || initial.page!==this.page)return;
     this.setReadingMode(initial.mode);
     this.readingText=initial.text;this.updatePageFormat();
@@ -797,6 +819,8 @@ class Reader implements ReaderPort {
     };
     click('readText',toggleReadText); click('placePin',togglePlacePin);
     click('translate',()=>this.translatePage());
+    const expand=byId('expandResearch'); expand.append(researchIcon('expand',16)); expand.ariaLabel=researchText.expand(); expand.title=researchText.expandWithKey(); click('expandResearch',()=>this.openResearchWorkspace());
+    window.addEventListener('paper-reader:reextract-matrix',event=>this.openResearchWorkspace('review-table',{docId:(event as CustomEvent<{docId?:string}>).detail?.docId}));
     const resizePages=(value:ZoomSetting)=>{
       this.zoom=value; this.desk.setZoom(value);
       if(this.pdfView)this.pdfView.setZoom(value);
@@ -842,7 +866,10 @@ class Reader implements ReaderPort {
       canJumpBack:()=>this.jumpHistory.canBack(), canJumpForward:()=>this.jumpHistory.canForward(), jumpBack:()=>{void this.jumpInHistory('back').catch(e=>toast(message(e)));}, jumpForward:()=>{void this.jumpInHistory('forward').catch(e=>toast(message(e)));},
       toggleBilingual:()=>this.setReadingMode(this.desk.mode==='bilingual'?'source':'bilingual'),
       toggleSidebar:tab=>this.toggleSidebar(tab),
-      stepZoom:delta=>this.pdfControls?.stepZoom(delta)
+      stepZoom:delta=>this.pdfControls?.stepZoom(delta),
+      isResearchWorkspaceOpen:()=>this.research.isOpen(),
+      toggleResearchWorkspace:()=>this.toggleResearchWorkspace(),
+      handleWorkspaceEscape:()=>this.research.handleEscape()
     });
     click('more',()=>{const menu=byId('menu');if(!menu.hidden){this.closeMenu(true);return;}this.syncMenuActions();menu.hidden=false;
       menu.style.right=Math.max(6,innerWidth-byId('more').getBoundingClientRect().right)+'px';
@@ -868,7 +895,7 @@ class Reader implements ReaderPort {
     bindPdfDropTarget(byId('reader'), files => {
       if (this.doc.kind === 'abstract' && files.length === 1) { void this.attachAbstractPdf(files[0]); return; }
       void this.importFiles(files, text => toast(text)).catch(e => toast(message(e)));
-    }, { isBlocked: () => Boolean(document.querySelector('dialog[open]')) });
+    }, { isBlocked: () => this.research.isOpen() || Boolean(document.querySelector('dialog[open]')) });
     byId('menu').addEventListener('focusout',event=>{
       if(event.relatedTarget instanceof HTMLElement && !event.relatedTarget.closest('#menu,#more,#pdfThemeMenu'))this.closeMenu();
     });

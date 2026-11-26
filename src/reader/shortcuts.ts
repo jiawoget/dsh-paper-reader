@@ -21,6 +21,9 @@ interface ShortcutActions {
   toggleBilingual: () => void;
   toggleSidebar: (tab: 'contents' | 'notes' | 'marks' | 'reference') => void;
   stepZoom: (delta: -1 | 1) => void;
+  isResearchWorkspaceOpen: () => boolean;
+  toggleResearchWorkspace: () => void;
+  handleWorkspaceEscape: () => boolean;
 }
 
 export function installShortcuts(actions: ShortcutActions): { open: () => void } {
@@ -64,6 +67,7 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
         [['c'], label('Toggle Contents sidebar', '打开或收起目录栏')],
         [['m'], label('Toggle Marks sidebar', '打开或收起标记栏')],
         [['r'], label('Toggle Reference sidebar', '打开或收起文献栏')],
+        [['Ctrl/Cmd+Shift+R'], label('Open or collapse Research Workspace', '展开或收起科研工作台')],
         [['←', '→', 'Home', 'End'], label('Switch tabs in sidebar, Library, Connections, or Vocabulary and history', '在侧栏、资料库、连接设置或生词与历史中切换标签页')]
       ]],
       [label('Notes editor', '笔记编辑器'), [
@@ -96,12 +100,17 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
     if (document.querySelector(':popover-open') || e.isComposing || e.keyCode === 229) return;
     const openDialog = document.querySelector('dialog[open]');
     if (e.key === 'Escape' && !e.defaultPrevented && !openDialog) {
+      if (actions.isResearchWorkspaceOpen()) { if (actions.handleWorkspaceEscape()) e.preventDefault(); return; }
       if (actions.isCapturing()) { e.preventDefault(); actions.cancelCapture(); return; }
       if (!byId('menu').hidden) { actions.closeMenu(); return; }
       if (actions.dismissDrawer()) return;
       if (!byId('card').hidden) { actions.dismissCard(); return; }
       if (actions.isSearchOpen()) { e.preventDefault(); actions.closeSearch(); return; }
     }
+    if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'r' && !openDialog) {
+      e.preventDefault(); actions.toggleResearchWorkspace(); return;
+    }
+    if (actions.isResearchWorkspaceOpen()) return;
     if (!e.defaultPrevented && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f' && !openDialog) {
       if (byId('rail').hasAttribute('aria-modal')) return;
       if (e.target instanceof Element && e.target.closest('.cm-editor, dialog')) return;
