@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { chromium } from 'playwright-core';
 import { withHost } from './host.js';
 import { openReaderPage } from './helpers/reader.js';
@@ -53,6 +54,7 @@ async function run(): Promise<void> {
       await page.keyboard.press('Control+Shift+R'); await ws.waitFor({ state: 'hidden' });
       await page.locator('#library').click(); await page.locator('.library-workspace-btn').click();
       await ws.waitFor({ state: 'visible' }); assert.equal(await page.locator('#dialog').isVisible(), false);
+      await ws.locator('.rw-nav-btn[data-view="citations"]').click();
       await ws.locator('.rw-topic-add-btn').click(); await ws.locator('.rw-topic-input').fill('KV Cache');
       await ws.locator('.rw-topic-form button[type="submit"]').click();
       await page.waitForFunction(() => (document.getElementById('rwTopicSelect') as HTMLSelectElement | null)?.value === 'KV Cache');
@@ -65,7 +67,7 @@ async function run(): Promise<void> {
       await hit6.click();
       await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
       assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16');
-      assert.match(await page.locator('.return-workspace-go').innerText(), /Deep Search/);
+      assert.match(await page.locator('.return-workspace-go').innerText(), /Citations/);
       assert.equal(await page.locator('#jumpBack').isEnabled(), true);
       await page.locator('#jumpBack').click();
       await page.waitForFunction(() => document.getElementById('pageCount')?.textContent?.trim() === '5 / 16');
@@ -263,7 +265,7 @@ async function run(): Promise<void> {
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.ft-deep-btn').click();
       assert.equal(await ws.locator('.rw-nav-btn[aria-current="page"]').getAttribute('data-view'), 'deep-search');
-      assert.match(await ws.locator('.rw-search-input').inputValue(), /KV Cache Compression/);
+      assert.match(await ws.locator('.ds-query-input').inputValue(), /KV Cache Compression/);
       await page.unroute('**/api/paper-reader/action');
 
       await page.setViewportSize({ width: 1440, height: 900 });
@@ -390,6 +392,65 @@ async function run(): Promise<void> {
       await page.keyboard.press('Escape'); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
       await ws.locator('.rt-step-btn[data-step="screening"]').click();
       assert.ok(await ws.evaluate(() => { const sc = document.querySelector('.rt-screen-ctrls')!; return sc.scrollWidth <= sc.clientWidth + 1 && document.querySelector('.rt-body-scroll')!.getBoundingClientRect().top <= 150; }));
+
+      const dsC1 = { id: 'DS1', openAlexId: 'W801', title: 'Virtual Block Table Paging for Tensor Heaps', authors: ['Lin Wu', 'Mei Zhou'], firstAuthor: 'Lin Wu', lastAuthor: 'Mei Zhou', year: 2024, venue: 'OSDI', doi: '10.1000/ds1', citationCount: 210, source: 'openalex' as const, inLibrary: false, abstract: 'Eliminates KV fragmentation with non-contiguous slabs.', matchScore: 94, rationale: 'Directly removes memory waste via block tables.', category: 'Block Paging', foundRound: 1 };
+      const dsC2 = { id: 'DS2', openAlexId: 'W802', title: 'Prefix-Aware KV Eviction Engine', authors: ['Sam Patel'], firstAuthor: 'Sam Patel', lastAuthor: 'Sam Patel', year: 2025, venue: 'MLSys', doi: '10.1000/ds2', citationCount: 88, source: 'openalex' as const, inLibrary: false, abstract: 'Retains shared prompt prefixes under pressure.', matchScore: 82, rationale: 'Targets prefix reuse in autoregressive serving.', category: 'Prefix Sharing', foundRound: 2 };
+      let dsRunCount = 0;
+      const streamSrv = createServer((req, res) => {
+        res.setHeader('access-control-allow-origin', '*'); res.setHeader('access-control-allow-headers', 'content-type, accept');
+        if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+        res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
+        const runNo = ++dsRunCount, curve1 = [{ round: 1, evaluated: 12, matched: 1, newMatches: 1 }];
+        res.write(JSON.stringify({ type: 'progress', round: 1, totalRounds: 2, stage: 'score', evaluatedCount: 12, matchedCount: 1, newMatches: 1, saturationCurve: curve1, degraded: ['s2'], message: 'Round 1 scored', candidates: [dsC1] }) + '\n');
+        if (runNo === 1) { const tmr = setTimeout(() => res.end(), 20_000); req.on('close', () => clearTimeout(tmr)); return; }
+        const curve2 = [...curve1, { round: 2, evaluated: 24, matched: 2, newMatches: 1 }];
+        res.end(JSON.stringify({ type: 'result', result: { query: 'Eliminate KV fragmentation', overview: 'Key advances include [#1] (Wu, 2024) and [#2] (Patel, 2025).', categories: ['Block Paging', 'Prefix Sharing'], candidates: [dsC1, dsC2], roundsCompleted: 2, totalEvaluated: 24, saturationCurve: curve2, degraded: ['s2'], aborted: false } }) + '\n');
+      });
+      await new Promise<void>(r => streamSrv.listen(0, '127.0.0.1', r));
+      const streamUrl = `http://127.0.0.1:${(streamSrv.address() as { port: number }).port}/`;
+      const wlEntries: Record<string, unknown>[] = [];
+      await page.route('**/api/paper-reader/action', async route => {
+        const body = route.request().postDataJSON() as { op?: string; payload?: Record<string, unknown> };
+        if (body.op === 'deepSearch.clarify') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: body.payload?.query ?? '', questions: [{ id: 'q1', question: 'Target hardware?', options: ['Single GPU', 'Multi-node'] }, { id: 'q2', question: 'Time window?', options: ['Last 3 years', 'All years'] }] }) }); return; }
+        if (body.op === 'deepSearch.run') { await route.continue({ url: streamUrl }); return; }
+        if (body.op === 'watchlist.list') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entries: wlEntries }) }); return; }
+        if (body.op === 'watchlist.save') { const e = { id: 'wl1', kind: 'topic', label: String(body.payload?.label ?? 'KV Watch'), query: String(body.payload?.query ?? ''), sources: ['openalex'], cursorDate: '2025-01-01', seenKeys: [], unread: [], createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' }; wlEntries.splice(0, wlEntries.length, e); await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entry: e }) }); return; }
+        if (body.op === 'watchlist.check') { if (wlEntries[0]) (wlEntries[0] as { unread: unknown[] }).unread = [{ key: 'ds2', paper: dsC2, foundAt: '2025-02-01T00:00:00Z' }]; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entries: wlEntries, checkedCount: 1, newItemsCount: 1, degraded: [] }) }); return; }
+        if (body.op === 'watchlist.markRead') { if (wlEntries[0]) (wlEntries[0] as { unread: unknown[] }).unread = []; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entry: wlEntries[0] }) }); return; }
+        if (body.op === 'graph.resolve' || body.op === 'graph.explore') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body.op === 'graph.resolve' ? { paper: dsC1, degraded: [], fromCache: false } : { seeds: [dsC1], nodes: [{ ...dsC1, isSeed: true }], edges: [], degraded: [], fromCache: false }) }); return; }
+        await route.fallback();
+      });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await ws.locator('.rw-nav-btn[data-view="deep-search"]').click();
+      await ws.locator('.ds-query-input').fill('Eliminate KV fragmentation');
+      await ws.locator('.ds-clarify-btn').click();
+      await ws.locator('.ds-q-card').first().waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-q-card').count(), 2);
+      await ws.locator('.ds-opt-chip', { hasText: 'Single GPU' }).click();
+      await ws.locator('.ds-start-btn').click();
+      await ws.locator('.ds-curve-svg').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-scoping').count(), 0);
+      await page.waitForFunction(() => document.querySelector('.ds-kpi[data-kpi="evaluated"] .ds-kpi-val')?.textContent === '12');
+      await ws.locator('.ds-stop-btn').click();
+      await ws.locator('.ds-partial-banner').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-card').count(), 1);
+      await ws.locator('.ds-edit-scope-btn').click(); await ws.locator('.ds-skip-btn').click();
+      await ws.locator('.ds-cite-ref[data-rank="1"]').waitFor({ state: 'visible' });
+      await ws.locator('.ds-cat-chip[data-cat="Prefix Sharing"]').click(); assert.equal(await ws.locator('.ds-card').count(), 1);
+      await ws.locator('.ds-cite-ref[data-rank="1"]').click(); assert.equal(await ws.locator('.ds-card').count(), 2);
+      assert.equal(await ws.locator('.ds-card[data-rank="1"] .ds-match-pill').innerText(), '★ 94%');
+      await ws.locator('.ds-card[data-rank="1"] .ds-abs-toggle').click(); await ws.locator('.ds-card[data-rank="1"] .ds-abs-text').waitFor({ state: 'visible' });
+      await ws.locator('.ds-card[data-rank="1"] .ds-save-abs').click(); await ws.locator('.ds-card[data-rank="1"] .ds-open-btn').waitFor({ state: 'visible' });
+      await ws.locator('.ds-wl-btn').click(); await ws.locator('.wl-drawer').waitFor({ state: 'visible' });
+      await ws.locator('.wl-add-input').fill('KV Paging Watch'); await ws.locator('.wl-add-btn').click();
+      await ws.locator('.wl-check-one').click(); await ws.locator('.wl-unread-badge').waitFor({ state: 'visible' });
+      await ws.locator('.wl-mark-read').click(); await ws.locator('.wl-unread-badge').waitFor({ state: 'hidden' });
+      await ws.locator('.wl-add-input').focus(); await page.keyboard.press('Escape'); await ws.locator('.wl-drawer').waitFor({ state: 'hidden' });
+      await ws.locator('.ds-to-review-btn').click(); await ws.locator('.rw-nav-btn[data-view="review-table"][aria-current="page"]').waitFor({ state: 'visible' });
+      await ws.locator('.rw-nav-btn[data-view="deep-search"]').click(); await ws.locator('.ds-to-map-btn').click();
+      assert.equal(await ws.locator('.rw-nav-btn[aria-current="page"]').getAttribute('data-view'), 'citation-map');
+      await ws.locator('.rw-nav-btn[data-view="deep-search"]').click();
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
+      assert.ok(await ws.evaluate(() => document.querySelector('.ds-body')!.getBoundingClientRect().top <= 150 && document.documentElement.scrollWidth <= innerWidth + 1));
+      await assertMobilePanelTargets(page, '#researchWorkspace');
+      await page.unroute('**/api/paper-reader/action'); streamSrv.close();
       await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
@@ -401,6 +462,10 @@ async function run(): Promise<void> {
       await zhPage.keyboard.press('Control+Shift+R'); await zhPage.locator('#researchWorkspace').waitFor({ state: 'visible' });
       assert.deepEqual((await zhPage.locator('.rw-nav-btn .rw-label').allTextContents()).map(s => s.trim()), ZH_VIEWS);
       assert.ok(await zhPage.locator('.rw-collapse-btn .rw-label').evaluate(el => el.clientWidth > 0 && el.scrollWidth <= el.clientWidth));
+      await zhPage.locator('.ds-wl-btn').click(); await zhPage.locator('.wl-drawer').waitFor({ state: 'visible' });
+      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Deep Search & Watchlist', ['clarify', 'watchlist']);
+      await zhPage.keyboard.press('Escape'); await zhPage.locator('.wl-drawer').waitFor({ state: 'hidden' });
+      await zhPage.locator('.rw-nav-btn[data-view="citations"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '#rwTopicSelect option:not([value=""])'), 'zh-CN Research Workspace');
       await zhPage.locator('.rw-nav-btn[data-view="citation-map"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select'), 'zh-CN Citation Map');

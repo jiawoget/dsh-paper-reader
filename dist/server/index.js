@@ -5503,9 +5503,9 @@ async function fetchWatchPapers(entry, docs, ctx, degraded) {
     }
     return { items, workId, attempted, selfKeys };
   }
-  const localDoc = entry.docId ? docs.find((d) => d.id === entry.docId) : void 0, oaId0 = shortOaId(workId), docDoi = cleanDoi2(localDoc?.doi), workDoi = workId && !oaId0 ? cleanDoi2(workId) : void 0;
-  let oaId = oaId0, s2Key = workDoi?.startsWith("10.") ? "DOI:" + workDoi : workId && !oaId ? workId : docDoi ? "DOI:" + docDoi : "";
-  for (const k of [oaId && "oa:" + oaId, docDoi && "doi:" + docDoi.toLowerCase(), workDoi && "doi:" + workDoi.toLowerCase()]) if (k) selfKeys.add(k);
+  const localDoc = entry.docId ? docs.find((d) => d.id === entry.docId) : void 0, oaId0 = shortOaId(workId), docDoi = cleanDoi2(localDoc?.doi), workDoi = workId && !oaId0 ? cleanDoi2(workId) : void 0, axId = workId && !oaId0 && !workDoi?.startsWith("10.") ? extractArxivId(workId) : void 0;
+  let oaId = oaId0, s2Key = workDoi?.startsWith("10.") ? "DOI:" + workDoi : axId ? "ARXIV:" + axId : workId && !oaId ? workId : docDoi ? "DOI:" + docDoi : "";
+  for (const k of [oaId && "oa:" + oaId, docDoi && "doi:" + docDoi.toLowerCase(), workDoi && "doi:" + workDoi.toLowerCase(), axId && "arxiv:" + axId.toLowerCase()]) if (k) selfKeys.add(k);
   if (entry.sources.includes("openalex") && !oaId || entry.sources.includes("s2") && !s2Key) {
     const resolved = await resolveAcademicPaper(!oaId && workId || docDoi || localDoc?.url || localDoc?.paperTitle || localDoc?.title || entry.query, ctx);
     for (const d of resolved.degraded) degraded.add(d);

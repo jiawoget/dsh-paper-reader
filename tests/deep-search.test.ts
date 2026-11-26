@@ -103,7 +103,7 @@ test('watchlist tracks topic and paper incrementally with zero LLM tokens, dedup
   for (const sql of ['CREATE TABLE doc_pages(docId TEXT, page INTEGER, text TEXT, updatedAt INTEGER)', 'CREATE VIRTUAL TABLE doc_pages_fts USING fts5(docId, page, text)', 'CREATE TABLE topics(id TEXT PRIMARY KEY)', 'CREATE TABLE graph_cache(cacheKey TEXT PRIMARY KEY)', 'CREATE TABLE paper_cards(doc_id TEXT PRIMARY KEY)', 'CREATE TABLE extraction_tables(id TEXT PRIMARY KEY)', 'CREATE TABLE extraction_cells(table_id TEXT, doc_id TEXT, col_id TEXT)']) mem.exec(sql);
   assert.equal(hasResearchSchema(mem), false); ensureResearchSchema(mem); assert.equal(hasResearchSchema(mem), true);
 
-  let llmCalls = 0, phase = 1, oaFail = false, resolveCalls = 0, onFetch: (() => Promise<void>) | undefined;
+  let llmCalls = 0, phase = 1, oaFail = false, resolveCalls = 0, s2ArxivHit = false, onFetch: (() => Promise<void>) | undefined;
   const ctx = makeHost(() => { llmCalls++; throw new Error('Watchlist must never call LLM'); });
   const p1 = oaWork('W501', 'GLP-1 Trial Update One', 2025, '2025-01-10', '10.1000/w1', ['Semaglutide']), p2 = oaWork('W502', 'GLP-1 Trial Update Two', 2025, '2025-02-01', '10.1000/w2', ['Tirzepatide']);
   const oaArxiv = oaWork('W701', 'A <Fast> Method', 2025, '2025-02-10', '10.48550/arxiv.2502.00001', ['Fast']);
@@ -119,6 +119,10 @@ test('watchlist tracks topic and paper incrementally with zero LLM tokens, dedup
       if (f.includes('cites:W900')) return jsonRes({ results: [cite1] });
       if (q.includes('arxiv')) return jsonRes({ results: [oaArxiv] });
       return jsonRes({ results: phase === 1 ? [p1] : [p1, p2] });
+    }
+    if (url.hostname === 'api.semanticscholar.org') {
+      if (url.pathname.includes('/paper/ARXIV%3A2309.06180/citations')) { s2ArxivHit = true; return jsonRes({ data: [{ citingPaper: { paperId: 's2c1', title: 'ArXiv Citing Work', year: 2025, authors: [{ name: 'Eve' }] } }] }); }
+      return jsonRes({ data: [] });
     }
     if (url.hostname === 'export.arxiv.org') return new Response(arxivXml, { status: 200 });
     return url.hostname === 'www.ebi.ac.uk' ? jsonRes({ resultList: { result: [] } }) : new Response('<feed></feed>', { status: 200 });
@@ -150,6 +154,8 @@ test('watchlist tracks topic and paper incrementally with zero LLM tokens, dedup
   assert.ok(recChk.newItemsCount === 0 && recChk.entries.find(e => e.id === arxivW.id)?.cursorDate === '2025-02-10');
   const dupW = (await act('watchlist.save', { kind: 'topic', label: 'Dup Watch', query: 'arxiv dup', sources: ['openalex', 'arxiv'], cursorDate: '2025-01-01' })).entry;
   assert.equal((await act('watchlist.check', { id: dupW.id })).newItemsCount, 1); assert.equal(llmCalls, 0);
+  const axPaperW = (await act('watchlist.save', { kind: 'paper', label: 'Bare ArXiv Watch', workId: '2309.06180', sources: ['s2'], cursorDate: '2025-01-01' })).entry;
+  assert.ok((await act('watchlist.check', { id: axPaperW.id })).newItemsCount === 1 && s2ArxivHit);
 
   await act('library.delete', { id: doc.id });
   const db = new DatabaseSync(path.join(root, 'reader.sqlite'), { readOnly: true }); t.after(() => db.close());
