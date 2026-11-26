@@ -2,6 +2,7 @@ import type { DocPageHit, DocumentInfo, GraphDirection } from '../shared/types.j
 import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, saveGraphPaper } from './academic-graph.js';
+import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
 import { publicResource } from './public-resource.js';
@@ -50,11 +51,12 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     if (!pages.length || !documents.hasSync(full.id)) return 0;
     return database.withDb(true, db => replaceDocPages(db, full.id, pages));
   };
+  const listDocsWithMeta = async (): Promise<DocumentInfo[]> => {
+    const docs = await documents.list(), metas = database.listDocMeta();
+    return docs.map(doc => { const meta = metas.get(doc.id); return meta ? { ...doc, meta } : doc; });
+  };
   const handlers = {
-    'library.list': async () => {
-      const docs = await documents.list(), metas = database.listDocMeta();
-      return { docs: docs.map(doc => { const meta = metas.get(doc.id); return meta ? { ...doc, meta } : doc; }) };
-    },
+    'library.list': async () => ({ docs: await listDocsWithMeta() }),
     'library.get': async input => {
       const doc = await documents.get(input.id), meta = database.listDocMeta(doc.id).get(doc.id);
       return { doc: meta ? { ...doc, meta } : doc };
@@ -168,6 +170,12 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       const topicTag = input.topicTag === undefined ? undefined : single(input.topicTag, 'topic tag', 40);
       return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode: input.mode, topicTag }, { library: documents, store: database, readResource, indexDoc });
     },
+    'trends.query': async (input, options) => queryFieldTrends(readTrendQueryInput(input), {
+      withDb: (w, run) => database.withDb(w, run), settings: database.settings(), fetchFn: fetchImpl, docs: await listDocsWithMeta(), signal: options?.signal
+    }),
+    'trends.papers': async (input, options) => queryTrendPapers(readTrendPapersInput(input), {
+      withDb: (w, run) => database.withDb(w, run), settings: database.settings(), fetchFn: fetchImpl, docs: await listDocsWithMeta(), signal: options?.signal
+    }),
     'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),

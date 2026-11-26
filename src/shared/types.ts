@@ -4,6 +4,7 @@ import type { PdfOutlineEntry, PdfOutlinePage } from './pdf-outline.js';
 import type { AnnotationColor, AnnotationSaveInput, PaperAnnotation } from './annotations.js';
 import type { ArticleLayout, WebArticle } from './web-article.js';
 import type { BulkRefFormat } from './citation-bulk.js';
+import type { TrendPapersInput, TrendPapersResult, TrendQueryInput, TrendQueryResult } from './research-types.js';
 
 export type ReadingSide = 'source' | 'translation';
 
@@ -195,6 +196,8 @@ export interface Operations {
   'graph.resolve': [{ query?: string; docId?: string }, { paper: GraphPaper | null; degraded: string[]; fromCache: boolean }];
   'graph.explore': [{ seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, GraphExploreResult];
   'graph.savePaper': [{ paper: GraphPaper; mode: 'abstract' | 'oa-pdf'; topicTag?: string }, { doc: DocumentInfo; upgraded?: boolean; mode: 'abstract' | 'oa-pdf' }];
+  'trends.query': [TrendQueryInput, TrendQueryResult];
+  'trends.papers': [TrendPapersInput, TrendPapersResult];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
