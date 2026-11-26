@@ -40,7 +40,7 @@ import { copyRegionPng, saveRegionPng } from './region-png.js';
 import { researchIcon } from './research/icons.js';
 import { researchText, type ResearchViewId } from './research/labels.js';
 import { locateQuoteInView, type InspectTarget, type ResearchOpenContext, type ReturnAnchor } from './research/state.js';
-import { createCitationMapView } from './research/citation-map-view.js';
+import { registerResearchViews } from './research/index.js';
 import { ResearchWorkspace } from './research/workspace-shell.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
@@ -820,7 +820,7 @@ class Reader implements ReaderPort {
     };
     click('readText',toggleReadText); click('placePin',togglePlacePin);
     click('translate',()=>this.translatePage());
-    this.research.registerView(createCitationMapView());
+    registerResearchViews(this.research);
     const expand=byId('expandResearch'); expand.append(researchIcon('expand',16)); expand.ariaLabel=researchText.expand(); expand.title=researchText.expandWithKey(); click('expandResearch',()=>this.openResearchWorkspace());
     window.addEventListener('paper-reader:reextract-matrix',event=>this.openResearchWorkspace('review-table',{docId:(event as CustomEvent<{docId?:string}>).detail?.docId}));
     const resizePages=(value:ZoomSetting)=>{

@@ -1,6 +1,7 @@
 import type { DocumentInfo, GraphDirection, GraphExploreResult, GraphNode, GraphPaper } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { CitationMapSvg, type AuthorLabelMode, type GraphViewMode } from './citation-map-svg.js';
+import { formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
 import type { ResearchShellContext, ResearchViewModule } from './state.js';
 
 interface TrailStep { label: string; direction: GraphDirection; seedIds: string[]; result: GraphExploreResult; selectedId: string | null }
@@ -11,12 +12,9 @@ interface SavedState {
 
 const CAP = 40, DIRS: readonly GraphDirection[] = ['earlier', 'later', 'similar'];
 const DIR_TEXT: Record<GraphDirection, string> = { earlier: 'Earlier', later: 'Later', similar: 'Similar' };
-const SRC_NAME: Record<string, string> = { openalex: 'OpenAlex', s2: 'Semantic Scholar', europepmc: 'Europe PMC', arxiv: 'arXiv' };
 const isDir = (v?: string): v is GraphDirection => v === 'earlier' || v === 'later' || v === 'similar';
-const isAbort = (err: unknown) => err instanceof DOMException ? err.name === 'AbortError' : err instanceof Error && /abort|cancel/i.test(err.message);
 const shortTitle = (s: string) => s.length > 26 ? s.slice(0, 25) + '…' : s;
 const seedKey = (p: GraphPaper) => p.openAlexId || p.doi || (p.arxivId ? `arXiv:${p.arxivId}` : p.s2Id || p.id);
-const mkBtn = (cls: string, text: string, onClick: () => void): HTMLButtonElement => { const b = el('button', cls, text); b.type = 'button'; b.addEventListener('click', onClick); return b; };
 
 export function createCitationMapView(): ResearchViewModule {
   let mounted = false, restored = false, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
@@ -52,18 +50,13 @@ export function createCitationMapView(): ResearchViewModule {
   };
   const renderDegraded = (sources: string[]) => {
     if (!degradedEl) return; degradedEl.hidden = !sources.length;
-    if (sources.length) degradedEl.textContent = t(`Partial data: ${[...new Set(sources)].map(s => SRC_NAME[s] ?? s).join(', ')} unavailable, using fallback sources.`, `数据源降级：${[...new Set(sources)].map(s => SRC_NAME[s] ?? s).join(', ')} 暂不可用，已切换备用源。`);
+    if (sources.length) degradedEl.textContent = formatDegradedSources(sources);
   };
-  const renderActionSlot = (slot: HTMLElement, node: GraphNode, inDetail: boolean) => {
-    slot.replaceChildren(); const busy = savingIds.has(node.id);
-    if (node.inLibrary) {
-      const openBtn = mkBtn('btn cm-open-btn', inDetail ? t('Open in Reader', '在精读中打开') : t('Open', '打开'), () => { if (node.docId) void shell?.inspectInReader({ docId: node.docId, page: 1 }).catch(e => toast(message(e))); });
-      openBtn.disabled = busy || !node.docId; slot.append(el('span', 'cm-lib-badge', t('✓ In Library', '✓ 已在库')), openBtn); return;
-    }
-    const saveAbs = mkBtn('btn cm-save-abs', t('+ Save Abstract only', '+ 仅摘要入库'), () => { void savePaperInPlace(node, 'abstract'); });
-    saveAbs.disabled = busy; slot.append(saveAbs);
-    if (node.oaPdfUrl) { const savePdf = mkBtn('btn primary cm-save-pdf', t('+ Import OA PDF', '+ 拉取 OA PDF'), () => { void savePaperInPlace(node, 'oa-pdf'); }); savePdf.disabled = busy; slot.append(savePdf); }
-  };
+  const renderActionSlot = (slot: HTMLElement, node: GraphNode, inDetail: boolean) => renderPaperActions(slot, node, {
+    prefix: 'cm', busy: savingIds.has(node.id), openLabel: inDetail ? t('Open in Reader', '在精读中打开') : t('Open', '打开'),
+    onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); },
+    onSave: saveMode => { void savePaperInPlace(node, saveMode); }
+  });
   const updatePaperStatusInPlace = (nodeId: string, inLibrary: boolean, docId?: string) => {
     for (const step of trail) {
       for (const n of step.result.nodes) if (n.id === nodeId) { n.inLibrary = inLibrary; n.docId = inLibrary ? docId : undefined; }
@@ -80,10 +73,8 @@ export function createCitationMapView(): ResearchViewModule {
     const prevInLib = Boolean(node.inLibrary), prevDocId = node.docId;
     savingIds.add(node.id); updatePaperStatusInPlace(node.id, true, prevDocId);
     try {
-      const topic = shell?.activeTopic(), res = await api('graph.savePaper', { paper: node, mode: saveMode, ...(topic ? { topicTag: topic } : {}) });
-      savingIds.delete(node.id);
-      updatePaperStatusInPlace(node.id, true, res.doc.id); shell?.notifyDocumentMutated(res.doc.id, false);
-      toast(saveMode === 'oa-pdf' ? t('Imported OA PDF into library.', '已拉取 OA PDF 入库。') : t('Saved Abstract only into library.', '已仅摘要入库。'));
+      const doc = await saveGraphPaper(node, saveMode, shell);
+      savingIds.delete(node.id); updatePaperStatusInPlace(node.id, true, doc.id);
     } catch (err) { savingIds.delete(node.id); updatePaperStatusInPlace(node.id, prevInLib, prevDocId); toast(message(err)); }
   };
   const renderDetail = () => {
@@ -142,7 +133,7 @@ export function createCitationMapView(): ResearchViewModule {
       if (!mounted || seq !== reqSeq) return;
       const next: TrailStep = { label: `${shortTitle(paper.title)} · ${DIR_TEXT[direction]}`, direction, seedIds: [seed], result, selectedId: null };
       trail = resetTrail ? [next] : [...trail, next]; selectedId = null; renderStep();
-    } catch (err) { if (mounted && seq === reqSeq && !isAbort(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
+    } catch (err) { if (mounted && seq === reqSeq && !isAbortError(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
   };
   const exploreSeed = async (direction: GraphDirection, explicitDocId?: string, explicitQuery?: string) => {
     const query = (explicitQuery ?? seedInput?.value ?? '').trim(), docId = explicitDocId ?? (query ? '' : (seedSelect?.value || seedDocId || shell?.activeDocId() || ''));
@@ -160,7 +151,7 @@ export function createCitationMapView(): ResearchViewModule {
         return;
       }
       await explorePaper(resolved.paper, direction, true);
-    } catch (err) { if (mounted && seq === reqSeq && !isAbort(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
+    } catch (err) { if (mounted && seq === reqSeq && !isAbortError(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
   };
 
   return {
