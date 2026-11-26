@@ -1,10 +1,12 @@
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Library, PDF_LIMIT, fail, isRecord } from './library.js';
+import { extractPdfPages } from './pdf-text.js';
 import { publicResource } from './public-resource.js';
+import { replaceDocPages } from './research-store.js';
 import { createServices } from './services.js';
 import { ReaderStore } from './reader-store.js';
 import { onLoopback } from './service-types.js';
@@ -22,7 +24,8 @@ interface ReaderHost {
 }
 export const name = 'paper-reader';
 export const inject = ['connection'];
-const publicDir = fileURLToPath(new URL('../web/', import.meta.url));
+const builtWeb = fileURLToPath(new URL('../web/', import.meta.url));
+const publicDir = existsSync(builtWeb) ? builtWeb : fileURLToPath(new URL('../../public/', import.meta.url));
 const pdfDir = path.dirname(fileURLToPath(import.meta.resolve('pdfjs-dist/package.json')));
 const mimeTypes: Record<string,string> = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8',
   '.mjs':'text/javascript; charset=utf-8', '.pdf':'application/pdf', '.png':'image/png','.json':'application/json','.txt':'text/plain; charset=utf-8',
@@ -124,7 +127,20 @@ export function apply(ctx:ReaderHost):void {
     if(req.headers.get('content-type')?.split(';')[0]!=='application/pdf') fail('Choose a PDF file.',415);
     const params = new URL(req.url).searchParams;
     const meta = { paperTitle: params.get('paperTitle') ?? undefined, authors: params.get('authors') ?? undefined, venue: params.get('venue') ?? undefined, year: params.get('year') ?? undefined, doi: params.get('doi') ?? undefined };
-    return json({doc:await library.importPdf(params.get('title') || 'Document.pdf', await boundedBody(req,PDF_LIMIT), params.get('url') ?? undefined, meta)});
+    const bytes = await boundedBody(req, PDF_LIMIT);
+    const doc = await library.importPdf(params.get('title') || 'Document.pdf', bytes, params.get('url') ?? undefined, meta);
+    try {
+      const pages = await extractPdfPages(bytes);
+      if (pages.length && library.hasSync(doc.id)) store.withDb(true, db => replaceDocPages(db, doc.id, pages));
+    } catch {}
+    return json({ doc });
+  },'streaming');
+  route('attach-pdf',['POST'],async req => {
+    if(req.headers.get('content-type')?.split(';')[0]!=='application/pdf') fail('Choose a PDF file.',415);
+    const id = new URL(req.url).searchParams.get('id');
+    const { doc, pages } = await library.attachPdf(id, await boundedBody(req, PDF_LIMIT));
+    if (pages.length && library.hasSync(doc.id)) store.withDb(true, db => replaceDocPages(db, doc.id, pages));
+    return json({ doc, pages: pages.length });
   },'streaming');
   route('action',['POST'],async req => {
     if(req.headers.get('content-type')?.split(';')[0]!=='application/json') fail('A JSON request is required.',415);

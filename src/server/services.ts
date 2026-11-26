@@ -1,11 +1,14 @@
+import type { DocPageHit, DocumentInfo } from '../shared/types.js';
 import type { ResourceReader } from './academic-intake.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
 import { publicResource } from './public-resource.js';
+import { extractDocumentPages } from './pdf-text.js';
 import { ReaderModel, type StreamOptions } from './reader-model.js';
 import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
+import { deleteTopic, hasDocPages, listTopics, replaceDocPages, saveTopic, searchDocPagesFts } from './research-store.js';
 import { hostAttachments } from './region-image.js';
 import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, type Input, type ServiceResults } from './service-types.js';
 import { openWebArticle } from './web-article.js';
@@ -37,6 +40,14 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     if (!documents.hasSync(id)) throw new ServiceError(404, 'Document not found.');
     return write();
   };
+  const indexDoc = async (doc: DocumentInfo, force = false): Promise<number> => {
+    if (!force && database.withDb(false, db => hasDocPages(db, doc.id))) return 0;
+    const full = doc.kind === 'pdf' || doc.paragraphs || doc.abstract ? doc : await documents.get(doc.id);
+    const pdfBytes = full.kind === 'pdf' ? await documents.bytes(full.id) : undefined;
+    const pages = await extractDocumentPages(full, pdfBytes);
+    if (!pages.length || !documents.hasSync(full.id)) return 0;
+    return database.withDb(true, db => replaceDocPages(db, full.id, pages));
+  };
   const handlers = {
     'library.list': async () => {
       const docs = await documents.list(), metas = database.listDocMeta();
@@ -49,14 +60,56 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'library.rename': async input => ({ doc: await documents.rename(input.id, input.title) }),
     'library.updateMeta': async input => ({ doc: await documents.updateMeta(input) }),
     'library.delete': input => documents.delete(input.id),
+    'library.createAbstract': async input => {
+      const doc = await documents.createAbstract(input);
+      await indexDoc(doc, doc.kind === 'abstract').catch(() => 0);
+      return { doc };
+    },
     'library.progress.save': input => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
     'library.triage': input => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
     'library.search': async input => {
       const query = single(input.query, 'search query', 256);
       return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };
     },
-    'web.import': input => documents.importWebDocument(input),
-    'web.open': input => openWebArticle(documents, input.url, readResource),
+    'pages.index': async input => {
+      if (input.force !== undefined && typeof input.force !== 'boolean') throw new ServiceError(400, 'Invalid force option.');
+      const force = input.force === true;
+      if (input.docId !== undefined) {
+        const pages = await indexDoc(await documents.get(input.docId), force);
+        return { indexed: pages > 0 ? 1 : 0, pages };
+      }
+      let indexed = 0, pages = 0;
+      for (const doc of await documents.list()) {
+        const count = await indexDoc(doc, force).catch(() => 0);
+        if (count > 0) { indexed++; pages += count; }
+      }
+      return { indexed, pages };
+    },
+    'pages.search': async input => {
+      const query = single(input.query, 'search query', 500);
+      if (!query) return { hits: [] };
+      const docIds = input.docIds === undefined ? undefined : (() => {
+        if (!Array.isArray(input.docIds) || input.docIds.length > 500) throw new ServiceError(400, 'Invalid document filter.');
+        return input.docIds.map(id => single(id, 'document ID', 512, true));
+      })();
+      const limit = input.limit;
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 200)) {
+        throw new ServiceError(400, 'Invalid search limit.');
+      }
+      const docs = await documents.list(), docMap = new Map(docs.map(d => [d.id, d]));
+      for (const target of docIds ? docIds.map(id => docMap.get(id)).filter((d): d is DocumentInfo => Boolean(d)) : docs) await indexDoc(target, false).catch(() => 0);
+      const hits: DocPageHit[] = [];
+      for (const hit of database.withDb(false, db => searchDocPagesFts(db, query, { docIds, limit }))) {
+        const doc = docMap.get(hit.docId);
+        if (doc) hits.push({ ...hit, docTitle: doc.title, docKind: doc.kind });
+      }
+      return { hits };
+    },
+    'topics.list': () => ({ topics: database.withDb(false, listTopics) }),
+    'topics.save': input => ({ topic: database.withDb(true, db => saveTopic(db, input)) }),
+    'topics.delete': input => database.withDb(true, db => deleteTopic(db, input.id)),
+    'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
+    'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
     'translation.get': async input => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
     'translation.page': async input => {

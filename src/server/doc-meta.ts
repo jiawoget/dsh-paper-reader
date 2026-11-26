@@ -108,7 +108,7 @@ function matchFields(fields: (string | undefined)[], needle: string): string | u
 
 export function searchLibrary(db: DatabaseSync, query: string, docs: DocumentInfo[]): LibrarySearchHit[] {
   const needle = query.toLocaleLowerCase(), docMap = new Map(docs.map(doc => [doc.id, doc])), metas = listDocMeta(db);
-  const docKind = (doc: DocumentInfo): 'pdf' | 'web' | 'book' => doc.book ? 'book' : doc.kind;
+  const docKind = (doc: DocumentInfo): 'pdf' | 'web' | 'book' | 'abstract' => doc.book ? 'book' : doc.kind;
   const docHits: LibrarySearchHit[] = [], contentHits: LibrarySearchHit[] = [];
   for (const doc of docs) {
     const meta = metas.get(doc.id);

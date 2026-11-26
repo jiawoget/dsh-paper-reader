@@ -144,7 +144,7 @@ function requestDocument(records: NotebookRecords, input: Input, sources: VaultS
   return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries('note', docId, chapter)) }, sources, false);
 }
 
-const storedDocId = /^(?:pdf|web|book)-[a-f0-9]{64}$/;
+const storedDocId = /^(?:pdf|web|book|abs)-[a-f0-9]{64}$/;
 
 export class PaperNotebooks {
   constructor(private readonly database: ReaderStore, private readonly library: Library, private readonly launch?: ObsidianLauncher) {}

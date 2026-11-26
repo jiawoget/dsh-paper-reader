@@ -98,6 +98,10 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
       .run('/users/1', 'document/' + id, 'ITEM' + id.slice(4, 8).toUpperCase());
     db.prepare('INSERT INTO doc_meta VALUES(?,?,?,?,?,?,?,?)')
       .run(id, 'reading', 1, '["ml"]', Date.now(), 2, 10, 0.4);
+    db.prepare('INSERT INTO doc_pages VALUES(?,?,?,?)')
+      .run(id, 1, 'PagedAttention block table memory', Date.now());
+    db.prepare('INSERT INTO doc_pages_fts VALUES(?,?,?)')
+      .run(id, 1, 'PagedAttention block table memory');
   };
 
   populateDoc(docA.id);
@@ -126,6 +130,8 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
     assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM article_captures WHERE docId=?', deletedId), 0);
     assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM citations WHERE identity=?', 'document/' + deletedId), 0);
     assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', deletedId), 0);
+    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_pages WHERE docId=?', deletedId), 0);
+    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_pages_fts WHERE docId=?', deletedId), 0);
   }
 
   // Verify disk files removed for Doc A & Book C
@@ -150,6 +156,8 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM article_captures WHERE docId=?', docB.id), 1);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM citations WHERE identity=?', 'document/' + docB.id), 1);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', docB.id), 1);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_pages WHERE docId=?', docB.id), 1);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_pages_fts WHERE docId=?', docB.id), 1);
   assert.equal(existsSync(path.join(docsDir, docB.id + '.pdf')), true);
   assert.equal(existsSync(path.join(root, 'translations', docB.id, 'ja', '1.json')), true);
 

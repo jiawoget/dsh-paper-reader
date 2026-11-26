@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, link, readFile, readdir, rm, writeFile, rename } from 'node:fs/promises';
+import { mkdir, link, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { DEFAULT_TARGET_LANGUAGE, findTargetLanguagePreset, parseTargetLanguage, targetsSimplifiedChinese } from '../shared/languages.js';
 import { bookSlug, openStaxLocation, openStaxUrl, type OpenStaxLocation } from '../shared/openstax.js';
-import type { DocMetadata, DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
+import type { DocMetadata, DocPageRecord, DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
 import { articleUrl, type WebArticle } from '../shared/web-article.js';
 import { hasDecoderRepetition, translationQualityError } from '../shared/translation-quality.js';
+import { attachPdfToRecord, createAbstractRecord, writeAtomic } from './abstract-library.js';
 import { readArticleLayout } from './article-layout.js';
 import { applyMetaPatch, missingDocMeta, sanitizeDocMeta } from './library-meta.js';
 import { parseOpenStaxPage, publishedEntry, type ReadBookResource } from './openstax.js';
@@ -35,13 +36,7 @@ export function isRecord(value: unknown): value is Record<string,unknown> {
 }
 export function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 function isFsError(error: unknown, code: string): boolean { return isRecord(error) && error.code === code; }
-const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
-
-async function writeAtomic(file: string, content: Buffer | string): Promise<void> {
-  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(tmp, content, { flag: 'wx' });
-  try { await rename(tmp, file); } finally { await rm(tmp, { force: true }); }
-}
+const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
 
 async function writeOnce(file: string, bytes: Buffer | string): Promise<void> {
   const temporary = file + '.' + randomUUID() + '.tmp';
@@ -78,7 +73,7 @@ export class Library {
     if (id === sample.id) return sample;
     try {
       const value: unknown = JSON.parse(await readFile(path.join(this.directory, id + '.json'), 'utf8'));
-      if (!isRecord(value) || value.id !== id || typeof value.title !== 'string' || !['pdf','web'].includes(String(value.kind))) fail('The document index is damaged.', 500);
+      if (!isRecord(value) || value.id !== id || typeof value.title !== 'string' || !['pdf','web','abstract'].includes(String(value.kind))) fail('The document index is damaged.', 500);
       if (id.startsWith('book-')) {
         if (value.kind !== 'web' || !isRecord(value.book) || !bookSlug(value.book.slug) || !Array.isArray(value.book.sections) || !value.book.sections.length ||
           !value.book.sections.every((section: unknown) => isRecord(section) && bookSlug(section.slug) && typeof section.title === 'string' &&
@@ -103,22 +98,24 @@ export class Library {
   }
   async list(): Promise<DocumentInfo[]> {
     await mkdir(this.directory, { recursive: true });
-    const names = (await readdir(this.directory)).filter(file => /^(pdf|web|book)-[a-f0-9]{64}\.json$/.test(file));
+    const names = (await readdir(this.directory)).filter(file => /^(pdf|web|book|abs)-[a-f0-9]{64}\.json$/.test(file));
     const docs = await Promise.all(names.map(name => this.get(name.slice(0,-5))));
     return [sample, ...docs.sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
-  private async mutateMeta(id: string, mutate: (saved: Record<string, unknown>) => boolean | void): Promise<DocumentInfo> {
+  private async withMetaLock<T>(id: string, run: () => Promise<T>): Promise<T> {
     const prev = this.metaJobs.get(id);
-    const job = (async () => {
-      if (prev) await prev.catch(() => undefined);
+    const job = (async () => { if (prev) await prev.catch(() => undefined); return run(); })();
+    this.metaJobs.set(id, job);
+    try { return await job; } finally { if (this.metaJobs.get(id) === job) this.metaJobs.delete(id); }
+  }
+  private async mutateMeta(id: string, mutate: (saved: Record<string, unknown>) => boolean | void): Promise<DocumentInfo> {
+    return this.withMetaLock(id, async () => {
       await this.get(id);
       const file = path.join(this.directory, id + '.json');
       const saved = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
       if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
       return this.get(id);
-    })();
-    this.metaJobs.set(id, job);
-    try { return await job; } finally { if (this.metaJobs.get(id) === job) this.metaJobs.delete(id); }
+    });
   }
   async rename(id: unknown, title: unknown): Promise<DocumentInfo> {
     if (id === sample.id) fail('The bundled sample paper cannot be renamed.');
@@ -136,19 +133,21 @@ export class Library {
   async delete(id: unknown): Promise<{ id: string; deleted: boolean }> {
     if (id === sample.id) fail('The bundled sample paper cannot be deleted.');
     if (!validDocId(id)) fail('Invalid document ID.', 404);
-    const file = path.join(this.directory, id + '.json');
-    const existed = existsSync(file);
-    await Promise.all([
-      rm(file, { force: true }),
-      rm(path.join(this.directory, id + '.pdf'), { force: true }),
-      rm(path.join(this.directory, id + '.source-url'), { force: true }),
-      rm(path.join(this.directory, id + '.layout.json'), { force: true }),
-      rm(path.join(this.directory, 'book-sections', id), { recursive: true, force: true }),
-      rm(path.join(this.translationDir, id), { recursive: true, force: true }),
-      rm(path.join(this.imageDir, id), { recursive: true, force: true })
-    ]);
-    this.onDelete?.(id);
-    return { id, deleted: existed };
+    return this.withMetaLock(id, async () => {
+      const file = path.join(this.directory, id + '.json');
+      const existed = existsSync(file);
+      await Promise.all([
+        rm(file, { force: true }),
+        rm(path.join(this.directory, id + '.pdf'), { force: true }),
+        rm(path.join(this.directory, id + '.source-url'), { force: true }),
+        rm(path.join(this.directory, id + '.layout.json'), { force: true }),
+        rm(path.join(this.directory, 'book-sections', id), { recursive: true, force: true }),
+        rm(path.join(this.translationDir, id), { recursive: true, force: true }),
+        rm(path.join(this.imageDir, id), { recursive: true, force: true })
+      ]);
+      this.onDelete?.(id);
+      return { id, deleted: existed };
+    });
   }
   private bookJob(key: string, start: () => Promise<DocumentInfo>): Promise<DocumentInfo> {
     const pending = this.bookJobs.get(key);
@@ -272,9 +271,18 @@ export class Library {
     }
     return doc;
   }
+  async createAbstract(input: unknown): Promise<DocumentInfo> {
+    const { id } = await createAbstractRecord(this.directory, input, (key, run) => this.withMetaLock(key, run));
+    return this.get(id);
+  }
+  async attachPdf(id: unknown, bytes: Buffer): Promise<{ doc: DocumentInfo; pages: DocPageRecord[] }> {
+    const doc = await this.get(id);
+    const { pages } = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT, (key, run) => this.withMetaLock(key, run));
+    return { doc: await this.get(doc.id), pages };
+  }
   async bytes(id: unknown): Promise<Buffer> {
     const doc = await this.get(id);
-    if (doc.kind !== 'pdf') fail('This document is a web article.');
+    if (doc.kind !== 'pdf') fail('This document has no saved PDF.');
     return readFile(this.pdfFile(doc));
   }
   async articleImage(id: unknown, anchor: unknown, download: (url: string) => Promise<ArticleImage>, page?: number): Promise<ArticleImage> {

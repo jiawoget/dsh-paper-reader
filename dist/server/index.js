@@ -1,16 +1,16 @@
 // src/server/index.ts
-import { readdirSync } from "node:fs";
-import { readFile as readFile2 } from "node:fs/promises";
-import path10 from "node:path";
+import { existsSync as existsSync4, readdirSync } from "node:fs";
+import { readFile as readFile3 } from "node:fs/promises";
+import path11 from "node:path";
 import os from "node:os";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // src/server/library.ts
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, link, readFile, readdir, rm, writeFile, rename } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import { mkdir as mkdir2, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { existsSync as existsSync2, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // src/shared/languages.ts
 var DEFAULT_TARGET_LANGUAGE = "Simplified Chinese";
@@ -370,51 +370,222 @@ function translationQualityError(source2, result) {
   if (isUntranslatedEnglish(source2, result)) return "The model returned the original English passage. Retry the page translation.";
 }
 
-// src/server/article-layout.ts
-function readArticleLayout(raw, paragraphs) {
-  if (!isRecord(raw)) fail("Invalid article layout.");
-  const result = {};
-  for (const [id, value] of Object.entries(raw)) {
-    if (!/^p-[1-9]\d{0,3}$/.test(id) || !isRecord(value)) fail("Invalid article block.");
-    const text2 = paragraphs[Number(id.slice(2)) - 1];
-    if (!text2 || typeof value.kind !== "string" || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline)$/.test(value.kind)) fail("Invalid article block.");
-    const block = { kind: value.kind };
-    if (value.ids !== void 0) {
-      if (!Array.isArray(value.ids) || value.ids.length > 80 || !value.ids.every((id2) => typeof id2 === "string" && id2.length <= 256)) fail("Invalid article anchors.");
-      block.ids = value.ids;
-    }
-    if (value.spans !== void 0) {
-      if (!Array.isArray(value.spans) || value.spans.length > 4e3) fail("Invalid article formatting.");
-      let previous = 0;
-      block.spans = value.spans.map((span) => {
-        if (!isRecord(span) || typeof span.kind !== "string" || !["link", "code", "math", "em", "strong"].includes(span.kind) || typeof span.start !== "number" || !Number.isSafeInteger(span.start) || span.start < previous || typeof span.end !== "number" || !Number.isSafeInteger(span.end) || span.end <= span.start || span.end > text2.length) fail("Invalid article text range.");
-        previous = span.end;
-        const result2 = { start: span.start, end: span.end, kind: span.kind };
-        if (span.kind === "math") {
-          if (typeof span.value !== "string" || span.value.length > 4096) fail("Invalid article formula.");
-          result2.value = span.value;
-        }
-        if (span.kind === "link") {
-          const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
-          if (!link2) fail("Invalid article link.");
-          result2.value = link2.href;
-        }
-        return result2;
-      });
-    }
-    if (block.kind === "image") {
-      const image = value.image;
-      if (!isRecord(image) || typeof image.url !== "string" || !articleUrl(image.url) || typeof image.alt !== "string" || image.alt.length > 1024) fail("Invalid article illustration.");
-      block.image = { url: image.url, alt: image.alt };
-    }
-    if (block.kind === "table") {
-      const cells = value.cells;
-      if (!Array.isArray(cells) || !cells.length || !cells.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string")) || cells.map((row) => row.join("	")).join("\n").trim() !== text2.trim()) fail("Invalid article table.");
-      block.cells = cells;
-    }
-    result[id] = block;
+// src/server/abstract-library.ts
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import path2 from "node:path";
+
+// src/shared/citation-export.ts
+var ARXIV_NEW = "\\d{4}\\.\\d{4,5}";
+var ARXIV_OLD = "[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}";
+var ARXIV_ID_SOURCE = `(?:${ARXIV_NEW}|${ARXIV_OLD})`;
+var ARXIV_PATH_RE = new RegExp(`^\\/(?:abs|pdf|html|e-print|format)\\/(${ARXIV_ID_SOURCE})(?:v\\d+)?(?:\\.pdf)?\\/?$`, "i");
+var ARXIV_DOI_RE = new RegExp(`^(?:https?:\\/\\/(?:dx\\.)?doi\\.org\\/|doi:\\s*)?10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, "i");
+var ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`, "i");
+var YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
+var NAME_SUFFIX_RE = /^(?:jr\.?|sr\.?|ii|iii|iv|v|ph\.?d\.?|m\.?d\.?)$/i;
+var NOBILIARY_PARTICLE_RE = /^(?:van|von|de|del|della|di|da|du|la|le|der|den|ter|ten|dos|das)\b/i;
+var TITLE_STOPWORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "the",
+  "of",
+  "on",
+  "in",
+  "for",
+  "to",
+  "and",
+  "or",
+  "with",
+  "by",
+  "from",
+  "at",
+  "as",
+  "into",
+  "about",
+  "via",
+  "using",
+  "towards",
+  "toward"
+]);
+var LATIN_FOLD = {
+  "\xDF": "ss",
+  "\xF8": "o",
+  "\xD8": "o",
+  "\u0142": "l",
+  "\u0141": "l",
+  "\xE6": "ae",
+  "\xC6": "ae",
+  "\u0153": "oe",
+  "\u0152": "oe",
+  "\xF0": "d",
+  "\xD0": "d",
+  "\xFE": "th",
+  "\xDE": "th",
+  "\u0111": "d",
+  "\u0110": "d"
+};
+function nonEmpty(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed && normalizeInline(trimmed) ? trimmed : void 0;
+}
+function cleanDoi(value) {
+  const raw = nonEmpty(value);
+  if (!raw) return void 0;
+  const stripped = raw.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+  return stripped || void 0;
+}
+function stripPdfExtension(value) {
+  const raw = nonEmpty(value);
+  if (!raw) return void 0;
+  const stripped = raw.replace(/\.pdf$/i, "").trim();
+  return stripped || raw;
+}
+function foldAscii(value) {
+  return value.replace(/[ßøØłŁæÆœŒðÐþÞđĐ]/g, (ch) => LATIN_FOLD[ch] ?? ch).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function fnv1aHex(seed) {
+  let hash3 = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    hash3 ^= seed.charCodeAt(i);
+    hash3 = Math.imul(hash3, 16777619) >>> 0;
   }
-  return result;
+  return hash3.toString(16).padStart(8, "0");
+}
+function normalizeInline(value) {
+  return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function splitCommaAuthors(segment) {
+  if (!segment.includes(",")) return [segment];
+  const parts = segment.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return parts;
+  if (parts.some((part) => NAME_SUFFIX_RE.test(part))) return [segment];
+  if (NOBILIARY_PARTICLE_RE.test(parts[0])) return [segment];
+  const allMultiWord = parts.every((part) => part.split(/\s+/).length >= 2);
+  return allMultiWord ? parts : [segment];
+}
+function parseAuthors(raw) {
+  const cleaned = nonEmpty(raw)?.replace(/\s+/g, " ");
+  if (!cleaned) return [];
+  let source2 = cleaned;
+  let trailingEtAl = false;
+  if (/,\s*et\s+al\.?$/i.test(source2)) {
+    source2 = source2.replace(/,\s*et\s+al\.?$/i, "").trim();
+    trailingEtAl = true;
+  }
+  let segments;
+  if (source2.includes(";")) {
+    segments = source2.split(/\s*;\s*/);
+  } else if (source2.includes("\u3001")) {
+    segments = source2.split(/\s*、\s*/);
+  } else {
+    segments = source2.split(/\s*,\s+and\s+|\s+and\s+|\s*,\s*&\s+|\s+&\s+/i).flatMap((segment) => splitCommaAuthors(segment.trim()));
+  }
+  const authors = [];
+  for (const part of segments) {
+    const trimmed = part.trim().replace(/^,+|,+$/g, "").trim();
+    if (!trimmed) continue;
+    if (/^et\s+al\.?$/i.test(trimmed)) {
+      if (authors.length && !/\bet\s+al\.?$/i.test(authors[authors.length - 1])) {
+        authors[authors.length - 1] += " et al.";
+      }
+      continue;
+    }
+    authors.push(trimmed);
+  }
+  if (trailingEtAl && authors.length && !/\bet\s+al\.?$/i.test(authors[authors.length - 1])) {
+    authors[authors.length - 1] += " et al.";
+  }
+  return authors;
+}
+function extractArxivId(url, doi) {
+  const rawUrl = nonEmpty(url);
+  if (rawUrl) {
+    const parsed = URL.parse(rawUrl);
+    if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+      if (/(?:^|\.)arxiv\.org$/i.test(parsed.hostname)) {
+        const match = ARXIV_PATH_RE.exec(parsed.pathname);
+        if (match) return match[1].toLowerCase();
+      }
+      if (/^(?:dx\.)?doi\.org$/i.test(parsed.hostname)) {
+        const doiPath = parsed.pathname.slice(1);
+        if (doiPath.startsWith("10.")) {
+          const match = ARXIV_DOI_RE.exec(doiPath);
+          if (match) return match[1].toLowerCase();
+        }
+      }
+    } else if (!parsed || parsed.protocol === "arxiv:" || parsed.protocol === "doi:") {
+      const bare = ARXIV_BARE_RE.exec(rawUrl);
+      if (bare) return bare[1].toLowerCase();
+      const doiInUrl = ARXIV_DOI_RE.exec(rawUrl);
+      if (doiInUrl) return doiInUrl[1].toLowerCase();
+    }
+  }
+  const rawDoi = nonEmpty(doi);
+  if (rawDoi) {
+    const match = ARXIV_DOI_RE.exec(rawDoi);
+    if (match) return match[1].toLowerCase();
+  }
+  return void 0;
+}
+function extractYear(date, venue, createdAt) {
+  for (const candidate of [date, venue, createdAt]) {
+    const text2 = nonEmpty(candidate);
+    if (!text2) continue;
+    const match = YEAR_RE.exec(text2);
+    if (match) return match[1];
+  }
+  return void 0;
+}
+function buildCitationMetadata(doc, zotero) {
+  const isBook = Boolean(doc.book);
+  const title = nonEmpty(zotero?.title) ?? nonEmpty(doc.paperTitle) ?? stripPdfExtension(doc.title) ?? "Untitled";
+  const zoteroAuthors = parseAuthors(zotero?.creator);
+  const authors = zoteroAuthors.length ? zoteroAuthors : parseAuthors(doc.authors);
+  const venue = isBook ? void 0 : nonEmpty(doc.venue);
+  const publisher = nonEmpty(doc.publisher) ?? (isBook ? nonEmpty(doc.venue) : void 0);
+  const year = extractYear(zotero?.date) ?? extractYear(doc.year, doc.venue);
+  const doi = cleanDoi(zotero?.doi) ?? cleanDoi(doc.doi);
+  const url = nonEmpty(zotero?.url) ?? nonEmpty(doc.url);
+  const arxivId = extractArxivId(url, doi) ?? extractArxivId(doc.url, doc.doi);
+  const abstract = nonEmpty(doc.abstract);
+  const zoteroType = nonEmpty(zotero?.type);
+  const id = nonEmpty(doc.id);
+  return {
+    title,
+    ...authors.length ? { authors } : {},
+    ...venue ? { venue } : {},
+    ...year ? { year } : {},
+    ...doi ? { doi } : {},
+    ...url ? { url } : {},
+    ...arxivId ? { arxivId } : {},
+    ...publisher ? { publisher } : {},
+    ...abstract ? { abstract } : {},
+    kind: isBook ? "book" : doc.kind,
+    ...zoteroType ? { zoteroType } : {},
+    ...id ? { id } : {}
+  };
+}
+function buildCiteKey(meta) {
+  const firstAuthor = nonEmpty(meta.authors?.[0]);
+  let authorPart = "";
+  if (firstAuthor) {
+    const withoutEtAl = firstAuthor.replace(/\s+et\s+al\.?$/i, "").trim();
+    const surname = withoutEtAl.includes(",") ? withoutEtAl.split(",")[0].trim() : withoutEtAl.split(/\s+/).at(-1) ?? "";
+    authorPart = foldAscii(surname).replace(/[^a-z0-9]+/g, "").slice(0, 24);
+  }
+  const yearPart = extractYear(meta.year) ?? "";
+  const foldedTitle = foldAscii(stripPdfExtension(meta.title) ?? "");
+  const titleTokens = foldedTitle.match(/[a-z0-9]+/g) ?? [];
+  const titleWord = titleTokens.find((token) => !TITLE_STOPWORDS.has(token)) ?? titleTokens[0] ?? "";
+  const titlePart = titleWord.slice(0, 24);
+  if (authorPart || titlePart) {
+    return `${authorPart}${yearPart}${titlePart}`;
+  }
+  const seed = [meta.id ?? "", meta.title ?? "", (meta.authors ?? []).join(";"), yearPart].join("|");
+  return `ref${yearPart}${fnv1aHex(seed)}`;
 }
 
 // src/server/service-types.ts
@@ -547,7 +718,7 @@ function readQuestionModel(value) {
 }
 
 // src/server/library-meta.ts
-var YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
+var YEAR_RE2 = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
 var STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/;
 var DOI_RE = /^10\.\d{4,9}\/[^\s<>"]+$/i;
 var META_KEYS = ["paperTitle", "authors", "venue", "year", "doi", "publisher", "abstract"];
@@ -575,7 +746,7 @@ function sanitizeDocMeta(input) {
     ["paperTitle", optionalText(input.paperTitle, 500)],
     ["authors", optionalText(input.authors, 2e3)],
     ["venue", optionalText(input.venue, 500)],
-    ["year", optionalText(input.year, 32)?.match(YEAR_RE)?.[1]],
+    ["year", optionalText(input.year, 32)?.match(YEAR_RE2)?.[1]],
     ["doi", optionalDoi(input.doi)],
     ["publisher", optionalText(input.publisher, 500)],
     ["abstract", optionalText(input.abstract, 8e3, true)]
@@ -618,6 +789,187 @@ function applyMetaPatch(saved, input) {
     if (trimmed && !doi) bad("Enter a valid DOI.");
     assign("doi", doi);
   }
+}
+
+// src/server/pdf-text.ts
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
+function normalizePdfText(items) {
+  return items.map((item) => typeof item === "object" && item !== null && "str" in item && typeof item.str === "string" ? item.str + ("hasEOL" in item && item.hasEOL ? "\n" : " ") : "").join("").replace(new RegExp("(\\p{L})-\\n(?=\\p{Ll})", "gu"), "$1").replace(/[^\S\n]+/gu, " ").trim();
+}
+async function extractPdfPages(bytes) {
+  const data = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice();
+  const task = pdfjs.getDocument({ data, useSystemFonts: true, disableFontFace: true, verbosity: 0 });
+  let doc;
+  try {
+    doc = await task.promise;
+    const pages = [];
+    for (let page = 1; page <= doc.numPages; page++) {
+      const pdfPage = await doc.getPage(page);
+      try {
+        pages.push({ page, text: normalizePdfText((await pdfPage.getTextContent()).items) });
+      } finally {
+        pdfPage.cleanup();
+      }
+    }
+    return pages;
+  } finally {
+    try {
+      await doc?.cleanup();
+    } catch {
+    }
+    try {
+      await task.destroy();
+    } catch {
+    }
+  }
+}
+async function extractDocumentPages(doc, pdfBytes) {
+  if (doc.kind === "pdf") return pdfBytes ? extractPdfPages(pdfBytes) : [];
+  if (doc.kind === "abstract") {
+    const text2 = [doc.paperTitle || doc.title, doc.authors, doc.venue, doc.year, doc.doi, doc.abstract].filter((v) => typeof v === "string" && Boolean(v.trim())).join("\n\n").trim();
+    return text2 ? [{ page: 1, text: text2 }] : [];
+  }
+  if (doc.paragraphs?.length) {
+    const text2 = doc.paragraphs.map((p) => p.trim()).filter(Boolean).join("\n\n");
+    return text2 ? [{ page: doc.sectionPage ?? 1, text: text2 }] : [];
+  }
+  if (doc.book?.sections.length) {
+    const text2 = [doc.title, ...doc.book.sections.map((s) => s.title)].filter(Boolean).join("\n");
+    return text2 ? [{ page: 1, text: text2 }] : [];
+  }
+  return [];
+}
+
+// src/server/abstract-library.ts
+function bad2(message, status = 400) {
+  throw new ServiceError(status, message);
+}
+async function writeAtomic(file, content) {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, { flag: "wx" });
+  try {
+    await rename(tmp, file);
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
+function abstractDocId(input) {
+  const meta = sanitizeDocMeta({ ...input });
+  const doi = meta.doi?.toLowerCase();
+  const arxiv2 = extractArxivId(input.url, meta.doi)?.toLowerCase();
+  const normTitle = (meta.paperTitle || input.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const key2 = doi ? "doi:" + doi : arxiv2 ? "arxiv:" + arxiv2 : "title:" + normTitle + "|" + (meta.year ?? "");
+  return "abs-" + createHash("sha256").update(key2).digest("hex");
+}
+async function createAbstractRecord(dir, input, withLock) {
+  if (!isObject(input)) bad2("Invalid abstract record payload.");
+  const rawTitle = typeof input.title === "string" && input.title.trim() ? input.title.trim() : typeof input.paperTitle === "string" ? input.paperTitle.trim() : "";
+  const title = rawTitle.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250);
+  if (!title) bad2("A document title is required.");
+  const cleanMeta = sanitizeDocMeta(input);
+  const safeUrl2 = typeof input.url === "string" ? articleUrl(input.url)?.href : void 0;
+  const id = abstractDocId({ title, ...safeUrl2 ? { url: safeUrl2 } : {}, ...cleanMeta });
+  const file = path2.join(dir, id + ".json");
+  return withLock(id, async () => {
+    await mkdir(dir, { recursive: true });
+    if (existsSync(file)) {
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      let changed = false;
+      if (!saved.url && safeUrl2) {
+        saved.url = safeUrl2;
+        changed = true;
+      }
+      for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
+        saved[k] = v;
+        changed = true;
+      }
+      if (changed) await writeAtomic(file, JSON.stringify(saved));
+      return { id };
+    }
+    const doc = {
+      id,
+      kind: "abstract",
+      title,
+      ...safeUrl2 ? { url: safeUrl2 } : {},
+      ...cleanMeta,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      defaultPage: 1
+    };
+    await writeAtomic(file, JSON.stringify(doc));
+    return { id };
+  });
+}
+async function attachPdfToRecord(dir, doc, bytes, limit, withLock) {
+  if (doc.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
+  if (!bytes.length || bytes.length > limit || !bytes.subarray(0, 1024).includes("%PDF-")) bad2("Choose a valid PDF of up to 80 MB.");
+  let pages;
+  try {
+    pages = await extractPdfPages(bytes);
+  } catch {
+    bad2("The uploaded PDF is damaged or unreadable.");
+  }
+  if (!pages.length) bad2("The uploaded PDF has no readable pages.");
+  const jsonFile = path2.join(dir, doc.id + ".json"), pdfFile = path2.join(dir, doc.id + ".pdf");
+  await withLock(doc.id, async () => {
+    if (!existsSync(jsonFile)) bad2("This document has not been imported.", 404);
+    const saved = JSON.parse(await readFile(jsonFile, "utf8"));
+    if (saved.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
+    await writeAtomic(pdfFile, bytes);
+    if (!existsSync(jsonFile)) {
+      await rm(pdfFile, { force: true });
+      bad2("This document has not been imported.", 404);
+    }
+    saved.kind = "pdf";
+    await writeAtomic(jsonFile, JSON.stringify(saved));
+  });
+  return { pages };
+}
+
+// src/server/article-layout.ts
+function readArticleLayout(raw, paragraphs) {
+  if (!isRecord(raw)) fail("Invalid article layout.");
+  const result = {};
+  for (const [id, value] of Object.entries(raw)) {
+    if (!/^p-[1-9]\d{0,3}$/.test(id) || !isRecord(value)) fail("Invalid article block.");
+    const text2 = paragraphs[Number(id.slice(2)) - 1];
+    if (!text2 || typeof value.kind !== "string" || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline)$/.test(value.kind)) fail("Invalid article block.");
+    const block = { kind: value.kind };
+    if (value.ids !== void 0) {
+      if (!Array.isArray(value.ids) || value.ids.length > 80 || !value.ids.every((id2) => typeof id2 === "string" && id2.length <= 256)) fail("Invalid article anchors.");
+      block.ids = value.ids;
+    }
+    if (value.spans !== void 0) {
+      if (!Array.isArray(value.spans) || value.spans.length > 4e3) fail("Invalid article formatting.");
+      let previous = 0;
+      block.spans = value.spans.map((span) => {
+        if (!isRecord(span) || typeof span.kind !== "string" || !["link", "code", "math", "em", "strong"].includes(span.kind) || typeof span.start !== "number" || !Number.isSafeInteger(span.start) || span.start < previous || typeof span.end !== "number" || !Number.isSafeInteger(span.end) || span.end <= span.start || span.end > text2.length) fail("Invalid article text range.");
+        previous = span.end;
+        const result2 = { start: span.start, end: span.end, kind: span.kind };
+        if (span.kind === "math") {
+          if (typeof span.value !== "string" || span.value.length > 4096) fail("Invalid article formula.");
+          result2.value = span.value;
+        }
+        if (span.kind === "link") {
+          const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
+          if (!link2) fail("Invalid article link.");
+          result2.value = link2.href;
+        }
+        return result2;
+      });
+    }
+    if (block.kind === "image") {
+      const image = value.image;
+      if (!isRecord(image) || typeof image.url !== "string" || !articleUrl(image.url) || typeof image.alt !== "string" || image.alt.length > 1024) fail("Invalid article illustration.");
+      block.image = { url: image.url, alt: image.alt };
+    }
+    if (block.kind === "table") {
+      const cells = value.cells;
+      if (!Array.isArray(cells) || !cells.length || !cells.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string")) || cells.map((row) => row.join("	")).join("\n").trim() !== text2.trim()) fail("Invalid article table.");
+      block.cells = cells;
+    }
+    result[id] = block;
+  }
+  return result;
 }
 
 // src/server/openstax.ts
@@ -845,7 +1197,7 @@ var sample = {
   doi: "10.1145/3600006.3613165",
   defaultPage: 6
 };
-var hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+var hash = (bytes) => createHash2("sha256").update(bytes).digest("hex");
 function translationCacheSlug(targetLanguage = DEFAULT_TARGET_LANGUAGE) {
   const parsed = parseTargetLanguage(targetLanguage);
   if (!parsed.ok) fail(parsed.error, 400);
@@ -864,19 +1216,10 @@ function fail(message, status = 400) {
 function isFsError(error, code) {
   return isRecord(error) && error.code === code;
 }
-var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
-async function writeAtomic(file, content) {
-  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(tmp, content, { flag: "wx" });
-  try {
-    await rename(tmp, file);
-  } finally {
-    await rm(tmp, { force: true });
-  }
-}
+var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
 async function writeOnce(file, bytes) {
-  const temporary = file + "." + randomUUID() + ".tmp";
-  await writeFile(temporary, bytes, { flag: "wx" });
+  const temporary = file + "." + randomUUID2() + ".tmp";
+  await writeFile2(temporary, bytes, { flag: "wx" });
   try {
     try {
       await link(temporary, file);
@@ -884,7 +1227,7 @@ async function writeOnce(file, bytes) {
       if (!isFsError(error, "EEXIST")) throw error;
     }
   } finally {
-    await rm(temporary, { force: true });
+    await rm2(temporary, { force: true });
   }
 }
 var pictureType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
@@ -892,9 +1235,9 @@ var Library = class {
   constructor(root, readBook = publicResource, onDelete) {
     this.readBook = readBook;
     this.onDelete = onDelete;
-    this.directory = path2.join(root, "documents");
-    this.translationDir = path2.join(root, "translations");
-    this.imageDir = path2.join(root, "article-images");
+    this.directory = path3.join(root, "documents");
+    this.translationDir = path3.join(root, "translations");
+    this.imageDir = path3.join(root, "article-images");
   }
   readBook;
   onDelete;
@@ -906,19 +1249,19 @@ var Library = class {
   bookJobs = /* @__PURE__ */ new Map();
   metaJobs = /* @__PURE__ */ new Map();
   async store(doc) {
-    await mkdir(this.directory, { recursive: true });
-    await writeOnce(path2.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
+    await mkdir2(this.directory, { recursive: true });
+    await writeOnce(path3.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
     return this.get(doc.id);
   }
   hasSync(id) {
-    return id === sample.id || validDocId(id) && existsSync(path2.join(this.directory, id + ".json"));
+    return id === sample.id || validDocId(id) && existsSync2(path3.join(this.directory, id + ".json"));
   }
   async get(id) {
     if (!validDocId(id)) fail("Invalid document ID.", 404);
     if (id === sample.id) return sample;
     try {
-      const value = JSON.parse(await readFile(path2.join(this.directory, id + ".json"), "utf8"));
-      if (!isRecord(value) || value.id !== id || typeof value.title !== "string" || !["pdf", "web"].includes(String(value.kind))) fail("The document index is damaged.", 500);
+      const value = JSON.parse(await readFile2(path3.join(this.directory, id + ".json"), "utf8"));
+      if (!isRecord(value) || value.id !== id || typeof value.title !== "string" || !["pdf", "web", "abstract"].includes(String(value.kind))) fail("The document index is damaged.", 500);
       if (id.startsWith("book-")) {
         if (value.kind !== "web" || !isRecord(value.book) || !bookSlug(value.book.slug) || !Array.isArray(value.book.sections) || !value.book.sections.length || !value.book.sections.every((section) => isRecord(section) && bookSlug(section.slug) && typeof section.title === "string" && typeof section.chapterId === "string" && typeof section.chapterTitle === "string" && typeof section.url === "string")) fail("The saved book contents are damaged.", 500);
         return value;
@@ -927,14 +1270,14 @@ var Library = class {
       const doc = value;
       if (doc.kind === "pdf" && !doc.url) {
         try {
-          doc.url = await readFile(path2.join(this.directory, id + ".source-url"), "utf8");
+          doc.url = await readFile2(path3.join(this.directory, id + ".source-url"), "utf8");
         } catch (error) {
           if (!isFsError(error, "ENOENT")) throw error;
         }
       }
       if (doc.kind === "web") {
         try {
-          doc.articleLayout = JSON.parse(await readFile(path2.join(this.directory, id + ".layout.json"), "utf8"));
+          doc.articleLayout = JSON.parse(await readFile2(path3.join(this.directory, id + ".layout.json"), "utf8"));
         } catch (error) {
           if (!isFsError(error, "ENOENT")) throw error;
         }
@@ -946,20 +1289,16 @@ var Library = class {
     }
   }
   async list() {
-    await mkdir(this.directory, { recursive: true });
-    const names = (await readdir(this.directory)).filter((file) => /^(pdf|web|book)-[a-f0-9]{64}\.json$/.test(file));
+    await mkdir2(this.directory, { recursive: true });
+    const names = (await readdir(this.directory)).filter((file) => /^(pdf|web|book|abs)-[a-f0-9]{64}\.json$/.test(file));
     const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
     return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
-  async mutateMeta(id, mutate) {
+  async withMetaLock(id, run) {
     const prev = this.metaJobs.get(id);
     const job = (async () => {
       if (prev) await prev.catch(() => void 0);
-      await this.get(id);
-      const file = path2.join(this.directory, id + ".json");
-      const saved = JSON.parse(await readFile(file, "utf8"));
-      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
-      return this.get(id);
+      return run();
     })();
     this.metaJobs.set(id, job);
     try {
@@ -967,6 +1306,15 @@ var Library = class {
     } finally {
       if (this.metaJobs.get(id) === job) this.metaJobs.delete(id);
     }
+  }
+  async mutateMeta(id, mutate) {
+    return this.withMetaLock(id, async () => {
+      await this.get(id);
+      const file = path3.join(this.directory, id + ".json");
+      const saved = JSON.parse(await readFile2(file, "utf8"));
+      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
+      return this.get(id);
+    });
   }
   async rename(id, title) {
     if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
@@ -988,19 +1336,21 @@ var Library = class {
   async delete(id) {
     if (id === sample.id) fail("The bundled sample paper cannot be deleted.");
     if (!validDocId(id)) fail("Invalid document ID.", 404);
-    const file = path2.join(this.directory, id + ".json");
-    const existed = existsSync(file);
-    await Promise.all([
-      rm(file, { force: true }),
-      rm(path2.join(this.directory, id + ".pdf"), { force: true }),
-      rm(path2.join(this.directory, id + ".source-url"), { force: true }),
-      rm(path2.join(this.directory, id + ".layout.json"), { force: true }),
-      rm(path2.join(this.directory, "book-sections", id), { recursive: true, force: true }),
-      rm(path2.join(this.translationDir, id), { recursive: true, force: true }),
-      rm(path2.join(this.imageDir, id), { recursive: true, force: true })
-    ]);
-    this.onDelete?.(id);
-    return { id, deleted: existed };
+    return this.withMetaLock(id, async () => {
+      const file = path3.join(this.directory, id + ".json");
+      const existed = existsSync2(file);
+      await Promise.all([
+        rm2(file, { force: true }),
+        rm2(path3.join(this.directory, id + ".pdf"), { force: true }),
+        rm2(path3.join(this.directory, id + ".source-url"), { force: true }),
+        rm2(path3.join(this.directory, id + ".layout.json"), { force: true }),
+        rm2(path3.join(this.directory, "book-sections", id), { recursive: true, force: true }),
+        rm2(path3.join(this.translationDir, id), { recursive: true, force: true }),
+        rm2(path3.join(this.imageDir, id), { recursive: true, force: true })
+      ]);
+      this.onDelete?.(id);
+      return { id, deleted: existed };
+    });
   }
   bookJob(key2, start) {
     const pending = this.bookJobs.get(key2);
@@ -1010,7 +1360,7 @@ var Library = class {
     return job;
   }
   sectionFile(id, slug) {
-    return path2.join(this.directory, "book-sections", id, hash(slug) + ".json");
+    return path3.join(this.directory, "book-sections", id, hash(slug) + ".json");
   }
   /** Export uses only already-imported material, even when the publisher is offline. */
   cachedSection(doc, page) {
@@ -1024,12 +1374,12 @@ var Library = class {
   }
   pdfFile(doc) {
     if (doc.kind !== "pdf" || !validDocId(doc.id)) fail("This document has no saved PDF.");
-    if (doc.id !== sample.id) return path2.join(this.directory, doc.id + ".pdf");
+    if (doc.id !== sample.id) return path3.join(this.directory, doc.id + ".pdf");
     const bundled = fileURLToPath(new URL("../web/assets/pagedattention.pdf", import.meta.url));
-    return existsSync(bundled) ? bundled : fileURLToPath(new URL("../../public/assets/pagedattention.pdf", import.meta.url));
+    return existsSync2(bundled) ? bundled : fileURLToPath(new URL("../../public/assets/pagedattention.pdf", import.meta.url));
   }
   async saveSection(file, article) {
-    await mkdir(path2.dirname(file), { recursive: true });
+    await mkdir2(path3.dirname(file), { recursive: true });
     await writeOnce(file, JSON.stringify({ paragraphs: article.paragraphs, articleLayout: article.articleLayout }));
   }
   async openBook(location) {
@@ -1063,7 +1413,7 @@ var Library = class {
     if (!book || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > book.sections.length) fail("Unknown book section.", 404);
     const section = book.sections[page - 1], file = this.sectionFile(doc.id, section.slug);
     const read = async () => {
-      const saved = JSON.parse(await readFile(file, "utf8"));
+      const saved = JSON.parse(await readFile2(file, "utf8"));
       if (!isRecord(saved) || !Array.isArray(saved.paragraphs) || !saved.paragraphs.every((p) => typeof p === "string") || !isRecord(saved.articleLayout)) fail("The saved book section is damaged.", 500);
       return { ...doc, sectionPage: page, url: section.url, paragraphs: saved.paragraphs, articleLayout: saved.articleLayout };
     };
@@ -1106,8 +1456,8 @@ var Library = class {
     const id = "web-" + hash(JSON.stringify([url.href, paragraphs]));
     if (structured) {
       const layout = readArticleLayout(input.articleLayout, paragraphs);
-      await mkdir(this.directory, { recursive: true });
-      await writeOnce(path2.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
+      await mkdir2(this.directory, { recursive: true });
+      await writeOnce(path3.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
     }
     return { doc: await this.store({
       kind: "web",
@@ -1127,8 +1477,8 @@ var Library = class {
     const id = "pdf-" + digest;
     const safeUrl2 = articleUrl(url)?.href;
     const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
-    await mkdir(this.directory, { recursive: true });
-    await writeOnce(path2.join(this.directory, id + ".pdf"), bytes);
+    await mkdir2(this.directory, { recursive: true });
+    await writeOnce(path3.join(this.directory, id + ".pdf"), bytes);
     const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl2 ? { url: safeUrl2 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
     const missing = missingDocMeta({ ...doc }, cleanMeta);
     const needUrl = !doc.url && Boolean(safeUrl2);
@@ -1148,19 +1498,28 @@ var Library = class {
     }
     return doc;
   }
+  async createAbstract(input) {
+    const { id } = await createAbstractRecord(this.directory, input, (key2, run) => this.withMetaLock(key2, run));
+    return this.get(id);
+  }
+  async attachPdf(id, bytes) {
+    const doc = await this.get(id);
+    const { pages } = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT, (key2, run) => this.withMetaLock(key2, run));
+    return { doc: await this.get(doc.id), pages };
+  }
   async bytes(id) {
     const doc = await this.get(id);
-    if (doc.kind !== "pdf") fail("This document is a web article.");
-    return readFile(this.pdfFile(doc));
+    if (doc.kind !== "pdf") fail("This document has no saved PDF.");
+    return readFile2(this.pdfFile(doc));
   }
   async articleImage(id, anchor, download, page) {
     if (!validDocId(id) || !/^(?:web|book)-/.test(id) || typeof anchor !== "string" || !/^p-[1-9]\d{0,3}$/.test(anchor)) fail("Unknown article illustration.", 404);
     const book = id.startsWith("book-");
     if (book && (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1)) fail("A book illustration needs its section number.", 404);
-    const directory = book ? path2.join(this.imageDir, id, String(page)) : path2.join(this.imageDir, id);
-    const file = path2.join(directory, anchor);
+    const directory = book ? path3.join(this.imageDir, id, String(page)) : path3.join(this.imageDir, id);
+    const file = path3.join(directory, anchor);
     const read = async () => {
-      const saved = await readFile(file);
+      const saved = await readFile2(file);
       const end = saved.indexOf(10), type = end > 0 && end < 40 ? saved.toString("ascii", 0, end) : "";
       if (!pictureType.test(type)) fail("The saved illustration is damaged.", 500);
       return { type, bytes: saved.subarray(end + 1) };
@@ -1179,7 +1538,7 @@ var Library = class {
       if (!url) fail("This illustration is not part of the saved article.", 404);
       const picture = await download(url);
       if (!pictureType.test(picture.type) || !picture.bytes.length) fail("The website did not return an illustration.", 415);
-      await mkdir(directory, { recursive: true });
+      await mkdir2(directory, { recursive: true });
       await writeOnce(file, Buffer.concat([Buffer.from(picture.type + "\n", "ascii"), picture.bytes]));
       return read();
     })();
@@ -1193,13 +1552,13 @@ var Library = class {
   pageFile(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
     if (!validDocId(id) || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 1e5) fail("Invalid document or page number.");
     const slug = translationCacheSlug(targetLanguage);
-    return slug ? path2.join(this.translationDir, id, slug, page + ".json") : path2.join(this.translationDir, id, page + ".json");
+    return slug ? path3.join(this.translationDir, id, slug, page + ".json") : path3.join(this.translationDir, id, page + ".json");
   }
   async translations(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
     const file = this.pageFile(id, page, targetLanguage);
     const chinese = typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
     try {
-      const data = JSON.parse(await readFile(file, "utf8"));
+      const data = JSON.parse(await readFile2(file, "utf8"));
       if (!isRecord(data) || !Object.values(data).every((v) => typeof v === "string")) fail("The translation cache is damaged.", 500);
       const translations = data;
       if (typeof id === "string" && /^(?:web|book)-/.test(id) || !chinese) return translations;
@@ -1225,7 +1584,7 @@ var Library = class {
       if (previous) await previous.catch(() => void 0);
       const result = await this.translations(id, page, targetLanguage);
       const pending = force ? blocks3 : blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
-      await mkdir(path2.dirname(file), { recursive: true });
+      await mkdir2(path3.dirname(file), { recursive: true });
       for (let i = 0; i < pending.length; i += 8) {
         const batch = pending.slice(i, i + 8);
         const translated = await translate(batch, doc.kind);
@@ -1248,10 +1607,133 @@ var Library = class {
   }
 };
 
+// src/server/research-store.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+function hasResearchSchema(db) {
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics')").get();
+  return Number(row?.n ?? 0) === 3;
+}
+function ensureResearchSchema(db) {
+  db.exec("CREATE TABLE IF NOT EXISTS doc_pages(docId TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(docId, page)) STRICT");
+  db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS doc_pages_fts USING fts5(docId UNINDEXED, page UNINDEXED, text, tokenize='unicode61 remove_diacritics 2')");
+  db.exec("CREATE TABLE IF NOT EXISTS topics(id TEXT PRIMARY KEY, name TEXT NOT NULL, tag TEXT NOT NULL, zoteroCollection TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL) STRICT");
+}
+function deleteResearchDocument(db, docId) {
+  db.prepare("DELETE FROM doc_pages WHERE docId=?").run(docId);
+  db.prepare("DELETE FROM doc_pages_fts WHERE docId=?").run(docId);
+}
+function segmentFtsText(text2) {
+  return text2.replace(new RegExp("(\\p{Script=Han})", "gu"), " $1 ").replace(/\s+/g, " ").trim();
+}
+function buildFtsQuery(raw) {
+  const input = raw.trim().slice(0, 500);
+  if (!input) return "";
+  const clauses = [];
+  const pushWords = (chunk, asPhrase) => {
+    if (asPhrase) {
+      const tokens = segmentFtsText(chunk).match(/[\p{L}\p{N}]+/gu);
+      if (tokens?.length) clauses.push('"' + tokens.join(" ") + '"');
+      return;
+    }
+    for (const part of chunk.match(new RegExp("\\p{Script=Han}+|(?:(?!\\p{Script=Han})[\\p{L}\\p{N}])+", "gu")) ?? []) {
+      clauses.push('"' + (new RegExp("\\p{Script=Han}", "u").test(part) ? [...part].join(" ") : part) + '"');
+    }
+  };
+  let pos = 0;
+  for (const match of input.matchAll(/"([^"]+)"/g)) {
+    const start = match.index ?? 0;
+    if (start > pos) pushWords(input.slice(pos, start), false);
+    pushWords(match[1], true);
+    pos = start + match[0].length;
+  }
+  if (pos < input.length) pushWords(input.slice(pos), false);
+  return clauses.slice(0, 24).join(" ");
+}
+function makeSnippet(text2, query) {
+  const clean2 = text2.replace(/\s+/g, " ").trim();
+  if (!clean2) return "";
+  const lower = clean2.toLocaleLowerCase();
+  const terms = (query.match(new RegExp("\\p{Script=Han}+|(?:(?!\\p{Script=Han})[\\p{L}\\p{N}]){2,}", "gu")) ?? []).map((t) => t.toLocaleLowerCase()).sort((a, b) => b.length - a.length);
+  for (const term of terms) {
+    const idx = lower.indexOf(term);
+    if (idx < 0) continue;
+    const start = Math.max(0, idx - 60), end = Math.min(clean2.length, idx + term.length + 120);
+    return (start > 0 ? "\u2026" : "") + clean2.slice(start, end).trim() + (end < clean2.length ? "\u2026" : "");
+  }
+  return clean2.slice(0, 180) + (clean2.length > 180 ? "\u2026" : "");
+}
+function replaceDocPages(db, docId, pages) {
+  const id = single(docId, "document ID", 512, true), now = Date.now();
+  db.prepare("DELETE FROM doc_pages WHERE docId=?").run(id);
+  db.prepare("DELETE FROM doc_pages_fts WHERE docId=?").run(id);
+  const insPage = db.prepare("INSERT OR REPLACE INTO doc_pages(docId, page, text, updatedAt) VALUES(?,?,?,?)");
+  const insFts = db.prepare("INSERT INTO doc_pages_fts(docId, page, text) VALUES(?,?,?)");
+  for (const entry of pages) {
+    if (!Number.isSafeInteger(entry.page) || entry.page < 1) continue;
+    const text2 = entry.text.replace(/\0/g, "").trim(), segmented = segmentFtsText(text2);
+    insPage.run(id, entry.page, text2, now);
+    if (segmented) insFts.run(id, entry.page, segmented);
+  }
+  return pages.length;
+}
+function hasDocPages(db, docId) {
+  return Boolean(db.prepare("SELECT 1 FROM doc_pages WHERE docId=? LIMIT 1").get(docId));
+}
+function searchDocPagesFts(db, query, opts) {
+  const fts = buildFtsQuery(query);
+  if (!fts) return [];
+  const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 40)));
+  const docIds = opts?.docIds?.filter(Boolean);
+  if (opts?.docIds && !docIds?.length) return [];
+  const filterSql = docIds?.length ? ` AND doc_pages_fts.docId IN (${docIds.map(() => "?").join(",")})` : "";
+  const sql = `SELECT doc_pages_fts.docId AS docId, doc_pages_fts.page AS page, p.text AS text, bm25(doc_pages_fts) AS score
+    FROM doc_pages_fts JOIN doc_pages p ON p.docId = doc_pages_fts.docId AND p.page = doc_pages_fts.page
+    WHERE doc_pages_fts MATCH ?${filterSql} ORDER BY score ASC, doc_pages_fts.docId ASC, doc_pages_fts.page ASC LIMIT ?`;
+  const params = docIds?.length ? [fts, ...docIds, limit] : [fts, limit];
+  return db.prepare(sql).all(...params).map((row) => ({
+    docId: String(row.docId ?? ""),
+    page: Number(row.page),
+    snippet: makeSnippet(String(row.text ?? ""), query),
+    score: Number(row.score ?? 0)
+  }));
+}
+function decodeTopic(row) {
+  return {
+    id: String(row.id ?? ""),
+    name: String(row.name ?? ""),
+    tag: String(row.tag ?? ""),
+    zoteroCollection: String(row.zoteroCollection ?? ""),
+    description: String(row.description ?? ""),
+    createdAt: String(row.createdAt ?? ""),
+    updatedAt: String(row.updatedAt ?? "")
+  };
+}
+function listTopics(db) {
+  return db.prepare("SELECT id, name, tag, zoteroCollection, description, createdAt, updatedAt FROM topics ORDER BY updatedAt DESC, name ASC").all().map(decodeTopic);
+}
+function saveTopic(db, input) {
+  const name2 = single(input.name, "topic name", 120, true);
+  const id = input.id === void 0 ? randomUUID3() : single(input.id, "topic ID", 128, true);
+  const tag = single(input.tag, "topic tag", 40) || name2.slice(0, 40).trim();
+  const zoteroCollection = single(input.zoteroCollection, "Zotero collection", 120);
+  const description = stringValue(input.description, "topic description", 1e3, false, true).trim();
+  const prev = db.prepare("SELECT createdAt, updatedAt FROM topics WHERE id=?").get(id);
+  const prevUpdated = typeof prev?.updatedAt === "string" ? Date.parse(prev.updatedAt) : 0;
+  const now = new Date(Math.max(Date.now(), prevUpdated + 1)).toISOString();
+  const createdAt = typeof prev?.createdAt === "string" ? prev.createdAt : now;
+  db.prepare(`INSERT INTO topics(id, name, tag, zoteroCollection, description, createdAt, updatedAt) VALUES(?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name, tag=excluded.tag, zoteroCollection=excluded.zoteroCollection, description=excluded.description, updatedAt=excluded.updatedAt`).run(id, name2, tag, zoteroCollection, description, createdAt, now);
+  return { id, name: name2, tag, zoteroCollection, description, createdAt, updatedAt: now };
+}
+function deleteTopic(db, id) {
+  const topicId = single(id, "topic ID", 128, true);
+  return { id: topicId, deleted: Boolean(db.prepare("DELETE FROM topics WHERE id=?").run(topicId).changes) };
+}
+
 // src/server/notebook.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
-import path6 from "node:path";
+import path7 from "node:path";
 
 // src/shared/annotations.ts
 var ANNOTATION_COLOR_META = {
@@ -1259,218 +1741,6 @@ var ANNOTATION_COLOR_META = {
   green: { en: "Green", zh: "\u7EFF\u8272", meaningEn: "Method", meaningZh: "\u65B9\u6CD5" },
   purple: { en: "Purple", zh: "\u7D2B\u8272", meaningEn: "Question", meaningZh: "\u7591\u95EE" }
 };
-
-// src/shared/citation-export.ts
-var ARXIV_NEW = "\\d{4}\\.\\d{4,5}";
-var ARXIV_OLD = "[a-z-]+(?:\\.[a-z]{2})?\\/\\d{7}";
-var ARXIV_ID_SOURCE = `(?:${ARXIV_NEW}|${ARXIV_OLD})`;
-var ARXIV_PATH_RE = new RegExp(`^\\/(?:abs|pdf|html|e-print|format)\\/(${ARXIV_ID_SOURCE})(?:v\\d+)?(?:\\.pdf)?\\/?$`, "i");
-var ARXIV_DOI_RE = new RegExp(`^(?:https?:\\/\\/(?:dx\\.)?doi\\.org\\/|doi:\\s*)?10\\.48550\\/arxiv\\.(${ARXIV_ID_SOURCE})(?:v\\d+)?\\/?$`, "i");
-var ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`, "i");
-var YEAR_RE2 = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
-var NAME_SUFFIX_RE = /^(?:jr\.?|sr\.?|ii|iii|iv|v|ph\.?d\.?|m\.?d\.?)$/i;
-var NOBILIARY_PARTICLE_RE = /^(?:van|von|de|del|della|di|da|du|la|le|der|den|ter|ten|dos|das)\b/i;
-var TITLE_STOPWORDS = /* @__PURE__ */ new Set([
-  "a",
-  "an",
-  "the",
-  "of",
-  "on",
-  "in",
-  "for",
-  "to",
-  "and",
-  "or",
-  "with",
-  "by",
-  "from",
-  "at",
-  "as",
-  "into",
-  "about",
-  "via",
-  "using",
-  "towards",
-  "toward"
-]);
-var LATIN_FOLD = {
-  "\xDF": "ss",
-  "\xF8": "o",
-  "\xD8": "o",
-  "\u0142": "l",
-  "\u0141": "l",
-  "\xE6": "ae",
-  "\xC6": "ae",
-  "\u0153": "oe",
-  "\u0152": "oe",
-  "\xF0": "d",
-  "\xD0": "d",
-  "\xFE": "th",
-  "\xDE": "th",
-  "\u0111": "d",
-  "\u0110": "d"
-};
-function nonEmpty(value) {
-  if (typeof value !== "string") return void 0;
-  const trimmed = value.trim();
-  return trimmed && normalizeInline(trimmed) ? trimmed : void 0;
-}
-function cleanDoi(value) {
-  const raw = nonEmpty(value);
-  if (!raw) return void 0;
-  const stripped = raw.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
-  return stripped || void 0;
-}
-function stripPdfExtension(value) {
-  const raw = nonEmpty(value);
-  if (!raw) return void 0;
-  const stripped = raw.replace(/\.pdf$/i, "").trim();
-  return stripped || raw;
-}
-function foldAscii(value) {
-  return value.replace(/[ßøØłŁæÆœŒðÐþÞđĐ]/g, (ch) => LATIN_FOLD[ch] ?? ch).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
-function fnv1aHex(seed) {
-  let hash3 = 2166136261;
-  for (let i = 0; i < seed.length; i++) {
-    hash3 ^= seed.charCodeAt(i);
-    hash3 = Math.imul(hash3, 16777619) >>> 0;
-  }
-  return hash3.toString(16).padStart(8, "0");
-}
-function normalizeInline(value) {
-  return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
-}
-function splitCommaAuthors(segment) {
-  if (!segment.includes(",")) return [segment];
-  const parts = segment.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
-  if (parts.length < 2) return parts;
-  if (parts.some((part) => NAME_SUFFIX_RE.test(part))) return [segment];
-  if (NOBILIARY_PARTICLE_RE.test(parts[0])) return [segment];
-  const allMultiWord = parts.every((part) => part.split(/\s+/).length >= 2);
-  return allMultiWord ? parts : [segment];
-}
-function parseAuthors(raw) {
-  const cleaned = nonEmpty(raw)?.replace(/\s+/g, " ");
-  if (!cleaned) return [];
-  let source2 = cleaned;
-  let trailingEtAl = false;
-  if (/,\s*et\s+al\.?$/i.test(source2)) {
-    source2 = source2.replace(/,\s*et\s+al\.?$/i, "").trim();
-    trailingEtAl = true;
-  }
-  let segments;
-  if (source2.includes(";")) {
-    segments = source2.split(/\s*;\s*/);
-  } else if (source2.includes("\u3001")) {
-    segments = source2.split(/\s*、\s*/);
-  } else {
-    segments = source2.split(/\s*,\s+and\s+|\s+and\s+|\s*,\s*&\s+|\s+&\s+/i).flatMap((segment) => splitCommaAuthors(segment.trim()));
-  }
-  const authors = [];
-  for (const part of segments) {
-    const trimmed = part.trim().replace(/^,+|,+$/g, "").trim();
-    if (!trimmed) continue;
-    if (/^et\s+al\.?$/i.test(trimmed)) {
-      if (authors.length && !/\bet\s+al\.?$/i.test(authors[authors.length - 1])) {
-        authors[authors.length - 1] += " et al.";
-      }
-      continue;
-    }
-    authors.push(trimmed);
-  }
-  if (trailingEtAl && authors.length && !/\bet\s+al\.?$/i.test(authors[authors.length - 1])) {
-    authors[authors.length - 1] += " et al.";
-  }
-  return authors;
-}
-function extractArxivId(url, doi) {
-  const rawUrl = nonEmpty(url);
-  if (rawUrl) {
-    const parsed = URL.parse(rawUrl);
-    if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
-      if (/(?:^|\.)arxiv\.org$/i.test(parsed.hostname)) {
-        const match = ARXIV_PATH_RE.exec(parsed.pathname);
-        if (match) return match[1].toLowerCase();
-      }
-      if (/^(?:dx\.)?doi\.org$/i.test(parsed.hostname)) {
-        const doiPath = parsed.pathname.slice(1);
-        if (doiPath.startsWith("10.")) {
-          const match = ARXIV_DOI_RE.exec(doiPath);
-          if (match) return match[1].toLowerCase();
-        }
-      }
-    } else if (!parsed || parsed.protocol === "arxiv:" || parsed.protocol === "doi:") {
-      const bare = ARXIV_BARE_RE.exec(rawUrl);
-      if (bare) return bare[1].toLowerCase();
-      const doiInUrl = ARXIV_DOI_RE.exec(rawUrl);
-      if (doiInUrl) return doiInUrl[1].toLowerCase();
-    }
-  }
-  const rawDoi = nonEmpty(doi);
-  if (rawDoi) {
-    const match = ARXIV_DOI_RE.exec(rawDoi);
-    if (match) return match[1].toLowerCase();
-  }
-  return void 0;
-}
-function extractYear(date, venue, createdAt) {
-  for (const candidate of [date, venue, createdAt]) {
-    const text2 = nonEmpty(candidate);
-    if (!text2) continue;
-    const match = YEAR_RE2.exec(text2);
-    if (match) return match[1];
-  }
-  return void 0;
-}
-function buildCitationMetadata(doc, zotero) {
-  const isBook = Boolean(doc.book);
-  const title = nonEmpty(zotero?.title) ?? nonEmpty(doc.paperTitle) ?? stripPdfExtension(doc.title) ?? "Untitled";
-  const zoteroAuthors = parseAuthors(zotero?.creator);
-  const authors = zoteroAuthors.length ? zoteroAuthors : parseAuthors(doc.authors);
-  const venue = isBook ? void 0 : nonEmpty(doc.venue);
-  const publisher = nonEmpty(doc.publisher) ?? (isBook ? nonEmpty(doc.venue) : void 0);
-  const year = extractYear(zotero?.date) ?? extractYear(doc.year, doc.venue);
-  const doi = cleanDoi(zotero?.doi) ?? cleanDoi(doc.doi);
-  const url = nonEmpty(zotero?.url) ?? nonEmpty(doc.url);
-  const arxivId = extractArxivId(url, doi) ?? extractArxivId(doc.url, doc.doi);
-  const abstract = nonEmpty(doc.abstract);
-  const zoteroType = nonEmpty(zotero?.type);
-  const id = nonEmpty(doc.id);
-  return {
-    title,
-    ...authors.length ? { authors } : {},
-    ...venue ? { venue } : {},
-    ...year ? { year } : {},
-    ...doi ? { doi } : {},
-    ...url ? { url } : {},
-    ...arxivId ? { arxivId } : {},
-    ...publisher ? { publisher } : {},
-    ...abstract ? { abstract } : {},
-    kind: isBook ? "book" : doc.kind,
-    ...zoteroType ? { zoteroType } : {},
-    ...id ? { id } : {}
-  };
-}
-function buildCiteKey(meta) {
-  const firstAuthor = nonEmpty(meta.authors?.[0]);
-  let authorPart = "";
-  if (firstAuthor) {
-    const withoutEtAl = firstAuthor.replace(/\s+et\s+al\.?$/i, "").trim();
-    const surname = withoutEtAl.includes(",") ? withoutEtAl.split(",")[0].trim() : withoutEtAl.split(/\s+/).at(-1) ?? "";
-    authorPart = foldAscii(surname).replace(/[^a-z0-9]+/g, "").slice(0, 24);
-  }
-  const yearPart = extractYear(meta.year) ?? "";
-  const foldedTitle = foldAscii(stripPdfExtension(meta.title) ?? "");
-  const titleTokens = foldedTitle.match(/[a-z0-9]+/g) ?? [];
-  const titleWord = titleTokens.find((token) => !TITLE_STOPWORDS.has(token)) ?? titleTokens[0] ?? "";
-  const titlePart = titleWord.slice(0, 24);
-  if (authorPart || titlePart) {
-    return `${authorPart}${yearPart}${titlePart}`;
-  }
-  const seed = [meta.id ?? "", meta.title ?? "", (meta.authors ?? []).join(";"), yearPart].join("|");
-  return `ref${yearPart}${fnv1aHex(seed)}`;
-}
 
 // src/shared/notebook-structure.ts
 function chapterPassageLabel(section, label) {
@@ -1588,7 +1858,7 @@ function formatHighlightsSection(annotations, options) {
 }
 
 // src/server/obsidian.ts
-import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID6 } from "node:crypto";
 import {
   closeSync as closeSync2,
   constants as constants2,
@@ -1605,7 +1875,7 @@ import {
   unlinkSync as unlinkSync2,
   writeFileSync
 } from "node:fs";
-import path5 from "node:path";
+import path6 from "node:path";
 
 // src/shared/source-link.ts
 function quoteLocator(text2) {
@@ -1651,9 +1921,9 @@ function writeTranslatedLocator(url, locator) {
 }
 
 // src/server/reader-store.ts
-import { createHash as createHash2, randomInt, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash3, randomInt, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
-import path3 from "node:path";
+import path4 from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 // src/server/annotations.ts
@@ -2129,7 +2399,7 @@ function identityFor(kind, entry) {
   const content = kind === "note" ? [entry.text, entry.quote, entry.label] : kind === "word" ? [entry.text.toLowerCase().replace(/\s+/g, " ")] : [entry.text, entry.meaning];
   const position = [entry.docId || entry.sourceUrl, entry.page, entry.anchor];
   if (kind === "note" && entry.context) content.push(entry.context);
-  return createHash2("sha256").update(JSON.stringify([...position, ...content])).digest("hex");
+  return createHash3("sha256").update(JSON.stringify([...position, ...content])).digest("hex");
 }
 function entryFor(kind, input, prior, allowEmpty = false) {
   const next = { ...prior, ...input };
@@ -2150,7 +2420,7 @@ function entryFor(kind, input, prior, allowEmpty = false) {
     }
   }
   return {
-    id: prior?.id ?? randomUUID2(),
+    id: prior?.id ?? randomUUID4(),
     docId,
     title: stringValue(next.title, "document title", 2048),
     page,
@@ -2312,14 +2582,14 @@ var NotebookRecords = class {
 var ReaderStore = class {
   #root;
   constructor(root) {
-    if (!path3.isAbsolute(root)) throw new ServiceError(500, "Set an absolute data directory for the reader.");
-    this.#root = path3.resolve(root);
+    if (!path4.isAbsolute(root)) throw new ServiceError(500, "Set an absolute data directory for the reader.");
+    this.#root = path4.resolve(root);
   }
   #transaction(writer, run) {
     let db;
     try {
       mkdirSync(this.#root, { recursive: true, mode: 448 });
-      const file = path3.join(this.#root, "reader.sqlite");
+      const file = path4.join(this.#root, "reader.sqlite");
       try {
         closeSync(openSync(file, "wx", 384));
       } catch (error) {
@@ -2328,7 +2598,7 @@ var ReaderStore = class {
       if (!lstatSync(file).isFile()) throw new ServiceError(500, "The reader database must be a regular file.");
       db = new DatabaseSync(file, { timeout: 5e3 });
       const version = db.prepare("PRAGMA user_version").get()?.user_version;
-      const hasExtensions = version === 2 && db.prepare(
+      const hasExtensions = version === 2 && hasResearchSchema(db) && db.prepare(
         "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources','doc_meta')"
       ).get()?.n === 8;
       if (version === 0 || version === 1 || version === 2 && !hasExtensions) {
@@ -2342,6 +2612,7 @@ var ReaderStore = class {
         db.exec("CREATE TABLE IF NOT EXISTS zotero_sources(library TEXT NOT NULL,itemKey TEXT NOT NULL,original TEXT NOT NULL,webUrl TEXT NOT NULL,PRIMARY KEY(library,itemKey)) STRICT");
         db.exec(annotationSchema);
         db.exec(docMetaSchema);
+        ensureResearchSchema(db);
         db.exec("CREATE TABLE IF NOT EXISTS book_positions(docId TEXT PRIMARY KEY, updated INTEGER NOT NULL, place TEXT NOT NULL) STRICT");
         db.exec("CREATE TABLE IF NOT EXISTS pdf_outlines(docId TEXT PRIMARY KEY, contents TEXT NOT NULL) STRICT");
         db.exec(`CREATE TABLE IF NOT EXISTS article_captures(
@@ -2363,6 +2634,9 @@ var ReaderStore = class {
       db?.close();
     }
   }
+  withDb(writer, run) {
+    return this.#transaction(writer, run);
+  }
   withNotebook(run) {
     return this.#transaction(true, (db) => run(new NotebookRecords(db)));
   }
@@ -2374,7 +2648,7 @@ var ReaderStore = class {
     const regionText = stringValue(input.regionText, "text inside selected area", 1e5, false, true);
     const label = stringValue(input.label, "screenshot label", 512, true, true);
     const { bytes } = await readRegionImage(input.image, attachments);
-    const hash3 = createHash2("sha256").update(JSON.stringify([docId, page, location, regionText, label])).update(bytes).digest("hex");
+    const hash3 = createHash3("sha256").update(JSON.stringify([docId, page, location, regionText, label])).update(bytes).digest("hex");
     const anchor = "article-" + location + "-" + hash3.slice(0, 32);
     return this.#transaction(true, (db) => {
       db.prepare(`INSERT INTO article_captures(docId,page,anchor,image,regionText,label) VALUES(?,?,?,?,?,?)
@@ -2507,7 +2781,7 @@ var ReaderStore = class {
       const row = db.prepare("SELECT filename FROM notebooks WHERE vault=? AND docId=?").get(settings.vaultPath, docId);
       const entries = collect(db.prepare("SELECT * FROM entries WHERE docId=? ORDER BY page,createdAt,rowid").iterate(docId));
       const result = write({ settings, entries, annotations: listAnnotations(db, { docId }), filename: row && readColumn(row, "filename"), zotero: new NotebookRecords(db).zoteroSource(docId) });
-      db.prepare("INSERT OR REPLACE INTO notebooks VALUES(?,?,?)").run(settings.vaultPath, docId, path3.basename(result.path));
+      db.prepare("INSERT OR REPLACE INTO notebooks VALUES(?,?,?)").run(settings.vaultPath, docId, path4.basename(result.path));
       return result;
     });
   }
@@ -2540,25 +2814,26 @@ var ReaderStore = class {
       for (const table of ["entries", "annotations", "chat_exchanges", "book_positions", "pdf_outlines", "article_captures"]) db.prepare(`DELETE FROM ${table} WHERE docId=?`).run(docId);
       for (const table of ["notebook_documents", "notebook_vaults", "notebooks"]) db.prepare(`DELETE FROM ${table} WHERE docId=? OR substr(docId,1,?)=?`).run(docId, prefix2.length, prefix2);
       deleteDocMeta(db, docId);
+      deleteResearchDocument(db, docId);
       db.prepare("DELETE FROM citations WHERE identity=?").run("document/" + docId);
     });
   }
 };
 
 // src/server/vault-markdown.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 
 // src/server/vault-sources.ts
-import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
-import path4 from "node:path";
+import path5 from "node:path";
 var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function publicSource(value) {
   const url = value && URL.parse(value);
   if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
-  const temp = path4.join(path4.dirname(file), ".source-" + randomUUID3() + ".tmp");
+  const temp = path5.join(path5.dirname(file), ".source-" + randomUUID5() + ".tmp");
   copyFileSync(original, temp, constants.COPYFILE_EXCL);
   try {
     try {
@@ -2603,10 +2878,10 @@ var VaultSources = class {
       }
       if (url && doc.kind === "pdf" && (/\.pdf$/i.test(url.pathname) || /\/pdf\//.test(url.pathname))) url.hash = "page=" + page;
       if (doc.kind === "pdf" || material?.paragraphs?.length) {
-        const id = createHash3("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
+        const id = createHash4("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
         const title = section?.title ?? doc.title.replace(/\.pdf$/i, "");
         const name2 = filenameStem(title, 64) + " - " + id + (doc.kind === "pdf" ? ".pdf" : ".md");
-        const file = path4.join(vaultFolder(vault, "Sources", true), name2);
+        const file = path5.join(vaultFolder(vault, "Sources", true), name2);
         const existing = lstatSync2(file, { throwIfNoEntry: false });
         if (existing && !existing.isFile()) throw new ServiceError(409, "The library copy in the vault must be a regular file.");
         if (!existing) {
@@ -2617,7 +2892,7 @@ var VaultSources = class {
             writeMarkdown(file, void 0, ["# " + markdownHeading(title), ...original ? ["[Original source](<" + original.href + ">)"] : [], ...paragraphs].join("\n\n") + "\n");
           }
         }
-        copy = path4.relative(folder, file).split(path4.sep).map(encodeURIComponent).join("/");
+        copy = path5.relative(folder, file).split(path5.sep).map(encodeURIComponent).join("/");
         if (doc.kind === "pdf") copy += "#page=" + page;
         else if (/^p-[1-9]\d*$/.test(anchor) && material?.paragraphs?.[Number(anchor.slice(2)) - 1]) copy += "#^" + anchor;
       }
@@ -2637,7 +2912,7 @@ function portableCitation(label, targets) {
 }
 
 // src/server/vault-markdown.ts
-var key = (s) => createHash4("sha256").update(s).digest("hex").slice(0, 16);
+var key = (s) => createHash5("sha256").update(s).digest("hex").slice(0, 16);
 var firstLabel = /^\[((?:\\.|[^\]\\\r\n])+)\]/u;
 function readerUrl(raw, docId) {
   const url = URL.parse(raw);
@@ -2718,7 +2993,7 @@ function readerMarkdown(external, baseline, docId) {
 
 // src/server/obsidian.ts
 function hash2(text2) {
-  return createHash5("sha256").update(text2).digest("hex");
+  return createHash6("sha256").update(text2).digest("hex");
 }
 function filenameStem(title, max = 75) {
   let name2 = title.normalize("NFKC").replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").replace(/^[ .]+/g, "").slice(0, max).replace(/[ .]+$/g, "");
@@ -2737,10 +3012,10 @@ function vaultFolder(vaultPath, bookSlug2, create = false) {
     segments.push(name2 === bookSlug2 ? name2 : name2 + " - " + hash2(bookSlug2).slice(0, 12));
   }
   for (const part of segments) {
-    folder = path5.join(folder, part);
+    folder = path6.join(folder, part);
     if (create) mkdirSync2(folder, { recursive: true, mode: 448 });
     const info = lstatSync3(folder, { throwIfNoEntry: false });
-    if (info && (!info.isDirectory() || path5.relative(folder, realpathSync(folder)) !== "")) {
+    if (info && (!info.isDirectory() || path6.relative(folder, realpathSync(folder)) !== "")) {
       throw new ServiceError(409, "The notebook folder must be inside the selected vault.");
     }
   }
@@ -2839,7 +3114,7 @@ function fileContent(file) {
 }
 function writeMarkdown(file, observed, next) {
   if (observed === next) return;
-  const temp = path5.join(path5.dirname(file), ".paper-reader-" + randomUUID4() + ".tmp");
+  const temp = path6.join(path6.dirname(file), ".paper-reader-" + randomUUID6() + ".tmp");
   const fd = openSync2(temp, "wx", 384);
   try {
     try {
@@ -2877,8 +3152,8 @@ function exportNotebook(store, input, sources, notebook) {
     try {
       const folder = vaultFolder(settings.vaultPath, void 0, true);
       const name2 = filename ?? filenameFor(title, docId);
-      if (name2 !== path5.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
-      const file = path5.join(folder, name2);
+      if (name2 !== path6.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
+      const file = path6.join(folder, name2);
       const observed = fileContent(file);
       const doc = sources.doc ?? { id: docId, kind: "pdf", title, ...supplied ? { url: supplied } : {} };
       const liveMarks = annotations.filter(isLiveAnnotation);
@@ -3045,16 +3320,16 @@ function load(records, local, sources, stored = true) {
     let name2;
     if (binding) {
       name2 = binding.filename;
-      if (name2 !== path6.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
+      if (name2 !== path7.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
     } else {
       const stem = local.chapter ? filenameStem(local.chapter.title) : filenameFor(local.title.replace(/\.pdf$/i, ""), local.docId).slice(0, -3) + " - Notebook";
       const reserved = local.chapter && records.chapterFilenames(vault, local.docId);
       name2 = stem + ".md";
-      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path6.join(folder, name2), { throwIfNoEntry: false }); n++) {
+      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path7.join(folder, name2), { throwIfNoEntry: false }); n++) {
         name2 = stem + " (" + n + ").md";
       }
     }
-    book.file = path6.join(folder, name2);
+    book.file = path7.join(folder, name2);
     book.observed = binding ? fileContent(book.file) : void 0;
     book.baseline = binding?.baseline;
     if (binding && book.observed === void 0) {
@@ -3079,7 +3354,7 @@ function load(records, local, sources, stored = true) {
   });
 }
 function revision(book) {
-  return createHash6("sha256").update(notebookKey(book.local.docId, book.local.chapter)).update("\0").update(book.file || "").update("\0").update(book.markdown).update("\0").update(book.conflict ? book.local.markdown : "").digest("hex");
+  return createHash7("sha256").update(notebookKey(book.local.docId, book.local.chapter)).update("\0").update(book.file || "").update("\0").update(book.markdown).update("\0").update(book.conflict ? book.local.markdown : "").digest("hex");
 }
 var nativeUri = (file) => "obsidian://open?path=" + encodeURIComponent(file);
 function snapshot(records, book, desktopOpenAvailable) {
@@ -3104,14 +3379,14 @@ function persist(records, book) {
   if (book.file) {
     const file = book.file;
     const projected = vaultAccess(() => {
-      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path6.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
+      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path7.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
       const zotero = records.zoteroSource(doc.docId);
       if (!book.sources.doc?.url) book.sources.useSavedSources([zotero?.original ?? "", ...records.entries("note", doc.docId, doc.chapter).map((note) => note.sourceUrl)]);
-      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path6.dirname(file), zotero?.link)));
+      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path7.dirname(file), zotero?.link)));
       writeMarkdown(file, book.observed, portable);
       return portable;
     });
-    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path6.basename(book.file));
+    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path7.basename(book.file));
     book.observed = projected;
   }
   if (book.local.markdown !== book.markdown || !book.stored) records.store(doc);
@@ -3143,7 +3418,7 @@ function requestDocument(records, input, sources) {
   const doc = { docId, title, sourceUrl: sourceUrl2, chapter };
   return load(records, { ...doc, markdown: initialMarkdown(doc, records.entries("note", docId, chapter)) }, sources, false);
 }
-var storedDocId = /^(?:pdf|web|book)-[a-f0-9]{64}$/;
+var storedDocId = /^(?:pdf|web|book|abs)-[a-f0-9]{64}$/;
 var PaperNotebooks = class {
   constructor(database, library, launch2) {
     this.database = database;
@@ -3279,7 +3554,7 @@ var PaperNotebooks = class {
 import { spawn } from "node:child_process";
 import { statSync as statSync2 } from "node:fs";
 import { homedir } from "node:os";
-import path7 from "node:path";
+import path8 from "node:path";
 var isFile = (file) => {
   try {
     return Boolean(statSync2(file, { throwIfNoEntry: false })?.isFile());
@@ -3294,7 +3569,7 @@ var isDir = (file) => {
     return false;
   }
 };
-var onPath = (name2) => (process.env.PATH ?? "").split(path7.delimiter).filter((dir) => path7.isAbsolute(dir)).map((dir) => path7.join(dir, name2)).find(isFile);
+var onPath = (name2) => (process.env.PATH ?? "").split(path8.delimiter).filter((dir) => path8.isAbsolute(dir)).map((dir) => path8.join(dir, name2)).find(isFile);
 function launch(command, args, errorMessage) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, detached: true, stdio: "ignore", windowsHide: false });
@@ -3307,13 +3582,13 @@ function launch(command, args, errorMessage) {
 }
 function installedObsidian() {
   if (process.platform === "win32") {
-    const directories = [process.env.LOCALAPPDATA && path7.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
-    const executable = directories.filter((dir) => Boolean(dir && path7.isAbsolute(dir))).map((dir) => path7.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
+    const directories = [process.env.LOCALAPPDATA && path8.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
+    const executable = directories.filter((dir) => Boolean(dir && path8.isAbsolute(dir))).map((dir) => path8.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
     if (!executable) return;
     return (uri) => launch(executable, [uri], "Windows could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "darwin") {
-    if (!["/Applications/Obsidian.app", path7.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
+    if (!["/Applications/Obsidian.app", path8.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
     return (uri) => launch("/usr/bin/open", ["-a", "Obsidian", uri], "macOS could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "linux") {
@@ -3321,7 +3596,7 @@ function installedObsidian() {
     const present = Boolean(onPath("obsidian") || [
       "/opt/Obsidian/obsidian",
       "/var/lib/flatpak/exports/bin/md.obsidian.Obsidian",
-      path7.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
+      path8.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
     ].some(isFile));
     if (!opener || !present) return;
     return (uri) => launch(opener, [uri], "Could not start Obsidian via xdg-open. Open the notebook link with the Obsidian app.");
@@ -3331,12 +3606,12 @@ function installedObsidian() {
 
 // src/server/local-translation.ts
 import { execFile } from "node:child_process";
-import { existsSync as existsSync2, statSync as statSync3 } from "node:fs";
-import path9 from "node:path";
+import { existsSync as existsSync3, statSync as statSync3 } from "node:fs";
+import path10 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/server/translation-files.ts
-import path8 from "node:path";
+import path9 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var modelFiles = [
   { name: "config.json", bytes: 1503, digest: "4727d1229a04f95bf6f39abf949d8080615433d99d6ebd85f81c09edd247d5fa" },
@@ -3348,7 +3623,7 @@ var modelFiles = [
   { name: "onnx/decoder_model_merged_quantized.onnx", bytes: 60212804, digest: "023be4f841f4c47cd65fffcbaa81c0d99d7f7e0138f7ba0e03fa220a4e688aff" }
 ];
 function localModelDirectory() {
-  return process.env.PAPER_READER_MT_MODEL_DIR ? path8.resolve(process.env.PAPER_READER_MT_MODEL_DIR) : fileURLToPath2(new URL("../../.runtime/mt-weights/opus-mt-en-zh", import.meta.url));
+  return process.env.PAPER_READER_MT_MODEL_DIR ? path9.resolve(process.env.PAPER_READER_MT_MODEL_DIR) : fileURLToPath2(new URL("../../.runtime/mt-weights/opus-mt-en-zh", import.meta.url));
 }
 
 // src/server/local-translation.ts
@@ -3357,13 +3632,13 @@ var worker = fileURLToPath3(new URL(inSourceTree ? "./local-translation-worker.t
 var lastJob = Promise.resolve();
 function localTranslationAvailable(directory = localModelDirectory()) {
   try {
-    if (!existsSync2(worker)) return false;
+    if (!existsSync3(worker)) return false;
     if (process.platform === "win32") {
       const env = workerEnvironment();
-      const locations = [path9.dirname(process.execPath), path9.join(env.SystemRoot ?? "", "System32"), ...(env.PATH ?? "").split(path9.delimiter)];
-      if (!locations.some((dir) => path9.isAbsolute(dir) && existsSync2(path9.join(dir, "msvcp140.dll")))) return false;
+      const locations = [path10.dirname(process.execPath), path10.join(env.SystemRoot ?? "", "System32"), ...(env.PATH ?? "").split(path10.delimiter)];
+      if (!locations.some((dir) => path10.isAbsolute(dir) && existsSync3(path10.join(dir, "msvcp140.dll")))) return false;
     }
-    return modelFiles.every((file) => statSync3(path9.join(directory, file.name)).size === file.bytes);
+    return modelFiles.every((file) => statSync3(path10.join(directory, file.name)).size === file.bytes);
   } catch {
     return false;
   }
@@ -3375,8 +3650,8 @@ function workerEnvironment() {
   }
   if (process.platform === "win32") {
     const runtimeDir = process.env.PAPER_READER_MT_RUNTIME_DIR;
-    if (runtimeDir && path9.isAbsolute(runtimeDir) && existsSync2(path9.join(runtimeDir, "msvcp140.dll"))) {
-      environment.PATH = (environment.PATH ?? "") + path9.delimiter + runtimeDir;
+    if (runtimeDir && path10.isAbsolute(runtimeDir) && existsSync3(path10.join(runtimeDir, "msvcp140.dll"))) {
+      environment.PATH = (environment.PATH ?? "") + path10.delimiter + runtimeDir;
     }
   }
   return environment;
@@ -4698,6 +4973,14 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     if (!documents.hasSync(id)) throw new ServiceError(404, "Document not found.");
     return write();
   };
+  const indexDoc = async (doc, force = false) => {
+    if (!force && database.withDb(false, (db) => hasDocPages(db, doc.id))) return 0;
+    const full = doc.kind === "pdf" || doc.paragraphs || doc.abstract ? doc : await documents.get(doc.id);
+    const pdfBytes = full.kind === "pdf" ? await documents.bytes(full.id) : void 0;
+    const pages = await extractDocumentPages(full, pdfBytes);
+    if (!pages.length || !documents.hasSync(full.id)) return 0;
+    return database.withDb(true, (db) => replaceDocPages(db, full.id, pages));
+  };
   const handlers = {
     "library.list": async () => {
       const docs = await documents.list(), metas = database.listDocMeta();
@@ -4713,14 +4996,67 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "library.rename": async (input) => ({ doc: await documents.rename(input.id, input.title) }),
     "library.updateMeta": async (input) => ({ doc: await documents.updateMeta(input) }),
     "library.delete": (input) => documents.delete(input.id),
+    "library.createAbstract": async (input) => {
+      const doc = await documents.createAbstract(input);
+      await indexDoc(doc, doc.kind === "abstract").catch(() => 0);
+      return { doc };
+    },
     "library.progress.save": (input) => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
     "library.triage": (input) => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
     "library.search": async (input) => {
       const query = single(input.query, "search query", 256);
       return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };
     },
-    "web.import": (input) => documents.importWebDocument(input),
-    "web.open": (input) => openWebArticle(documents, input.url, readResource),
+    "pages.index": async (input) => {
+      if (input.force !== void 0 && typeof input.force !== "boolean") throw new ServiceError(400, "Invalid force option.");
+      const force = input.force === true;
+      if (input.docId !== void 0) {
+        const pages2 = await indexDoc(await documents.get(input.docId), force);
+        return { indexed: pages2 > 0 ? 1 : 0, pages: pages2 };
+      }
+      let indexed = 0, pages = 0;
+      for (const doc of await documents.list()) {
+        const count = await indexDoc(doc, force).catch(() => 0);
+        if (count > 0) {
+          indexed++;
+          pages += count;
+        }
+      }
+      return { indexed, pages };
+    },
+    "pages.search": async (input) => {
+      const query = single(input.query, "search query", 500);
+      if (!query) return { hits: [] };
+      const docIds = input.docIds === void 0 ? void 0 : (() => {
+        if (!Array.isArray(input.docIds) || input.docIds.length > 500) throw new ServiceError(400, "Invalid document filter.");
+        return input.docIds.map((id) => single(id, "document ID", 512, true));
+      })();
+      const limit = input.limit;
+      if (limit !== void 0 && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 200)) {
+        throw new ServiceError(400, "Invalid search limit.");
+      }
+      const docs = await documents.list(), docMap = new Map(docs.map((d) => [d.id, d]));
+      for (const target of docIds ? docIds.map((id) => docMap.get(id)).filter((d) => Boolean(d)) : docs) await indexDoc(target, false).catch(() => 0);
+      const hits = [];
+      for (const hit of database.withDb(false, (db) => searchDocPagesFts(db, query, { docIds, limit }))) {
+        const doc = docMap.get(hit.docId);
+        if (doc) hits.push({ ...hit, docTitle: doc.title, docKind: doc.kind });
+      }
+      return { hits };
+    },
+    "topics.list": () => ({ topics: database.withDb(false, listTopics) }),
+    "topics.save": (input) => ({ topic: database.withDb(true, (db) => saveTopic(db, input)) }),
+    "topics.delete": (input) => database.withDb(true, (db) => deleteTopic(db, input.id)),
+    "web.import": async (input) => {
+      const opened = await documents.importWebDocument(input);
+      await indexDoc(opened.doc, true).catch(() => 0);
+      return opened;
+    },
+    "web.open": async (input) => {
+      const opened = await openWebArticle(documents, input.url, readResource);
+      await indexDoc(opened.doc, true).catch(() => 0);
+      return opened;
+    },
     "book.section": async (input) => ({ doc: await documents.bookSection(input.docId, input.page) }),
     "translation.get": async (input) => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === void 0 ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
     "translation.page": async (input) => {
@@ -4793,8 +5129,9 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
 // src/server/index.ts
 var name = "paper-reader";
 var inject = ["connection"];
-var publicDir = fileURLToPath5(new URL("../web/", import.meta.url));
-var pdfDir = path10.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
+var builtWeb = fileURLToPath5(new URL("../web/", import.meta.url));
+var publicDir = existsSync4(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
+var pdfDir = path11.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
 var mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -4850,7 +5187,7 @@ async function boundedBody(request, limit) {
   return Buffer.concat(chunks, bytes);
 }
 function apply(ctx) {
-  const root = process.env.PAPER_READER_HOME || path10.join(process.env.DSH_HOME || path10.join(os.homedir(), ".dsh"), "paper-reader");
+  const root = process.env.PAPER_READER_HOME || path11.join(process.env.DSH_HOME || path11.join(os.homedir(), ".dsh"), "paper-reader");
   const store = new ReaderStore(root);
   const library = new Library(root, publicResource, (id) => store.deleteDocument(id));
   const models = {};
@@ -4903,19 +5240,19 @@ function apply(ctx) {
       }
     }
   });
-  const asset = (url, file) => route(url, ["GET", "HEAD"], async (req) => new Response(req.method === "HEAD" ? null : new Uint8Array(await readFile2(file)), {
-    headers: { "content-type": mimeTypes[path10.extname(file)] ?? "application/octet-stream", "cache-control": url.startsWith("vendor/") ? "private, max-age=86400" : "private, no-cache", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" }
+  const asset = (url, file) => route(url, ["GET", "HEAD"], async (req) => new Response(req.method === "HEAD" ? null : new Uint8Array(await readFile3(file)), {
+    headers: { "content-type": mimeTypes[path11.extname(file)] ?? "application/octet-stream", "cache-control": url.startsWith("vendor/") ? "private, max-age=86400" : "private, no-cache", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" }
   }));
   function assets(url, dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const file = path10.join(dir, entry.name);
+      const file = path11.join(dir, entry.name);
       if (entry.isDirectory()) assets(url + entry.name + "/", file);
-      else if (entry.isFile() && Object.hasOwn(mimeTypes, path10.extname(entry.name))) asset(url + entry.name, file);
+      else if (entry.isFile() && Object.hasOwn(mimeTypes, path11.extname(entry.name))) asset(url + entry.name, file);
     }
   }
   assets("app/", publicDir);
-  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path10.join(pdfDir, "build", file));
-  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path10.join(pdfDir, dir));
+  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path11.join(pdfDir, "build", file));
+  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path11.join(pdfDir, dir));
   route("pdf", ["GET"], async (req) => new Response(new Uint8Array(await library.bytes(new URL(req.url).searchParams.get("id"))), { headers: { "content-type": "application/pdf", "cache-control": "private, no-cache" } }));
   route("article-image", ["GET"], async (req) => {
     const params = new URL(req.url).searchParams;
@@ -4932,7 +5269,21 @@ function apply(ctx) {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);
     const params = new URL(req.url).searchParams;
     const meta = { paperTitle: params.get("paperTitle") ?? void 0, authors: params.get("authors") ?? void 0, venue: params.get("venue") ?? void 0, year: params.get("year") ?? void 0, doi: params.get("doi") ?? void 0 };
-    return json({ doc: await library.importPdf(params.get("title") || "Document.pdf", await boundedBody(req, PDF_LIMIT), params.get("url") ?? void 0, meta) });
+    const bytes = await boundedBody(req, PDF_LIMIT);
+    const doc = await library.importPdf(params.get("title") || "Document.pdf", bytes, params.get("url") ?? void 0, meta);
+    try {
+      const pages = await extractPdfPages(bytes);
+      if (pages.length && library.hasSync(doc.id)) store.withDb(true, (db) => replaceDocPages(db, doc.id, pages));
+    } catch {
+    }
+    return json({ doc });
+  }, "streaming");
+  route("attach-pdf", ["POST"], async (req) => {
+    if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);
+    const id = new URL(req.url).searchParams.get("id");
+    const { doc, pages } = await library.attachPdf(id, await boundedBody(req, PDF_LIMIT));
+    if (pages.length && library.hasSync(doc.id)) store.withDb(true, (db) => replaceDocPages(db, doc.id, pages));
+    return json({ doc, pages: pages.length });
   }, "streaming");
   route("action", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/json") fail("A JSON request is required.", 415);
