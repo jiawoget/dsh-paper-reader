@@ -125,6 +125,7 @@ class Reader implements ReaderPort {
     capturePosition: () => this.readingPosition(true),
     restorePosition: anchor => this.restoreReading(anchor),
     inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
+    refreshNotebook: docId => { if (docId === this.doc.id) void this.refresh().catch(() => undefined); },
     focusAfterCollapse: () => (this.desk.notebookOpen ? byId('expandResearch') : byId('library')).focus({ preventScroll: true })
   });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
@@ -782,6 +783,7 @@ class Reader implements ReaderPort {
   private async inspectFromWorkspace(target: InspectTarget, returnAnchor?: ReturnAnchor): Promise<void> {
     const origin = returnAnchor ?? this.readingPosition(false); this.desk.dismissDrawer();
     await this.navigate(target.docId, target.page, target.anchor ?? '', target.quote ?? '', undefined, undefined, { keepHistory: true, skipHistory: true });
+    if (this.doc.id === target.docId && target.openNotes) { await this.refresh(); this.showNotebook(); }
     if (this.doc.id === target.docId && (origin.doc !== this.doc.id || origin.page !== this.page)) this.jumpHistory.push(origin);
   }
   private async restoreReading(initial:ReadingPosition):Promise<void> {

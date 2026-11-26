@@ -265,6 +265,63 @@ async function run(): Promise<void> {
       assert.equal(await ws.locator('.rw-nav-btn[aria-current="page"]').getAttribute('data-view'), 'deep-search');
       assert.match(await ws.locator('.rw-search-input').inputValue(), /KV Cache Compression/);
       await page.unroute('**/api/paper-reader/action');
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'ai.selectModel', payload: { questionModel: { provider: 'reader-test', model: 'plain' } } } });
+      await ws.locator('.rw-nav-btn[data-view="library-chat"]').click(); await ws.locator('.lc-scope-pane').waitFor({ state: 'visible' });
+      await page.waitForFunction(() => (document.querySelector('.lc-scope-pill')?.textContent ?? '').includes('3 / 3'));
+      const panes = await ws.evaluate(() => ({ rail: document.querySelector('.rw-rail')!.getBoundingClientRect(), chat: document.querySelector('.lc-chat-pane')!.getBoundingClientRect(), scope: document.querySelector('.lc-scope-pane')!.getBoundingClientRect() }));
+      assert.ok(panes.rail.right <= panes.chat.left + 1 && panes.chat.right <= panes.scope.left + 1 && panes.scope.width >= 300 && panes.scope.width <= 340, JSON.stringify(panes));
+      assert.match(await ws.locator('.lc-scope-pill').innerText(), /3 \/ 3 papers \(2 Abstract only\)/);
+      const absGroup = ws.locator('input[data-group-id="kind:abstract"]'), untaggedGroup = ws.locator('input[data-group-id="tag:__untagged__"]');
+      await absGroup.click();
+      assert.equal(await absGroup.isChecked(), false); assert.equal(await untaggedGroup.evaluate(el => (el as HTMLInputElement).indeterminate), true);
+      assert.equal((await ws.locator('.lc-scope-pill').innerText()).trim(), '1 / 3 papers');
+      await absGroup.click();
+      assert.equal(await absGroup.isChecked(), true); assert.equal(await untaggedGroup.evaluate(el => (el as HTMLInputElement).indeterminate), false);
+
+      await ws.locator('.lc-input').fill('slow-stream-markdown stop check'); await ws.locator('.lc-input').press('Enter');
+      const stopBtn = ws.locator('.lc-composer .chat-stop'); await stopBtn.waitFor({ state: 'visible' });
+      await ws.locator('.lc-turn .chat-stream-body h3').waitFor({ state: 'visible' }); await stopBtn.click();
+      await ws.locator('.lc-stopped-bar').waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.lc-answer-body h3').first().innerText(), /Key Result/);
+
+      const lcCite = { key: 'pagedattention:p6', docId: 'pagedattention', authorLabel: 'Kwon et al.', year: '2023', page: 6, quote: 'PagedAttention divides the KV cache of each sequence into blocks.', title: 'PagedAttention: Efficient Memory Management', kind: 'pdf' as const };
+      await page.route('**/api/paper-reader/action', async route => {
+        const body = route.request().postDataJSON() as { op?: string };
+        if (body.op === 'library.chat') {
+          const answer = 'PagedAttention partitions KV cache into fixed blocks (Kwon et al., 2023, p. 6).';
+          await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ delta: answer }) + '\n' + JSON.stringify({ answer, citations: [lcCite], truncatedCount: 0, usedDocIds: ['pagedattention'], usedAbstractOnlyIds: [] }) + '\n' });
+          return;
+        }
+        await route.fallback();
+      });
+      await ws.locator('.lc-clear-btn').click(); await ws.locator('.lc-preset-chip[data-preset="compare_methods"]').click();
+      const citeBtn = ws.locator('.lc-cite').first(); await citeBtn.waitFor({ state: 'visible' }); await citeBtn.hover();
+      await ws.locator('.lc-popover').waitFor({ state: 'visible' }); assert.match(await ws.locator('.lc-pop-quote').innerText(), /divides the KV cache/);
+      await citeBtn.click(); await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16'); assert.match(await page.locator('.return-workspace-go').innerText(), /Library Chat/);
+      await page.locator('.return-workspace-go').click(); await ws.locator('.lc-cite').first().waitFor({ state: 'visible' });
+      await ws.locator('.lc-save-note').first().click(); await ws.locator('.lc-save-note[data-saved="true"]').waitFor({ state: 'visible' });
+      await page.locator('#toast').getByRole('button', { name: 'Undo', exact: true }).click();
+      await ws.locator('.lc-save-note:not([data-saved="true"])').waitFor({ state: 'visible' });
+      await ws.locator('.lc-save-note').first().click(); await ws.locator('.lc-save-note[data-saved="true"]').waitFor({ state: 'visible' });
+      await page.locator('#toast').getByRole('button', { name: 'View', exact: true }).click(); await page.locator('#notesTab[aria-selected="true"]').waitFor({ state: 'visible' });
+      await page.waitForFunction(() => (document.getElementById('railBody')?.textContent ?? '').includes('PagedAttention partitions KV cache'));
+      await page.locator('.return-workspace-go').click(); await ws.locator('.lc-cite').first().waitFor({ state: 'visible' });
+      await page.setViewportSize({ width: 1024, height: 768 }); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
+      await ws.locator('.lc-scope-toggle').click(); await ws.locator('.lc-scope-pane').waitFor({ state: 'visible' });
+      const s1024 = await ws.locator('.lc-scope-pane').evaluate(el => { const r = el.getBoundingClientRect(); return { w: r.width, l: r.left, r: r.right }; });
+      assert.ok(s1024.w >= 280 && s1024.l >= 52 && s1024.r <= 1024, JSON.stringify(s1024));
+      await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
+
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
+      const lcMob = await ws.evaluate(() => ({ top: document.querySelector('.lc-log')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth }));
+      assert.ok(lcMob.top <= 150 && lcMob.ov <= 1, JSON.stringify(lcMob));
+      await ws.locator('.lc-scope-pill').click(); await ws.locator('.lc-scope-pane').waitFor({ state: 'visible' });
+      await assertMobilePanelTargets(page, '#researchWorkspace');
+      await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
+      await page.unroute('**/api/paper-reader/action');
       await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
@@ -281,10 +338,15 @@ async function run(): Promise<void> {
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select'), 'zh-CN Citation Map');
       await zhPage.locator('.rw-nav-btn[data-view="field-trends"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.ft-starter-chip, .ft-topic-name'), 'zh-CN Field Trends');
+      await zhPage.locator('.rw-nav-btn[data-view="library-chat"]').click();
+      await zhPage.locator('.lc-scope-pane').waitFor({ state: 'visible' });
+      const zhLc = await collectChromeStrings(zhPage, '.lc-doc-info, .lc-group-name');
+      assertNoZhEnglishLeaks(zhLc, 'zh-CN Library Chat');
+      assert.equal(zhLc.some(s => /全库\s*Copilot|摘要存根|筛抽矩阵|纳排筛选/.test(s.text)), false);
       await zhCtx.close();
       assert.deepEqual(pageErrors, []); assert.deepEqual(consoleErrors, []);
     } finally { await browser.close(); }
-  });
+  }, {}, { modelFixture: true });
 }
 
 run().catch(error => { console.error(error); process.exit(1); });

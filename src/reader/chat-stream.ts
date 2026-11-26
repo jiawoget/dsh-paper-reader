@@ -94,12 +94,16 @@ export function renderChatNotice(node: HTMLElement, opts: {
   if (opts.onConnect) node.append(button(label('Connections', '连接设置'), opts.onConnect, 'text-btn'));
 }
 
+export function copyAnswerButton(text: string): HTMLButtonElement {
+  return button(label('Copy', '复制'), async () => {
+    toast(await copyText(text) ? label('Copied to clipboard.', '已复制到剪贴板。') : label('Copy was blocked by this browser.', '浏览器阻止了复制。'));
+  }, 'text-btn');
+}
+
 function chatAnswerTools(opts: { text: string; onDelete?: () => unknown }): HTMLElement {
   const tools = el('div', 'chat-answer-tools');
   tools.addEventListener('mousedown', event => { if (event.target instanceof Element && event.target.closest('button')) event.preventDefault(); });
-  tools.append(button(label('Copy', '复制'), async () => {
-    toast(await copyText(opts.text) ? label('Copied to clipboard.', '已复制到剪贴板。') : label('Copy was blocked by this browser.', '浏览器阻止了复制。'));
-  }, 'text-btn'));
+  tools.append(copyAnswerButton(opts.text));
   if (opts.onDelete) tools.append(button(label('Delete', '删除'), opts.onDelete, 'text-btn chat-delete-btn'));
   return tools;
 }

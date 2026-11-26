@@ -4,13 +4,13 @@ import type { ResearchViewId } from './labels.js';
 
 export type ReturnAnchor = ReadingPosition;
 export interface ResearchOpenContext { docId?: string; topic?: string; filter?: string; query?: string; seedDocId?: string }
-export interface InspectTarget { docId: string; page: number; anchor?: string; quote?: string }
+export interface InspectTarget { docId: string; page: number; anchor?: string; quote?: string; openNotes?: boolean }
 export interface WorkspaceSnapshot { activeView: ResearchViewId; viewState?: unknown; scrollTop: number }
 
 export interface ResearchShellContext {
   activeDocId: () => string; activeTopic: () => string; setActiveTopic: (tag: string) => void;
   openContext: () => ResearchOpenContext | undefined; openView: (view: ResearchViewId, ctx?: ResearchOpenContext) => void;
-  inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void;
+  inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void; refreshNotebook?: (docId: string) => void;
 }
 
 export interface ResearchViewModule {
@@ -21,7 +21,7 @@ export interface ResearchViewModule {
 
 export interface ResearchWorkspaceHost {
   activeDocId: () => string; prepareOpen: () => void; capturePosition: () => ReturnAnchor; restorePosition: (anchor: ReturnAnchor) => Promise<void>;
-  inspectFromWorkspace: (target: InspectTarget, returnAnchor?: ReturnAnchor) => Promise<void>; focusAfterCollapse: () => void;
+  inspectFromWorkspace: (target: InspectTarget, returnAnchor?: ReturnAnchor) => Promise<void>; focusAfterCollapse: () => void; refreshNotebook?: (docId: string) => void;
 }
 
 const norm = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
