@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { annotationSchema, listAnnotations, saveAnnotation, deleteAnnotation } from './annotations.js';
 import { deleteDocMeta, docMetaSchema, listDocMeta, saveDocProgress, searchLibrary, updateDocTriage } from './doc-meta.js';
+import { deleteResearchDocument, ensureResearchSchema, hasResearchSchema } from './research-store.js';
 import { readArticleLocation, readArticleRegion } from '../shared/article-region.js';
 import { bookPlace, type BookPlace } from '../shared/book-place.js';
 import type { PdfOutlineEntry } from '../shared/pdf-outline.js';
@@ -282,7 +283,7 @@ export class ReaderStore {
       db = new DatabaseSync(file, { timeout: 5000 });
       const version = db.prepare('PRAGMA user_version').get()?.user_version;
       // The added tables are independent of the v2 schema. Older open readers can keep using their notes and history.
-      const hasExtensions = version === 2 && db.prepare(
+      const hasExtensions = version === 2 && hasResearchSchema(db) && db.prepare(
         "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('chat_exchanges','zotero_authorizations','annotations','book_positions','pdf_outlines','article_captures','zotero_sources','doc_meta')"
       ).get()?.n === 8;
       if (version === 0 || version === 1 || version === 2 && !hasExtensions) {
@@ -296,6 +297,7 @@ export class ReaderStore {
         db.exec('CREATE TABLE IF NOT EXISTS zotero_sources(library TEXT NOT NULL,itemKey TEXT NOT NULL,original TEXT NOT NULL,webUrl TEXT NOT NULL,PRIMARY KEY(library,itemKey)) STRICT');
         db.exec(annotationSchema);
         db.exec(docMetaSchema);
+        ensureResearchSchema(db);
         db.exec('CREATE TABLE IF NOT EXISTS book_positions(docId TEXT PRIMARY KEY, updated INTEGER NOT NULL, place TEXT NOT NULL) STRICT');
         db.exec('CREATE TABLE IF NOT EXISTS pdf_outlines(docId TEXT PRIMARY KEY, contents TEXT NOT NULL) STRICT');
         db.exec(`CREATE TABLE IF NOT EXISTS article_captures(
@@ -317,9 +319,8 @@ export class ReaderStore {
       db?.close();
     }
   }
-  withNotebook<T>(run: (records: NotebookRecords) => T): T {
-    return this.#transaction(true, db => run(new NotebookRecords(db)));
-  }
+  withDb<T>(writer: boolean, run: (db: DatabaseSync) => T): T { return this.#transaction(writer, run); }
+  withNotebook<T>(run: (records: NotebookRecords) => T): T { return this.#transaction(true, db => run(new NotebookRecords(db))); }
   async saveArticleCapture(input: Input, attachments?: Input): Promise<{ anchor: string }> {
     const { docId, page } = articleCaptureScope(input);
     const { location } = input;
@@ -431,9 +432,7 @@ export class ReaderStore {
       settings: settingsFor(db)
     }));
   }
-  save(kind: EntryKind, input: Input): Entry {
-    return this.#transaction(true, db => storeEntry(db, kind, input));
-  }
+  save(kind: EntryKind, input: Input): Entry { return this.#transaction(true, db => storeEntry(db, kind, input)); }
   remove(kind: EntryKind, input: Input): { id: string; deleted: boolean } {
     const id = single(input.id, 'record ID', 128, true);
     return this.#transaction(true, db => {
@@ -482,6 +481,7 @@ export class ReaderStore {
       for (const table of ['entries', 'annotations', 'chat_exchanges', 'book_positions', 'pdf_outlines', 'article_captures']) db.prepare(`DELETE FROM ${table} WHERE docId=?`).run(docId);
       for (const table of ['notebook_documents', 'notebook_vaults', 'notebooks']) db.prepare(`DELETE FROM ${table} WHERE docId=? OR substr(docId,1,?)=?`).run(docId, prefix.length, prefix);
       deleteDocMeta(db, docId);
+      deleteResearchDocument(db, docId);
       db.prepare('DELETE FROM citations WHERE identity=?').run('document/' + docId);
     });
   }

@@ -24,12 +24,20 @@ export interface DocMeta {
 }
 export type LibrarySearchKind = 'doc' | 'note' | 'mark';
 export interface LibrarySearchHit {
-  docId: string; docTitle: string; docKind: 'pdf' | 'web' | 'book'; kind: LibrarySearchKind; snippet: string;
+  docId: string; docTitle: string; docKind: 'pdf' | 'web' | 'book' | 'abstract'; kind: LibrarySearchKind; snippet: string;
   page?: number; anchor?: string; quote?: string; id?: string; color?: AnnotationColor; updatedAt?: string;
 }
+export interface DocPageRecord { page: number; text: string }
+export interface DocPageHit {
+  docId: string; docTitle: string; docKind: DocumentInfo['kind']; page: number; snippet: string; score: number;
+}
+export interface TopicRecord {
+  id: string; name: string; tag: string; zoteroCollection: string; description: string; createdAt: string; updatedAt: string;
+}
+export interface CreateAbstractInput extends DocMetadata { title: string; url?: string }
 export interface DocumentInfo extends DocMetadata {
   id: string;
-  kind: 'pdf' | 'web';
+  kind: 'pdf' | 'web' | 'abstract';
   title: string;
   url?: string;
   paragraphs?: string[];
@@ -159,9 +167,15 @@ export interface Operations {
   'library.rename': [{ id: string; title: string }, { doc: DocumentInfo }];
   'library.updateMeta': [{ id: string; paperTitle?: string; authors?: string | string[]; venue?: string; year?: string; doi?: string }, { doc: DocumentInfo }];
   'library.delete': [{ id: string }, { id: string; deleted: boolean }];
+  'library.createAbstract': [CreateAbstractInput, { doc: DocumentInfo }];
   'library.progress.save': [{ docId: string; lastPage?: number; pageCount?: number; scrollFraction?: number }, { meta: DocMeta }];
   'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[] }, { meta: DocMeta }];
   'library.search': [{ query: string }, { hits: LibrarySearchHit[] }];
+  'pages.index': [{ docId?: string; force?: boolean }, { indexed: number; pages: number }];
+  'pages.search': [{ query: string; docIds?: string[]; limit?: number }, { hits: DocPageHit[] }];
+  'topics.list': [Record<string, never>, { topics: TopicRecord[] }];
+  'topics.save': [{ id?: string; name: string; tag?: string; zoteroCollection?: string; description?: string }, { topic: TopicRecord }];
+  'topics.delete': [{ id: string }, { id: string; deleted: boolean }];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];

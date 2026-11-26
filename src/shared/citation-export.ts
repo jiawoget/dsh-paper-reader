@@ -10,7 +10,7 @@ export interface CitationMetadata {
   arxivId?: string;
   publisher?: string;
   abstract?: string;
-  kind?: 'pdf' | 'web' | 'book';
+  kind?: 'pdf' | 'web' | 'book' | 'abstract';
   zoteroType?: string;
   id?: string;
 }

@@ -161,9 +161,15 @@ export interface ServiceResults {
   'library.rename': Operations['library.rename'][1];
   'library.updateMeta': Operations['library.updateMeta'][1];
   'library.delete': Operations['library.delete'][1];
+  'library.createAbstract': Operations['library.createAbstract'][1];
   'library.progress.save': Operations['library.progress.save'][1];
   'library.triage': Operations['library.triage'][1];
   'library.search': Operations['library.search'][1];
+  'pages.index': Operations['pages.index'][1];
+  'pages.search': Operations['pages.search'][1];
+  'topics.list': Operations['topics.list'][1];
+  'topics.save': Operations['topics.save'][1];
+  'topics.delete': Operations['topics.delete'][1];
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];

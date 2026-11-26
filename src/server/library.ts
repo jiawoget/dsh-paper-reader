@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { DEFAULT_TARGET_LANGUAGE, findTargetLanguagePreset, parseTargetLanguage, targetsSimplifiedChinese } from '../shared/languages.js';
 import { bookSlug, openStaxLocation, openStaxUrl, type OpenStaxLocation } from '../shared/openstax.js';
-import type { DocMetadata, DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
+import type { DocMetadata, DocPageRecord, DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
 import { articleUrl, type WebArticle } from '../shared/web-article.js';
 import { hasDecoderRepetition, translationQualityError } from '../shared/translation-quality.js';
+import { attachPdfToRecord, createAbstractRecord } from './abstract-library.js';
 import { readArticleLayout } from './article-layout.js';
 import { applyMetaPatch, missingDocMeta, sanitizeDocMeta } from './library-meta.js';
 import { parseOpenStaxPage, publishedEntry, type ReadBookResource } from './openstax.js';
@@ -35,7 +36,7 @@ export function isRecord(value: unknown): value is Record<string,unknown> {
 }
 export function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 function isFsError(error: unknown, code: string): boolean { return isRecord(error) && error.code === code; }
-const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book)-[a-f0-9]{64}$/.test(id));
+const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
 
 async function writeAtomic(file: string, content: Buffer | string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
@@ -78,7 +79,7 @@ export class Library {
     if (id === sample.id) return sample;
     try {
       const value: unknown = JSON.parse(await readFile(path.join(this.directory, id + '.json'), 'utf8'));
-      if (!isRecord(value) || value.id !== id || typeof value.title !== 'string' || !['pdf','web'].includes(String(value.kind))) fail('The document index is damaged.', 500);
+      if (!isRecord(value) || value.id !== id || typeof value.title !== 'string' || !['pdf','web','abstract'].includes(String(value.kind))) fail('The document index is damaged.', 500);
       if (id.startsWith('book-')) {
         if (value.kind !== 'web' || !isRecord(value.book) || !bookSlug(value.book.slug) || !Array.isArray(value.book.sections) || !value.book.sections.length ||
           !value.book.sections.every((section: unknown) => isRecord(section) && bookSlug(section.slug) && typeof section.title === 'string' &&
@@ -103,7 +104,7 @@ export class Library {
   }
   async list(): Promise<DocumentInfo[]> {
     await mkdir(this.directory, { recursive: true });
-    const names = (await readdir(this.directory)).filter(file => /^(pdf|web|book)-[a-f0-9]{64}\.json$/.test(file));
+    const names = (await readdir(this.directory)).filter(file => /^(pdf|web|book|abs)-[a-f0-9]{64}\.json$/.test(file));
     const docs = await Promise.all(names.map(name => this.get(name.slice(0,-5))));
     return [sample, ...docs.sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
   }
@@ -272,9 +273,18 @@ export class Library {
     }
     return doc;
   }
+  async createAbstract(input: unknown): Promise<DocumentInfo> {
+    const doc = await createAbstractRecord(this.directory, input);
+    return this.get(doc.id);
+  }
+  async attachPdf(id: unknown, bytes: Buffer): Promise<{ doc: DocumentInfo; pages: DocPageRecord[] }> {
+    const doc = await this.get(id);
+    const result = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT);
+    return { doc: await this.get(doc.id), pages: result.pages };
+  }
   async bytes(id: unknown): Promise<Buffer> {
     const doc = await this.get(id);
-    if (doc.kind !== 'pdf') fail('This document is a web article.');
+    if (doc.kind !== 'pdf') fail('This document has no saved PDF.');
     return readFile(this.pdfFile(doc));
   }
   async articleImage(id: unknown, anchor: unknown, download: (url: string) => Promise<ArticleImage>, page?: number): Promise<ArticleImage> {
