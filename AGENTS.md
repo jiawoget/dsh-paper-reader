@@ -42,6 +42,7 @@ Every feature, fix, or cleanup task must follow these steps in order. Do not pus
 - **Replace and delete in the same PR:** Delete obsolete implementations and legacy CSS rules instead of leaving compatibility shims, feature flags, commented-out code, or another CSS override layer.
 - **Preserve behavior & assertions:** Preserve existing user-visible behavior and passing tests unless the task explicitly changes behavior. Never weaken or delete test assertions merely to make a failing test pass.
 - **Do not bypass quality gates:** Never introduce `any`, `as unknown as`, `eslint-disable`, `@ts-ignore`, skipped tests, or `TODO` placeholders.
+- **No comments in new/modified code:** Write self-documenting code with zero added comments in newly written or modified lines (leave untouched pre-existing comments as-is).
 - **Bilingual & theme parity:** Any user-facing UI change must stay consistent across EN/ZH locales, Light/Dark themes, and `prefers-reduced-motion`.
 
 ### 3. Local Verification & Mandatory Dual-Agent PR Review Gate
@@ -56,12 +57,13 @@ Run locally and verify every check passes:
 npm run typecheck
 npm run build
 git diff --exit-code dist/
+npm run check -- --diff origin/main --strict-diff
 npm test
 ```
 
 Also run:
-- `npm run check` (required once the hygiene gate script is added)
-- Targeted E2E suites covering the changed domain (and full `npm run test:e2e` for cross-cutting or release PRs)
+- `npm run check:ux-smoke` on every PR that touches `public/` or UI code (fast deterministic desktop `1024–1440px` + mobile `390×844` Light/Dark geometry, touch-target, tab-jitter, and fold check — catches CSS/geometry defects before reviewers spin up)
+- Targeted E2E suites in parallel via `npm run test:e2e -- test:<suite1> test:<suite2>` (or full 4-way parallel `npm run test:e2e` for cross-cutting or release PRs)
 
 If an E2E suite cannot run due to a genuine environment blocker, stop and report the exact blocker rather than silently skipping it.
 
@@ -120,6 +122,17 @@ If an E2E suite cannot run due to a genuine environment blocker, stop and report
 
 Resolve every blocking finding from **both** review agents, rebuild `dist/`, re-run affected verification, and re-verify before merging.
 
+### 3d. Velocity & Execution Efficiency Rules (Mandatory for All Future Runs)
+
+Enforce these 6 rules to keep delivery 3×–4× faster without relaxing any UX or code quality gate:
+
+- **V1 — Pre-Flight Deterministic UX Smoke:** Run `npm run check:ux-smoke` before invoking `UX Reviewer` on any UI/CSS PR to eliminate deterministic geometry/touch-target/overflow ping-pong on Iter 1.
+- **V2 — Delta-Scoped Re-Verification & Micro-Fix Fast Path:** On Iter 2+, **only re-run the rejecting reviewer(s)** (and any newly impacted domain); already-`APPROVE`d reviewers carry forward automatically. For `<= 15`-line surgical CSS/focus/ARIA/label micro-fixes, run a fast `< 4m` targeted delta probe + 1–2 directly affected E2E suites + `npm run check -- --diff origin/main --strict-diff` instead of a full multi-agent/full-E2E re-run.
+- **V3 — 4-Way Parallel E2E & Zero Same-SHA Duplication:** Always execute multi-suite E2E via `npm run test:e2e` (default `concurrency=4`, isolated `--port 0`). When the author already ran and logged passing E2E on the exact same commit SHA (`git rev-parse HEAD`), `Code Quality Reviewer` does **not** serially re-run the identical full E2E batch — verify SHA parity, `npm run check -- --diff origin/main --strict-diff`, `git diff --exit-code dist/`, and run only targeted adversarial/new checks.
+- **V4 — Strict 2-Reviewer Consolidation (No Redundant 4-Agent Fan-Out):** Keep exactly two independent review agents per PR — **UX Reviewer** (reusing `tests/e2e/helpers/` probes rather than rewriting 300-line scripts from scratch) and **Code Quality Reviewer** (absorbing logic/security/race adversarial checks). Do **not** spawn a redundant standalone Forensic Auditor when `npm run check -- --diff origin/main --strict-diff` + `git diff --exit-code dist/` already enforce mechanical integrity and zero-comment diff checks.
+- **V5 — Flat Orchestration (`<= 2` Layers) & Inline PR Delivery:** Avoid deep nested sub-orchestrator chains (`<= 2` layers max) and redundant per-PR cold-start explorers when codebase context is already mapped. Never spawn a separate Delivery Subagent just for `git push`, `gh pr create`, and `gh pr merge --squash` — execute delivery inline once gates pass.
+- **V6 — Optional Worktree Pipelining:** Non-conflicting PRs may prepare in an isolated git worktree while the prior PR is in review/merge, then rebase cleanly onto synced `main`.
+
 ### 4. Open a Pull Request
 
 - Commit clean, focused changes on the feature branch and push to `origin`.
@@ -158,9 +171,8 @@ git pull --ff-only
 
 - [ ] Dedicated branch created from latest `main`
 - [ ] Clean implementation: reused existing helpers, deleted obsolete code/CSS, zero unapproved deps, zero `3080` interference
-- [ ] Local verification passed (`npm run typecheck`, `npm run build`, `git diff --exit-code dist/`, `npm test`, `npm run check` when present, relevant E2E suites)
+- [ ] Local verification passed (`npm run typecheck`, `npm run build`, `git diff --exit-code dist/`, `npm run check -- --diff origin/main --strict-diff`, `npm test`, `npm run check:ux-smoke` on UI PRs, parallel E2E via `npm run test:e2e`)
 - [ ] **UX Reviewer** (`APPROVE`): `impeccable` per-interaction scores + exploratory headless browser testing across desktop/mobile, EN/ZH, Light/Dark, and dynamic states
-- [ ] **Code Quality Reviewer** (`APPROVE`): 6-item Anti-Bloat Scorecard, zero copy-paste/AI slop/dead code, ratchet & diff budgets respected
-- [ ] PR opened against `main` with full verification, both review summaries, scope, and unverified items
-- [ ] Any active CI / automated PR review completed with findings resolved
-- [ ] PR squash-merged into `main` (`--squash --delete-branch`) and local `main` synced
+- [ ] **Code Quality Reviewer** (`APPROVE`): 6-item Anti-Bloat Scorecard, zero copy-paste/AI slop/dead code/added comments, ratchet & diff budgets respected, adversarial logic/security checks passed
+- [ ] Iter 2+ followed delta-scoped re-verification (no re-running already-`APPROVE`d reviewers or identical same-SHA E2E batches)
+- [ ] PR opened and squash-merged inline into `main` (`--squash --delete-branch`) and local `main` synced

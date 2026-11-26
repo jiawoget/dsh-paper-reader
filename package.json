@@ -37,10 +37,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "check": "tsx scripts/check-hygiene.ts",
+    "check:ux-smoke": "tsx scripts/ux-smoke.ts",
     "install:translation-model": "tsx scripts/install-translation-model.ts",
     "build": "npm run typecheck && tsx scripts/build.ts",
     "dev": "tsx scripts/build.ts --watch",
-    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test": "tsx --test --test-concurrency=4 tests/*.test.ts",
     "test:browser": "tsx tests/browser.ts && npm run test:pdf-translation && npm run test:pdf-recovery",
     "test:pdf-translation": "tsx tests/e2e/pdf-translation.ts",
     "test:pdf-recovery": "tsx tests/e2e/pdf-translation-recovery.ts",
@@ -78,7 +79,7 @@
     "test:collections-delete-hygiene": "tsx tests/e2e/collections-delete-hygiene.ts",
     "test:tier3-cross-feature": "tsx tests/e2e/tier3-cross-feature.ts",
     "test:tier4-real-world": "tsx tests/e2e/tier4-real-world.ts",
-    "test:e2e": "npm run test:extension && npm run test:extension-journeys && npm run test:browser && npm run test:integrations && npm run test:reader-selection && npm run test:passage-links && npm run test:reading-layout && npm run test:reading-modes && npm run test:annotations && npm run test:selection-note-draft && npm run test:selection-note-discussion && npm run test:discussion-excerpt && npm run test:notebook-scenarios && npm run test:region-discussion && npm run test:article-capture && npm run test:discussion-continuity && npm run test:discussion-recovery && npm run test:reading-a-question && npm run test:reader-journey-edges && npm run test:paper-chat && npm run test:zotero-desktop && npm run test:web-zotero && npm run test:book-reading && npm run test:sidebar-contents && npm run test:target-language && npm run test:citation-export && npm run test:dark-theme-a11y && npm run test:shortcuts-i18n && npm run test:collections-delete-hygiene && npm run test:tier3-cross-feature && npm run test:tier4-real-world",
+    "test:e2e": "tsx scripts/run-e2e.ts",
     "start": "dsh web --patch ./paper-reader.patch.yml --host 127.0.0.1 --port 29812"
   },
   "dependencies": {
