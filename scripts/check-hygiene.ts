@@ -260,6 +260,19 @@ function checkRepeatedI18n(root: string, srcFiles: string[], failures: string[])
   }
 }
 
+function checkAddedComments(root: string, ref: string, failures: string[]): void {
+  const diff = execFileSync('git', ['diff', '-U0', ref, '--', 'src', 'tests', 'scripts'], { cwd: root, encoding: 'utf8' });
+  let currentFile = '';
+  const hits: string[] = [];
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith('+++ b/')) { currentFile = line.slice(6); continue; }
+    if (!line.startsWith('+') || line.startsWith('+++')) continue;
+    const body = line.slice(1);
+    if (/^\s*(?:\/\/|\/\*|\*(?:\s|$))/.test(body)) hits.push(`${currentFile}: ${body.trim().slice(0, 60)}`);
+  }
+  if (hits.length > 0) failures.push(`comments: ${hits.length} newly added comment lines (${hits.slice(0, 5).join('; ')})`);
+}
+
 function runDiffReport(root: string, ref: string, strict: boolean, failures: string[]): void {
   const out = execFileSync('git', ['diff', '--numstat', ref, '--', '.', ':!dist', ':!package-lock.json'], { cwd: root, encoding: 'utf8' });
   let prodAdd = 0, prodDel = 0, testAdd = 0, testDel = 0;
@@ -275,6 +288,7 @@ function runDiffReport(root: string, ref: string, strict: boolean, failures: str
   console.log(`Diff vs ${ref} (excl. dist/lock): +${totalAdd} / -${totalDel} (net ${net >= 0 ? '+' : ''}${net})`);
   console.log(`Prod: +${prodAdd}/-${prodDel} | Test: +${testAdd}/-${testDel} | Test:Prod added ratio: ${ratio}:1`);
   if (strict && prodAdd > 0 && testAdd / prodAdd > 2.5) failures.push(`diff-budget: test-to-prod added ratio ${ratio}:1 exceeds 2.5:1`);
+  if (strict) checkAddedComments(root, ref, failures);
 }
 
 function main(): void {
