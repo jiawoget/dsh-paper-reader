@@ -188,6 +188,8 @@ export interface ServiceResults {
   'graph.savePaper': Operations['graph.savePaper'][1];
   'trends.query': Operations['trends.query'][1];
   'trends.papers': Operations['trends.papers'][1];
+  'library.cards': Operations['library.cards'][1];
+  'library.chat': Operations['library.chat'][1];
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];

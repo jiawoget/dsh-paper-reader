@@ -3,6 +3,7 @@ import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/cit
 import type { ResourceReader } from './academic-intake.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, saveGraphPaper, type GraphContext } from './academic-graph.js';
 import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
+import { ensurePaperCards, runLibraryChat } from './library-chat.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
 import { publicResource } from './public-resource.js';
@@ -173,6 +174,8 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     },
     'trends.query': async (input, options) => queryFieldTrends(readTrendQueryInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
     'trends.papers': async (input, options) => queryTrendPapers(readTrendPapersInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
+    'library.cards': (input, options) => ensurePaperCards(input, { store: database, library: documents, model, indexDoc }, options),
+    'library.chat': (input, options) => runLibraryChat(input, { store: database, library: documents, model, indexDoc }, options),
     'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),

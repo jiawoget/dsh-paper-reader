@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
+import type { PaperCard } from '../shared/research-types.js';
 import type { DocPageRecord, TopicRecord } from '../shared/types.js';
-import { single, stringValue, type Input } from './service-types.js';
+import { isObject, single, stringValue, type Input } from './service-types.js';
 
 type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
 
 export function hasResearchSchema(db: DatabaseSync): boolean {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache')").get();
-  return Number(row?.n ?? 0) === 4;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards')").get();
+  return Number(row?.n ?? 0) === 5;
 }
 
 export function ensureResearchSchema(db: DatabaseSync): void {
@@ -16,11 +17,13 @@ export function ensureResearchSchema(db: DatabaseSync): void {
   db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS doc_pages_fts USING fts5(docId UNINDEXED, page UNINDEXED, text, tokenize='unicode61 remove_diacritics 2')");
   db.exec("CREATE TABLE IF NOT EXISTS topics(id TEXT PRIMARY KEY, name TEXT NOT NULL, tag TEXT NOT NULL, zoteroCollection TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL) STRICT");
   db.exec('CREATE TABLE IF NOT EXISTS graph_cache(cacheKey TEXT PRIMARY KEY, source TEXT NOT NULL, payload TEXT NOT NULL, fetchedAt INTEGER NOT NULL, ttlMs INTEGER NOT NULL) STRICT');
+  db.exec('CREATE TABLE IF NOT EXISTS paper_cards(doc_id TEXT PRIMARY KEY, card_json TEXT NOT NULL, source_hash TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT');
 }
 
 export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
   db.prepare('DELETE FROM doc_pages WHERE docId=?').run(docId);
   db.prepare('DELETE FROM doc_pages_fts WHERE docId=?').run(docId);
+  db.prepare('DELETE FROM paper_cards WHERE doc_id=?').run(docId);
 }
 
 export function segmentFtsText(text: string): string {
@@ -154,4 +157,43 @@ export function setGraphCache(db: DatabaseSync, key: string, source: string, val
   if (Number(db.prepare('SELECT COUNT(*) AS n FROM graph_cache').get()?.n ?? 0) > 1200) {
     db.prepare('DELETE FROM graph_cache WHERE cacheKey NOT IN (SELECT cacheKey FROM graph_cache ORDER BY fetchedAt DESC LIMIT 1000)').run();
   }
+}
+
+function decodePaperCard(row: Row): PaperCard | undefined {
+  if (typeof row.card_json !== 'string') return undefined;
+  try {
+    const p: unknown = JSON.parse(row.card_json);
+    if (!isObject(p)) return undefined;
+    return {
+      docId: String(row.doc_id ?? ''), sourceKind: p.sourceKind === 'abstract' ? 'abstract' : 'pdf',
+      problem: String(p.problem ?? ''), method: String(p.method ?? ''), findings: String(p.findings ?? ''),
+      limitations: String(p.limitations ?? ''), futureWork: String(p.futureWork ?? ''),
+      sourceHash: String(row.source_hash ?? ''), updatedAt: Number(row.updated_at ?? 0)
+    };
+  } catch { return undefined; }
+}
+
+export function getPaperCard(db: DatabaseSync, docId: string): PaperCard | undefined {
+  const row = db.prepare('SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards WHERE doc_id=?').get(docId);
+  return row ? decodePaperCard(row) : undefined;
+}
+
+export function setPaperCard(db: DatabaseSync, card: PaperCard): PaperCard {
+  const docId = single(card.docId, 'document ID', 512, true), updatedAt = card.updatedAt || Date.now();
+  const payload = JSON.stringify({
+    sourceKind: card.sourceKind, problem: card.problem, method: card.method,
+    findings: card.findings, limitations: card.limitations, futureWork: card.futureWork
+  });
+  db.prepare(`INSERT INTO paper_cards(doc_id, card_json, source_hash, updated_at) VALUES(?,?,?,?)
+    ON CONFLICT(doc_id) DO UPDATE SET card_json=excluded.card_json, source_hash=excluded.source_hash, updated_at=excluded.updated_at`)
+    .run(docId, payload, card.sourceHash, updatedAt);
+  return { ...card, docId, updatedAt };
+}
+
+export function listPaperCards(db: DatabaseSync, docIds?: readonly string[]): PaperCard[] {
+  if (docIds && !docIds.length) return [];
+  const rows = docIds?.length
+    ? db.prepare(`SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards WHERE doc_id IN (${docIds.map(() => '?').join(',')}) ORDER BY updated_at DESC`).all(...docIds)
+    : db.prepare('SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards ORDER BY updated_at DESC').all();
+  return rows.map(decodePaperCard).filter((c): c is PaperCard => Boolean(c));
 }
