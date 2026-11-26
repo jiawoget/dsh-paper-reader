@@ -174,7 +174,7 @@ export interface Operations {
   'vocab.delete': [{ id: string }, unknown];
   'history.add': [SourceRecord & { text: string; meaning: string; context?: string }, unknown];
   'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'>> & { apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean }, { settings: Settings }];
-  'obsidian.export': [NotebookRequest, { path: string }];
+  'obsidian.export': [NotebookRequest, { path: string; notes?: number; words?: number; annotations?: number }];
   'zotero.collections': [{library?: string}, { collections: Collection[]; library: string }];
   'zotero.browse': [{query?: string; collection?: string; start?: number; library?: string},
     { items: ZoteroItem[]; nextStart: number | null; library: string; mode: 'web'|'desktop' }];

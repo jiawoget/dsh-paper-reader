@@ -57,6 +57,13 @@ test('paper-scoped highlights and margin pins survive reopening without touching
   assert.equal(await readFile(initial.path, 'utf8'), initialFile);
   assert.deepEqual((await reopen('state')).notes, []);
   assert.equal((await reopen('notebook.get', paper)).revision, initial.revision);
+  const exported = await reopen('obsidian.export', paper);
+  assert.equal(exported.annotations, 1);
+  const pack = await readFile(exported.path, 'utf8');
+  assert.ok(pack.includes('## Highlights & Page Notes') && pack.includes('blocks'));
+  assert.doesNotMatch(pack, /Where is block 7\?/);
+  assert.equal(await readFile(initial.path, 'utf8'), initialFile);
+  assert.equal((await reopen('notebook.get', paper)).revision, initial.revision);
 });
 
 test('retries return the committed annotation while stale edits and deletes preserve the newer version', async t => {

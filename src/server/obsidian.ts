@@ -4,8 +4,11 @@ import {
   renameSync, statSync, unlinkSync, writeFileSync
 } from 'node:fs';
 import path from 'node:path';
+import type { PaperAnnotation } from '../shared/annotations.js';
 import { chapterPassageLabel, escapedComments, markdownHeading as heading } from '../shared/notebook-structure.js';
+import { formatHighlightsSection, formatYamlFrontmatter, isLiveAnnotation } from '../shared/reading-pack.js';
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator } from '../shared/source-link.js';
+import type { DocumentInfo, SourceRecord } from '../shared/types.js';
 import { ReaderStore, type NotebookChapter } from './reader-store.js';
 import { address, isObject, ServiceError, single, stringValue, type Entries, type Entry, type Input } from './service-types.js';
 import { vaultMarkdown } from './vault-markdown.js';
@@ -50,7 +53,7 @@ export function source(base: string, docId: string, page: number, anchor: string
   if (quote.trim()) url.searchParams.set('quote', quoteLocator(quote));
   return url.href;
 }
-export function sourceText(entry: Entry, fallback: string, quote = '', section?: string): string {
+export function sourceText(entry: Pick<SourceRecord, 'docId' | 'page' | 'anchor' | 'label' | 'sourceUrl'>, fallback: string, quote = '', section?: string): string {
   const saved = entry.sourceUrl ? new URL(entry.sourceUrl) : undefined;
   const link = new URL(source(fallback || entry.sourceUrl, entry.docId, entry.page, entry.anchor, quote || saved?.searchParams.get('quote') || ''));
   if (saved) {
@@ -69,7 +72,7 @@ function vocabulary(base: string, words: Entry[], chapter?: NotebookChapter): st
   }
   return rows;
 }
-function markdown(title: string, docId: string, base: string, entries: Entries): string {
+function markdown(title: string, docId: string, base: string, entries: Entries, highlights = ''): string {
   const rows = ['# ' + heading(title), '', '[Open in Paper Reader](<' + source(base, docId, 1, '') + '>)'];
   if (entries.notes.length) rows.push('', '## Notes');
   for (const note of entries.notes) {
@@ -77,6 +80,7 @@ function markdown(title: string, docId: string, base: string, entries: Entries):
     if (note.quote) rows.push(...escapedComments(note.quote).split(/\r?\n/).map(line => '> ' + line), '');
     rows.push(escapedComments(note.text));
   }
+  if (highlights) rows.push('', highlights);
   if (entries.vocabulary.length) rows.push('', ...vocabulary(base, entries.vocabulary));
   return rows.join('\n');
 }
@@ -104,6 +108,18 @@ export function exportChapterVocabulary(previous: string, key: string, base: str
   const id = key + '/vocabulary';
   if (!words.length && !previous.includes('<!-- Paper Reader ' + hash(id).slice(0, 20))) return previous;
   return mergeMarkdown(previous, vocabulary(base, words, chapter).join('\n'), id);
+}
+const markLink = (ann: PaperAnnotation, base: string, section?: string) => sourceText(
+  ann.kind === 'pin' && (ann.label.trim() === 'Page note' || ann.label.trim() === '页边笔记') ? { ...ann, label: '' } : ann, base, ann.quote, section
+);
+export function exportChapterMarks(previous: string, key: string, base: string, annotations: PaperAnnotation[], chapter?: NotebookChapter): string {
+  const id = key + '/annotations', live = annotations.filter(isLiveAnnotation);
+  if (!live.length && !previous.includes('<!-- Paper Reader ' + hash(id).slice(0, 20))) return previous;
+  const content = formatHighlightsSection(live, {
+    sectionTitle: page => chapter?.sections.get(page)?.title,
+    formatLink: ann => markLink(ann, base, chapter?.sections.get(ann.page)?.title)
+  });
+  return mergeMarkdown(previous, content, id);
 }
 export function fileContent(file: string): string | undefined {
   try {
@@ -137,12 +153,12 @@ export function writeMarkdown(file: string, observed: string | undefined, next: 
     try { unlinkSync(temp); } catch (error) { if (!isObject(error) || error.code !== 'ENOENT') throw error; }
   }
 }
-export function exportNotebook(store: ReaderStore, input: Input, sources: VaultSources, notebook?: string): { path: string; notes: number; words: number } {
+export function exportNotebook(store: ReaderStore, input: Input, sources: VaultSources, notebook?: string): { path: string; notes: number; words: number; annotations: number } {
   const docId = single(input.docId, 'document ID', 512, true);
   const title = stringValue(input.title, 'paper title', 2048, true);
   const supplied = address(input.sourceUrl);
-  return store.notebook(docId, ({ settings, entries, filename, zotero }) => {
-    const candidates = [supplied, ...entries.notes.map(row => row.sourceUrl), ...entries.vocabulary.map(row => row.sourceUrl)];
+  return store.notebook(docId, ({ settings, entries, annotations, filename, zotero }) => {
+    const candidates = [supplied, ...entries.notes.map(row => row.sourceUrl), ...entries.vocabulary.map(row => row.sourceUrl), ...annotations.map(row => row.sourceUrl)];
     sources.useSavedSources([zotero?.original ?? '', ...candidates]);
     const base = candidates.find(url => url && /^\/api\/paper-reader\/app\/(?:index\.html)?$/.test(new URL(url).pathname))
       ?? (supplied || 'http://localhost/');
@@ -152,15 +168,21 @@ export function exportNotebook(store: ReaderStore, input: Input, sources: VaultS
       if (name !== path.basename(name) || !name.endsWith('.md')) throw new ServiceError(500, 'The stored note filename is invalid.');
       const file = path.join(folder, name);
       const observed = fileContent(file);
-      const content = notebook === undefined ? markdown(title, docId, base, entries) :
-        notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, '').trimEnd() +
-          (entries.vocabulary.length ? '\n\n' + vocabulary(base, entries.vocabulary).join('\n') : '');
+      const doc: DocumentInfo = sources.doc ?? { id: docId, kind: 'pdf', title, ...(supplied ? { url: supplied } : {}) };
+      const liveMarks = annotations.filter(isLiveAnnotation);
+      const highlights = formatHighlightsSection(liveMarks, {
+        formatLink: ann => markLink(ann, base),
+        isWeb: doc.kind === 'web' && !doc.book
+      });
+      const content = notebook === undefined ? markdown(title, docId, base, entries, highlights) :
+        [notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, '')
+          .replace(/<!--(\s*Paper Reader\b[^\n]*?)-->/gi, '&lt;!--$1--&gt;').replace(/<!--(?=\s*Paper Reader\b)/gi, '&lt;!--').trimEnd(),
+          highlights, entries.vocabulary.length ? vocabulary(base, entries.vocabulary).join('\n') : ''].filter(Boolean).join('\n\n');
       const render = (label: string, url: URL) => portableCitation(label, sources.targets(url, settings.vaultPath, folder, zotero?.link));
       const generated = vaultMarkdown(content, docId, render, false);
-      // Older exports can include a manually edited managed block. Its edits
-      // survive merging, and its existing reader citations become portable too.
-      writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(observed ?? '', generated, docId), docId, render, false));
-      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length };
+      const seed = observed?.trim() ? observed : formatYamlFrontmatter(doc, zotero);
+      writeMarkdown(file, observed, vaultMarkdown(mergeMarkdown(seed, generated, docId), docId, render, false));
+      return { path: file, notes: entries.notes.length, words: entries.vocabulary.length, annotations: liveMarks.length };
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(503, 'Cannot write to the configured Obsidian vault. Check its path and write permissions.');

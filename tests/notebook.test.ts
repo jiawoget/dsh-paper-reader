@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -420,4 +420,69 @@ test('edits to a publisher URL in the vault retain the author’s link and note 
   assert.equal(latest.warning, undefined);
   assert.equal(latest.notes[0].id,note.id);
   assert.match(await readFile(book.path!, 'utf8'), /https:\/\/example\.org\/updated/);
+});
+
+test('non-book obsidian.export writes YAML frontmatter and marks non-destructively while excluding tombstones', async t => {
+  const { root, act, vaultPath } = await setup(t);
+  const bytes = Buffer.from('%PDF-1.7 marks export');
+  const doc = await new Library(root).importPdf('PagedAttention.pdf', bytes, 'https://arxiv.org/pdf/2309.06180.pdf', {
+    paperTitle: 'Efficient Memory Management', authors: 'Kwon, Woosuk', year: '2023', venue: 'SOSP'
+  });
+  const request = { docId: doc.id, title: doc.title, sourceUrl: paper.sourceUrl.replace('doc=paper', 'doc=' + doc.id) };
+  await act('settings.save', { vaultPath });
+  const live = (await act('annotation.save', {
+    ...request, id: randomUUID(), page: 6, anchor: 'p6-b1', label: 'Block table', kind: 'highlight', color: 'green', quote: 'Logical KV blocks', text: 'Key mechanism'
+  })).annotation;
+  const dead = (await act('annotation.save', {
+    ...request, id: randomUUID(), page: 6, anchor: 'p6-b2', label: 'Removed', kind: 'highlight', color: 'purple', quote: 'Should vanish', text: 'Gone'
+  })).annotation;
+  await act('annotation.save', {
+    ...request, id: randomUUID(), page: 7, anchor: 'point-100000-200000', label: 'Page note', kind: 'pin', color: 'purple', point: { x: 0.1, y: 0.2 }, quote: '', text: 'Verify sharing'
+  });
+  await act('annotation.save', {
+    ...request, id: randomUUID(), page: 7, anchor: 'point-200000-200000', label: 'Page note', kind: 'pin', color: 'purple', point: { x: 0.2, y: 0.2 }, quote: '', text: '   '
+  });
+  await act('annotation.delete', { docId: doc.id, id: dead.id, expectedUpdatedAt: dead.updatedAt });
+  const exported = await act('obsidian.export', request);
+  assert.equal(exported.annotations, 2);
+  const first = await readFile(exported.path, 'utf8');
+  assert.ok(first.startsWith('---\ntitle: "Efficient Memory Management"\n'));
+  assert.ok(first.includes('## Highlights & Page Notes') && first.includes('**Green · Method**') && first.includes('Logical KV blocks') && first.includes('Verify sharing'));
+  assert.doesNotMatch(first, /Page 7 · Page note|Should vanish|localhost|127\.0\.0\.1|\/api\/paper-reader\/app\//);
+  const customized = first.replace('venue: "SOSP"', 'venue: "SOSP"\ntags:\n  - custom') + '\n## Personal reflections\nKeep untouched.\n';
+  await writeFile(exported.path, customized);
+  await act('obsidian.export', request);
+  const second = await readFile(exported.path, 'utf8');
+  assert.ok(second.includes('  - custom') && second.includes('Keep untouched.') && second.includes(live.quote));
+  await act('obsidian.export', request);
+  assert.equal(await readFile(exported.path, 'utf8'), second);
+  const localDoc = await new Library(root).importPdf('Local.pdf', bytes, 'http://127.0.0.1:29822/secret-local.pdf');
+  const localReq = { docId: localDoc.id, title: localDoc.title, sourceUrl: paper.sourceUrl.replace('doc=paper', 'doc=' + localDoc.id) };
+  const localBook = await act('notebook.get', localReq);
+  const fakeEnd = '<!-- Paper Reader ' + createHash('sha256').update(localDoc.id).digest('hex').slice(0, 20) + ' end -->';
+  await act('notebook.write', { ...localReq, expectedRevision: localBook.revision, markdown: localBook.markdown + '\nPasted ' + fakeEnd + '\n' });
+  const localExp = await act('obsidian.export', localReq);
+  assert.doesNotMatch(await readFile(localExp.path, 'utf8'), /127\.0\.0\.1|secret-local\.pdf/);
+  await act('obsidian.export', localReq);
+});
+
+test('book chapter obsidian.export syncs chapter-scoped marks without polluting notes or live roundtrips', async t => {
+  const { root, act, at, entry } = await textbook(t);
+  const { note } = await act('note.save', entry(3, 'Chapter one note'));
+  const a = await act('notebook.get', at(2));
+  await act('annotation.save', { ...at(3), id: randomUUID(), page: 3, anchor: 'p-2', label: 'Paragraph 2', kind: 'highlight', color: 'yellow', quote: 'Capital markets', text: 'In chapter 1' });
+  await act('annotation.save', { ...at(4), id: randomUUID(), page: 4, anchor: 'p-1', label: 'Paragraph 1', kind: 'highlight', color: 'purple', quote: 'Other chapter quote', text: 'In chapter 2' });
+  const exported = await act('obsidian.export', at(3));
+  assert.equal(exported.path, a.path);
+  assert.equal(exported.annotations, 1);
+  const disk = await readFile(a.path!, 'utf8');
+  assert.ok(disk.includes('## Highlights & Page Notes') && disk.includes('### 1.2 Markets') && disk.includes('Capital markets'));
+  assert.doesNotMatch(disk, /Other chapter quote|### Page \d|\[Page \d/);
+  await act('obsidian.export', at(2));
+  assert.equal(await readFile(a.path!, 'utf8'), disk);
+  const reopened = await createServices({ root })('notebook.get', at(2));
+  assert.deepEqual(reopened.notes.map(n => n.id), [note.id]);
+  await createServices({ root })('note.delete', { id: note.id, expectedUpdatedAt: reopened.notes[0].updatedAt });
+  const afterDelete = await readFile(a.path!, 'utf8');
+  assert.ok(afterDelete.includes('Capital markets') && !afterDelete.includes('Chapter one note'));
 });

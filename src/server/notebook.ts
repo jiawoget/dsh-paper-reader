@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
+import { isLiveAnnotation } from '../shared/reading-pack.js';
 import type { DocumentInfo, NotebookSnapshot } from '../shared/types.js';
 import type { Library } from './library.js';
 import type { ObsidianLauncher } from './obsidian-desktop.js';
 import { blocks, contentFor, initialMarkdown, putNote, reconcileNotes, withoutNote } from './notebook-markdown.js';
-import { exportChapterVocabulary, exportNotebook, fileContent, filenameFor, filenameStem, vaultFolder, writeMarkdown } from './obsidian.js';
+import { exportChapterMarks, exportChapterVocabulary, exportNotebook, fileContent, filenameFor, filenameStem, vaultFolder, writeMarkdown } from './obsidian.js';
 import { notebookKey, ReaderStore, type NotebookChapter, type NotebookRecords, type StoredNotebook } from './reader-store.js';
 import { address, pageNumber, ServiceError, single, stringValue, type Entry, type Input } from './service-types.js';
 import { readerMarkdown, vaultMarkdown } from './vault-markdown.js';
@@ -212,7 +213,7 @@ export class PaperNotebooks {
     return {uri};
   }
 
-  async export(input: Input): Promise<{path: string; notes: number; words: number}> {
+  async export(input: Input): Promise<{path: string; notes: number; words: number; annotations: number}> {
     const sources = await this.sources(input.docId, input.sourceUrl);
     if (!sources.doc?.book) {
       const docId = single(input.docId, 'document ID', 512, true);
@@ -230,9 +231,10 @@ export class PaperNotebooks {
       if (!book.file) throw new ServiceError(503, 'Set your Obsidian vault directory in Settings.');
       const { chapter, docId, sourceUrl } = book.local;
       const words = records.entries('word', docId, chapter);
-      book.markdown = exportChapterVocabulary(book.markdown, notebookKey(docId, chapter), sourceUrl, words, chapter);
+      const marks = records.annotations(docId, chapter).filter(isLiveAnnotation);
+      book.markdown = exportChapterMarks(exportChapterVocabulary(book.markdown, notebookKey(docId, chapter), sourceUrl, words, chapter), notebookKey(docId, chapter), sourceUrl, marks, chapter);
       persist(records, book);
-      return { path: book.file, notes: records.entries('note', docId, chapter).length, words: words.length };
+      return { path: book.file, notes: records.entries('note', docId, chapter).length, words: words.length, annotations: marks.length };
     });
   }
 

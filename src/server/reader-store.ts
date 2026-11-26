@@ -6,6 +6,7 @@ import { annotationSchema, listAnnotations, saveAnnotation, deleteAnnotation } f
 import { readArticleLocation, readArticleRegion } from '../shared/article-region.js';
 import { bookPlace, type BookPlace } from '../shared/book-place.js';
 import type { PdfOutlineEntry } from '../shared/pdf-outline.js';
+import type { PaperAnnotation } from '../shared/annotations.js';
 import type { ChatExchange } from '../shared/types.js';
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
 import { readRegionImage } from './region-image.js';
@@ -109,7 +110,7 @@ function entryFor(kind: EntryKind, input: Input, prior?: Entry, allowEmpty = fal
 }
 
 interface ZoteroSource { link: string; original: string }
-interface NotebookInput { settings: PrivateSettings; entries: Entries; filename: string | undefined; zotero?: ZoteroSource }
+interface NotebookInput { settings: PrivateSettings; entries: Entries; annotations: PaperAnnotation[]; filename: string | undefined; zotero?: ZoteroSource }
 export interface NotebookChapter {
   id: string;
   title: string;
@@ -235,6 +236,7 @@ export class NotebookRecords {
     return this.db.prepare('SELECT * FROM entries WHERE kind=? AND docId=?' + scope + ' ORDER BY ' + order)
       .all(kind, docId, ...pages).map(decodeEntry);
   }
+  annotations(docId: string, chapter?: NotebookChapter): PaperAnnotation[] { return listAnnotations(this.db, { docId }).filter(item => !chapter || chapter.sections.has(item.page)); }
   save(input: Input, importedId?: string, allowEmpty = false): Entry { return storeEntry(this.db, 'note', input, importedId, allowEmpty); }
   remove(input: Input): { id: string; deleted: boolean } {
     const id = single(input.id, 'note ID', 128, true);
@@ -439,7 +441,7 @@ export class ReaderStore {
       if (!settings.vaultPath) throw new ServiceError(503, 'Set your Obsidian vault directory in Settings.');
       const row = db.prepare('SELECT filename FROM notebooks WHERE vault=? AND docId=?').get(settings.vaultPath, docId);
       const entries = collect(db.prepare('SELECT * FROM entries WHERE docId=? ORDER BY page,createdAt,rowid').iterate(docId));
-      const result = write({ settings, entries, filename: row && readColumn(row, 'filename'), zotero: new NotebookRecords(db).zoteroSource(docId) });
+      const result = write({ settings, entries, annotations: listAnnotations(db, { docId }), filename: row && readColumn(row, 'filename'), zotero: new NotebookRecords(db).zoteroSource(docId) });
       db.prepare('INSERT OR REPLACE INTO notebooks VALUES(?,?,?)').run(settings.vaultPath, docId, path.basename(result.path));
       return result;
     });

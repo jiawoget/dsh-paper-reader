@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -212,10 +213,34 @@ async function obsidian({host, page, pane, context}: ReaderSession): Promise<voi
   assert.ok(local.markdown.includes('## Reading journal'));
   assert.ok(local.markdown.indexOf('Track block reuse') > local.markdown.indexOf('paper-reader:end ' + ids[0]) &&
     local.markdown.indexOf('Track block reuse') < local.markdown.indexOf('paper-reader:note ' + ids[1]), 'Free prose stays between the selected notes.');
+  assert.equal(await pane.getByRole('button', { name: 'Export to Obsidian', exact: true }).isVisible(), false);
   await pane.getByRole('button', {name: 'Connect Obsidian'}).click();
   await pane.getByLabel('Obsidian vault folder').fill(vault);
   await saveConnections(pane);
   await pane.getByText('Saved to vault', {exact: true}).waitFor();
+  assert.equal(await pane.getByRole('button', { name: 'Export to Obsidian', exact: true }).isVisible(), true);
+  const liveMark = await context.request.post(endpoint, { data: { op: 'annotation.save', payload: {
+    ...source, id: randomUUID(), kind: 'highlight', color: 'green', text: 'Keep in Reading Pack'
+  } } });
+  assert.ok(liveMark.ok());
+  const deadMarkRes = await context.request.post(endpoint, { data: { op: 'annotation.save', payload: {
+    ...source, id: randomUUID(), kind: 'highlight', color: 'purple', quote: 'Removed mark quote', text: 'Should not export'
+  } } });
+  assert.ok(deadMarkRes.ok());
+  const deadMark = (await deadMarkRes.json()).annotation;
+  assert.ok((await context.request.post(endpoint, { data: { op: 'annotation.delete', payload: { docId, id: deadMark.id, expectedUpdatedAt: deadMark.updatedAt } } })).ok());
+  const exportResPromise = page.waitForResponse(res => res.url().endsWith('/api/paper-reader/action') && res.request().postDataJSON()?.op === 'obsidian.export');
+  await pane.getByRole('button', { name: 'Export to Obsidian', exact: true }).click();
+  const exportJson = await (await exportResPromise).json() as { path: string; annotations: number };
+  await pane.locator('#toast').getByText('Exported to Obsidian.', { exact: true }).waitFor();
+  assert.equal(exportJson.annotations, 1);
+  const packDisk = await readFile(exportJson.path, 'utf8');
+  assert.ok(packDisk.startsWith('---\n') && packDisk.includes('## Highlights & Page Notes') && packDisk.includes('Keep in Reading Pack'));
+  assert.doesNotMatch(packDisk, /Removed mark quote|Should not export|localhost|127\.0\.0\.1|\/api\/paper-reader\/app\//);
+  await appendFile(exportJson.path, '\n## Manual vault note\nPreserved across export.\n');
+  await pane.getByRole('button', { name: 'Export to Obsidian', exact: true }).click();
+  await pane.locator('#toast').getByText('Exported to Obsidian.', { exact: true }).waitFor();
+  assert.ok((await readFile(exportJson.path, 'utf8')).includes('Preserved across export.'));
   const connected = await notebook();
   const file = connected.path;
   assert.ok(file && path.dirname(file) === path.join(vault, 'Paper Reader'));

@@ -1,6 +1,12 @@
 import type { SourceRecord } from './types.js';
 
 export type AnnotationColor = 'yellow' | 'green' | 'purple';
+export const ANNOTATION_COLORS: readonly AnnotationColor[] = ['yellow', 'green', 'purple'];
+export const ANNOTATION_COLOR_META: Readonly<Record<AnnotationColor, { en: string; zh: string; meaningEn: string; meaningZh: string }>> = {
+  yellow: { en: 'Yellow', zh: '黄色', meaningEn: 'Key point', meaningZh: '要点' },
+  green: { en: 'Green', zh: '绿色', meaningEn: 'Method', meaningZh: '方法' },
+  purple: { en: 'Purple', zh: '紫色', meaningEn: 'Question', meaningZh: '疑问' }
+};
 export interface PaperAnnotation extends SourceRecord {
   id: string;
   kind: 'highlight' | 'pin';

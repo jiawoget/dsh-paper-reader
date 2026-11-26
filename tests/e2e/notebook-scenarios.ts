@@ -562,7 +562,7 @@ await withHost(async host => {
 
       const annotations = () => action(page, host, 'annotation.list', { docId: pdfId });
       const savedAnnotations = await annotations();
-      await page.getByRole('button', { name: 'Pin on PDF', exact: true }).tap();
+      await page.locator('#more').tap(); await page.getByRole('button', { name: 'Pin on PDF', exact: true }).tap();
       await page.getByRole('button', { name: 'Cancel placement', exact: true, pressed: true }).waitFor();
       const placement = page.locator('#original .pdf-sheet .annotation-placement');
       await placement.waitFor();

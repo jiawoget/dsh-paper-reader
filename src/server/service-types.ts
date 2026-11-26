@@ -179,7 +179,7 @@ export interface ServiceResults {
   'chat.history': { exchanges: ChatExchange[] };
   'chat.delete': Operations['chat.delete'][1];
   'ai.blocks': { translations: Record<string, string>; provider?: 'local' };
-  'obsidian.export': { path: string; notes: number; words: number };
+  'obsidian.export': { path: string; notes: number; words: number; annotations: number };
   'zotero.collections': Operations['zotero.collections'][1];
   'zotero.browse': Operations['zotero.browse'][1];
   'zotero.open': Operations['zotero.open'][1];
