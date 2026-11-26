@@ -1,6 +1,7 @@
-import type { DocPageHit, DocumentInfo } from '../shared/types.js';
+import type { DocPageHit, DocumentInfo, GraphDirection } from '../shared/types.js';
 import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
+import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, saveGraphPaper } from './academic-graph.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
 import { publicResource } from './public-resource.js';
@@ -11,7 +12,7 @@ import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
 import { deleteTopic, hasDocPages, listTopics, replaceDocPages, saveTopic, searchDocPagesFts } from './research-store.js';
 import { hostAttachments } from './region-image.js';
-import { inputObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, type Input, type ServiceResults } from './service-types.js';
+import { inputObject, isObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, type Input, type ServiceResults } from './service-types.js';
 import { openWebArticle } from './web-article.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
@@ -144,6 +145,29 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'topics.list': () => ({ topics: database.withDb(false, listTopics) }),
     'topics.save': input => ({ topic: database.withDb(true, db => saveTopic(db, input)) }),
     'topics.delete': input => database.withDb(true, db => deleteTopic(db, input.id)),
+    'graph.resolve': async (input, options) => {
+      const doc = !single(input.query, 'query', 500) && input.docId !== undefined ? await documents.get(input.docId) : undefined;
+      const query = single(input.query, 'query', 500) || (doc ? (doc.doi || doc.url || doc.paperTitle || doc.title) : '');
+      if (!query) throw new ServiceError(400, 'Enter a DOI, arXiv ID, or paper title.');
+      return resolveAcademicPaper(query, { withDb: (w, run) => database.withDb(w, run), settings: database.settings(), fetchFn: fetchImpl, docs: await documents.list(), signal: options?.signal });
+    },
+    'graph.explore': async (input, options) => {
+      if (!Array.isArray(input.seeds) || !input.seeds.length || input.seeds.length > 10) throw new ServiceError(400, 'Provide 1 to 10 seed papers.');
+      const direction = input.direction;
+      if (direction !== 'earlier' && direction !== 'later' && direction !== 'similar') throw new ServiceError(400, 'Choose earlier, later, or similar.');
+      if (input.negativeSeeds !== undefined && (!Array.isArray(input.negativeSeeds) || input.negativeSeeds.length > 10)) throw new ServiceError(400, 'Invalid negative seeds.');
+      if (input.limit !== undefined && (typeof input.limit !== 'number' || !Number.isFinite(input.limit))) throw new ServiceError(400, 'Invalid graph limit.');
+      return exploreCitationGraph({
+        seeds: input.seeds.map(s => single(s, 'seed paper', 500, true)), direction: direction as GraphDirection,
+        negativeSeeds: input.negativeSeeds?.map(s => single(s, 'negative seed', 500, true)), limit: input.limit
+      }, { withDb: (w, run) => database.withDb(w, run), settings: database.settings(), fetchFn: fetchImpl, docs: await documents.list(), signal: options?.signal });
+    },
+    'graph.savePaper': async input => {
+      if (input.mode !== 'abstract' && input.mode !== 'oa-pdf') throw new ServiceError(400, 'Choose abstract or oa-pdf.');
+      if (!isObject(input.paper)) throw new ServiceError(400, 'Invalid paper payload.');
+      const topicTag = input.topicTag === undefined ? undefined : single(input.topicTag, 'topic tag', 40);
+      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode: input.mode, topicTag }, { library: documents, store: database, readResource, indexDoc });
+    },
     'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),

@@ -7,14 +7,15 @@ type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
 
 export function hasResearchSchema(db: DatabaseSync): boolean {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics')").get();
-  return Number(row?.n ?? 0) === 3;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache')").get();
+  return Number(row?.n ?? 0) === 4;
 }
 
 export function ensureResearchSchema(db: DatabaseSync): void {
   db.exec('CREATE TABLE IF NOT EXISTS doc_pages(docId TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(docId, page)) STRICT');
   db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS doc_pages_fts USING fts5(docId UNINDEXED, page UNINDEXED, text, tokenize='unicode61 remove_diacritics 2')");
   db.exec("CREATE TABLE IF NOT EXISTS topics(id TEXT PRIMARY KEY, name TEXT NOT NULL, tag TEXT NOT NULL, zoteroCollection TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL) STRICT");
+  db.exec('CREATE TABLE IF NOT EXISTS graph_cache(cacheKey TEXT PRIMARY KEY, source TEXT NOT NULL, payload TEXT NOT NULL, fetchedAt INTEGER NOT NULL, ttlMs INTEGER NOT NULL) STRICT');
 }
 
 export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
@@ -136,4 +137,20 @@ export function saveTopic(db: DatabaseSync, input: Input): TopicRecord {
 export function deleteTopic(db: DatabaseSync, id: unknown): { id: string; deleted: boolean } {
   const topicId = single(id, 'topic ID', 128, true);
   return { id: topicId, deleted: Boolean(db.prepare('DELETE FROM topics WHERE id=?').run(topicId).changes) };
+}
+
+export function getGraphCache<T>(db: DatabaseSync, key: string): { value: T; stale: boolean } | undefined {
+  const row = db.prepare('SELECT payload, fetchedAt, ttlMs FROM graph_cache WHERE cacheKey=?').get(key);
+  if (!row || typeof row.payload !== 'string') return undefined;
+  try { return { value: JSON.parse(row.payload) as T, stale: Date.now() - Number(row.fetchedAt ?? 0) > Number(row.ttlMs ?? 0) }; }
+  catch { return undefined; }
+}
+
+export function setGraphCache(db: DatabaseSync, key: string, source: string, value: unknown, ttlMs: number): void {
+  db.prepare(`INSERT INTO graph_cache(cacheKey, source, payload, fetchedAt, ttlMs) VALUES(?,?,?,?,?)
+    ON CONFLICT(cacheKey) DO UPDATE SET source=excluded.source, payload=excluded.payload, fetchedAt=excluded.fetchedAt, ttlMs=excluded.ttlMs`)
+    .run(key, source, JSON.stringify(value), Date.now(), Math.max(1000, Math.floor(ttlMs)));
+  if (Number(db.prepare('SELECT COUNT(*) AS n FROM graph_cache').get()?.n ?? 0) > 1200) {
+    db.prepare('DELETE FROM graph_cache WHERE cacheKey NOT IN (SELECT cacheKey FROM graph_cache ORDER BY fetchedAt DESC LIMIT 1000)').run();
+  }
 }

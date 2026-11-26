@@ -681,8 +681,8 @@ function formatBibTeX(meta) {
   }
   const url = nonEmpty(meta.url);
   if (url) {
-    const safeUrl2 = sanitizeBibTeXUrl(url);
-    if (safeUrl2) fields.push(["url", safeUrl2]);
+    const safeUrl3 = sanitizeBibTeXUrl(url);
+    if (safeUrl3) fields.push(["url", safeUrl3]);
   }
   const arxivId = nonEmpty(meta.arxivId) ?? extractArxivId(meta.url, meta.doi);
   if (arxivId) {
@@ -828,7 +828,11 @@ var initialSettings = {
   vaultPath: "",
   zoteroLibraryId: "",
   zoteroLibraryType: "user",
-  zoteroApiKey: ""
+  zoteroApiKey: "",
+  openAlexEmail: "",
+  openAlexApiKey: "",
+  semanticScholarApiKey: "",
+  ncbiApiKey: ""
 };
 function zoteroModeFor(settings) {
   return !settings.zoteroLibraryId || settings.zoteroMode === "desktop" ? "desktop" : "web";
@@ -858,6 +862,8 @@ function mergeSettings(current, input) {
   const targetLanguage = input.targetLanguage === void 0 ? current.targetLanguage : readTargetLanguage(input.targetLanguage);
   const glossary = input.glossary === void 0 ? current.glossary : readMultilinePref(input.glossary, "glossary", "Glossary contains invalid control characters.");
   const customPrompts = input.customPrompts === void 0 ? current.customPrompts : readMultilinePref(input.customPrompts, "custom prompts", "Custom prompts contain invalid control characters.");
+  const openAlexEmail = single(input.openAlexEmail ?? current.openAlexEmail ?? "", "OpenAlex email", 254);
+  if (openAlexEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(openAlexEmail)) throw new ServiceError(400, "Enter a valid email address for OpenAlex polite pool.");
   return {
     questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
     model,
@@ -870,7 +876,11 @@ function mergeSettings(current, input) {
     zoteroLibraryType: type,
     zoteroLibraryId: id,
     zoteroMode,
-    zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey)
+    zoteroApiKey: updatedSecret(current.zoteroApiKey, input.zoteroApiKey ?? input.zoteroKey, input.clearZoteroKey),
+    openAlexEmail,
+    openAlexApiKey: updatedSecret(current.openAlexApiKey ?? "", input.openAlexApiKey, input.clearOpenAlexApiKey),
+    semanticScholarApiKey: updatedSecret(current.semanticScholarApiKey ?? "", input.semanticScholarApiKey, input.clearSemanticScholarApiKey),
+    ncbiApiKey: updatedSecret(current.ncbiApiKey ?? "", input.ncbiApiKey, input.clearNcbiApiKey)
   };
 }
 function readQuestionModel(value) {
@@ -1023,8 +1033,8 @@ function abstractDocId(input) {
   const meta = sanitizeDocMeta({ ...input });
   const doi = meta.doi?.toLowerCase();
   const arxiv2 = extractArxivId(input.url, meta.doi)?.toLowerCase();
-  const normTitle = (meta.paperTitle || input.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  const key2 = doi ? "doi:" + doi : arxiv2 ? "arxiv:" + arxiv2 : "title:" + normTitle + "|" + (meta.year ?? "");
+  const normTitle2 = (meta.paperTitle || input.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const key2 = doi ? "doi:" + doi : arxiv2 ? "arxiv:" + arxiv2 : "title:" + normTitle2 + "|" + (meta.year ?? "");
   return "abs-" + createHash("sha256").update(key2).digest("hex");
 }
 async function createAbstractRecord(dir, input, withLock) {
@@ -1033,16 +1043,16 @@ async function createAbstractRecord(dir, input, withLock) {
   const title = rawTitle.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250);
   if (!title) bad2("A document title is required.");
   const cleanMeta = sanitizeDocMeta(input);
-  const safeUrl2 = typeof input.url === "string" ? articleUrl(input.url)?.href : void 0;
-  const id = abstractDocId({ title, ...safeUrl2 ? { url: safeUrl2 } : {}, ...cleanMeta });
+  const safeUrl3 = typeof input.url === "string" ? articleUrl(input.url)?.href : void 0;
+  const id = abstractDocId({ title, ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta });
   const file = path2.join(dir, id + ".json");
   return withLock(id, async () => {
     await mkdir(dir, { recursive: true });
     if (existsSync(file)) {
       const saved = JSON.parse(await readFile(file, "utf8"));
       let changed = false;
-      if (!saved.url && safeUrl2) {
-        saved.url = safeUrl2;
+      if (!saved.url && safeUrl3) {
+        saved.url = safeUrl3;
         changed = true;
       }
       for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
@@ -1056,7 +1066,7 @@ async function createAbstractRecord(dir, input, withLock) {
       id,
       kind: "abstract",
       title,
-      ...safeUrl2 ? { url: safeUrl2 } : {},
+      ...safeUrl3 ? { url: safeUrl3 } : {},
       ...cleanMeta,
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),
       defaultPage: 1
@@ -1641,18 +1651,18 @@ var Library = class {
     const digest = hash(bytes);
     if (digest === sampleDigest) return sample;
     const id = "pdf-" + digest;
-    const safeUrl2 = articleUrl(url)?.href;
+    const safeUrl3 = articleUrl(url)?.href;
     const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
     await mkdir2(this.directory, { recursive: true });
     await writeOnce(path3.join(this.directory, id + ".pdf"), bytes);
-    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl2 ? { url: safeUrl2 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
+    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
     const missing = missingDocMeta({ ...doc }, cleanMeta);
-    const needUrl = !doc.url && Boolean(safeUrl2);
+    const needUrl = !doc.url && Boolean(safeUrl3);
     if (needUrl || Object.keys(missing).length) {
       return this.mutateMeta(id, (saved) => {
         let changed = false;
-        if (!saved.url && safeUrl2) {
-          saved.url = safeUrl2;
+        if (!saved.url && safeUrl3) {
+          saved.url = safeUrl3;
           changed = true;
         }
         for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
@@ -1776,13 +1786,14 @@ var Library = class {
 // src/server/research-store.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 function hasResearchSchema(db) {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics')").get();
-  return Number(row?.n ?? 0) === 3;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache')").get();
+  return Number(row?.n ?? 0) === 4;
 }
 function ensureResearchSchema(db) {
   db.exec("CREATE TABLE IF NOT EXISTS doc_pages(docId TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(docId, page)) STRICT");
   db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS doc_pages_fts USING fts5(docId UNINDEXED, page UNINDEXED, text, tokenize='unicode61 remove_diacritics 2')");
   db.exec("CREATE TABLE IF NOT EXISTS topics(id TEXT PRIMARY KEY, name TEXT NOT NULL, tag TEXT NOT NULL, zoteroCollection TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL) STRICT");
+  db.exec("CREATE TABLE IF NOT EXISTS graph_cache(cacheKey TEXT PRIMARY KEY, source TEXT NOT NULL, payload TEXT NOT NULL, fetchedAt INTEGER NOT NULL, ttlMs INTEGER NOT NULL) STRICT");
 }
 function deleteResearchDocument(db, docId) {
   db.prepare("DELETE FROM doc_pages WHERE docId=?").run(docId);
@@ -1894,6 +1905,22 @@ function saveTopic(db, input) {
 function deleteTopic(db, id) {
   const topicId = single(id, "topic ID", 128, true);
   return { id: topicId, deleted: Boolean(db.prepare("DELETE FROM topics WHERE id=?").run(topicId).changes) };
+}
+function getGraphCache(db, key2) {
+  const row = db.prepare("SELECT payload, fetchedAt, ttlMs FROM graph_cache WHERE cacheKey=?").get(key2);
+  if (!row || typeof row.payload !== "string") return void 0;
+  try {
+    return { value: JSON.parse(row.payload), stale: Date.now() - Number(row.fetchedAt ?? 0) > Number(row.ttlMs ?? 0) };
+  } catch {
+    return void 0;
+  }
+}
+function setGraphCache(db, key2, source2, value, ttlMs) {
+  db.prepare(`INSERT INTO graph_cache(cacheKey, source, payload, fetchedAt, ttlMs) VALUES(?,?,?,?,?)
+    ON CONFLICT(cacheKey) DO UPDATE SET source=excluded.source, payload=excluded.payload, fetchedAt=excluded.fetchedAt, ttlMs=excluded.ttlMs`).run(key2, source2, JSON.stringify(value), Date.now(), Math.max(1e3, Math.floor(ttlMs)));
+  if (Number(db.prepare("SELECT COUNT(*) AS n FROM graph_cache").get()?.n ?? 0) > 1200) {
+    db.prepare("DELETE FROM graph_cache WHERE cacheKey NOT IN (SELECT cacheKey FROM graph_cache ORDER BY fetchedAt DESC LIMIT 1000)").run();
+  }
 }
 
 // src/shared/citation-bulk.ts
@@ -2158,6 +2185,449 @@ function exportBulkRefs(docs, format) {
   })].join("\n") + "\n";
 }
 
+// src/shared/academic-intake.ts
+var ARXIV_URL_RE = /^\/(?:abs|pdf)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
+var DOI_RE2 = /^10\.\d{4,9}\/[^\s<>"]+$/i;
+var arxiv = (id, versionedId) => ({ kind: "arxiv", id, versionedId, absUrl: "https://arxiv.org/abs/" + versionedId, pdfUrl: "https://arxiv.org/pdf/" + versionedId + ".pdf" });
+function doiTarget(raw) {
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+  }
+  const doi = decoded.replace(/[.,;]+$/, "").trim();
+  return DOI_RE2.test(doi) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? { kind: "doi", doi, url: "https://doi.org/" + encodeURI(doi) } : null;
+}
+function parseAcademicInput(raw) {
+  if (typeof raw !== "string") return null;
+  const text2 = raw.trim();
+  if (!text2 || text2.length > 8192 || /[\u0000-\u001f\u007f]/.test(text2)) return null;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(text2)?.[1]?.toLowerCase();
+  if (scheme && !["http", "https", "arxiv", "doi"].includes(scheme)) return null;
+  const ver = (s) => /(v\d+)\/?$/i.exec(s)?.[1]?.toLowerCase() ?? "";
+  if (scheme === "http" || scheme === "https") {
+    const url = URL.parse(text2);
+    if (!url || url.username || url.password) return null;
+    if (/(?:^|\.)arxiv\.org$/i.test(url.hostname)) {
+      const m = ARXIV_URL_RE.exec(url.pathname);
+      return m ? arxiv(extractArxivId(url.href) ?? m[1].toLowerCase().replace(/v\d+$/, ""), m[1].toLowerCase()) : { kind: "url", url: url.href };
+    }
+    if (/^(?:dx\.)?doi\.org$/i.test(url.hostname)) {
+      const id2 = extractArxivId(url.href);
+      return id2 ? arxiv(id2, id2 + ver(url.pathname)) : doiTarget(url.pathname.slice(1).replace(/\/+$/, ""));
+    }
+    return { kind: "url", url: url.href };
+  }
+  const id = extractArxivId(text2);
+  return id ? arxiv(id, id + ver(text2)) : doiTarget(text2.replace(/^doi:\s*/i, "").trim());
+}
+
+// src/shared/graph-layout.ts
+function reconstructInvertedAbstract(inv) {
+  if (!inv || typeof inv !== "object") return "";
+  const pairs = [];
+  for (const [word, positions] of Object.entries(inv)) {
+    if (!word || !Array.isArray(positions)) continue;
+    for (const pos of positions) if (typeof pos === "number" && Number.isInteger(pos) && pos >= 0 && pos < 5e4) pairs.push([pos, word]);
+  }
+  return pairs.sort((a, b) => a[0] - b[0]).map((p) => p[1]).join(" ").replace(/\s+/g, " ").trim();
+}
+function rankEarlierByCoCitation(candidates, seedCountMap, limit) {
+  const unique = /* @__PURE__ */ new Map();
+  for (const p of candidates) if (!unique.has(p.id) || (p.citationCount ?? 0) > (unique.get(p.id).citationCount ?? 0)) unique.set(p.id, p);
+  return [...unique.values()].sort((a, b) => (seedCountMap.get(b.id) ?? 0) - (seedCountMap.get(a.id) ?? 0) || (b.citationCount ?? 0) - (a.citationCount ?? 0) || (a.year ?? 9999) - (b.year ?? 9999) || a.id.localeCompare(b.id)).slice(0, Math.max(0, Math.floor(limit)));
+}
+
+// src/server/academic-intake.ts
+var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
+function pdfFilename(url) {
+  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+  try {
+    name2 = decodeURIComponent(name2);
+  } catch {
+  }
+  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
+}
+function decodeHtml(bytes, type, charset) {
+  if (type === "application/pdf" || bytes.length > 5 * 1024 * 1024) fail("This link did not return a readable HTML article or PDF.", 415);
+  const sniff = bytes.subarray(0, 4096).toString("latin1");
+  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
+  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return new TextDecoder().decode(bytes);
+  }
+}
+var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
+var mergeMeta = (p, f, doi) => ({
+  paperTitle: p.paperTitle ?? f.paperTitle,
+  authors: p.authors ?? f.authors,
+  venue: p.venue ?? f.venue,
+  year: p.year ?? f.year,
+  doi: p.doi ?? f.doi ?? doi,
+  publisher: p.publisher ?? f.publisher,
+  abstract: p.abstract ?? f.abstract
+});
+function parseCrossref(bytes) {
+  try {
+    const body = JSON.parse(bytes.toString("utf8"));
+    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
+    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
+    const authors = Array.isArray(m.author) ? m.author.map(
+      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
+    ).filter(Boolean).join("; ") : void 0;
+    let year;
+    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
+      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
+      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
+        year = String(part);
+        break;
+      }
+    }
+    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
+    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
+    return {
+      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
+      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
+    };
+  } catch {
+    return { meta: {} };
+  }
+}
+function safeHtmlMeta(parseArticle, res) {
+  let html;
+  try {
+    html = decodeHtml(res.bytes, res.type, res.charset);
+  } catch {
+    return { meta: {} };
+  }
+  try {
+    const parsed = parseArticle(html, res.url.href);
+    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
+  } catch {
+    try {
+      const stub = parseArticle(html + "<p>.</p>", res.url.href);
+      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
+    } catch {
+      return { meta: {} };
+    }
+  }
+}
+async function resolveAcademicIntake(library, target, readResource, parseArticle) {
+  if (target.kind === "arxiv") {
+    const [absRes, pdfRes] = await Promise.allSettled([readResource(target.absUrl, "document"), readResource(target.pdfUrl, "document")]);
+    const absInfo = absRes.status === "fulfilled" && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
+    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
+      const meta = absInfo?.meta ?? {};
+      return { doc: await library.importPdf(meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf", pdfRes.value.bytes, target.absUrl, meta) };
+    }
+    if (absInfo?.parsed) return library.importWebDocument(absInfo.parsed);
+    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
+  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
+  const tryPdf = async (candidate, sourceUrl2, meta) => {
+    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
+    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
+  };
+  if (landRes.status === "fulfilled") {
+    const land = landRes.value;
+    if (isPdfBytes(land.bytes)) {
+      const meta = mergeMeta({}, cr.meta, target.doi);
+      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
+    }
+    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
+    const primary = redirected?.kind === "arxiv" ? redirected.pdfUrl : landInfo.pdfUrl, sourceUrl2 = redirected?.kind === "arxiv" ? redirected.absUrl : land.url.href;
+    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
+    if (pdfDoc) return pdfDoc;
+    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
+    fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
+}
+
+// src/server/academic-graph.ts
+var OA_SELECT = "id,doi,ids,title,display_name,publication_year,authorships,primary_location,best_oa_location,cited_by_count,referenced_works,related_works,abstract_inverted_index";
+var S2_FIELDS = "paperId,externalIds,title,abstract,year,venue,citationCount,authors,openAccessPdf,url";
+var TTL_WORK = 864e5;
+var TTL_EXPLORE = 216e5;
+var sourceNextAt = /* @__PURE__ */ new Map();
+var str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
+var safeUrl = (v) => str(v) ? articleUrl(str(v))?.href : void 0;
+var arrOf = (v) => Array.isArray(v) ? v : [];
+var cleanDoi2 = (v) => str(v)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim() || void 0;
+var cleanPmid = (v) => {
+  const s = str(v);
+  return s && /^\d+$/.test(s) ? s : void 0;
+};
+var shortOaId = (v) => str(v) ? /(?:^|\/)(W\d+)\/?$/i.exec(str(v))?.[1]?.toUpperCase() : void 0;
+var normTitle = (s) => (s ?? "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+var decodeXml = (s) => s.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
+var s2Headers = (s, json2 = false) => ({ ...json2 ? { "Content-Type": "application/json" } : {}, ...s?.semanticScholarApiKey ? { "x-api-key": s.semanticScholarApiKey } : {} });
+function defaultSleep(ms, signal) {
+  if (signal?.aborted) return Promise.reject(new ServiceError(499, "Request canceled."));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new ServiceError(499, "Request canceled."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function retryDelay(raw, attempt) {
+  const text2 = raw?.trim(), fallback = 250 * 2 ** attempt, sec = text2 ? Number(text2) : Number.NaN;
+  if (Number.isFinite(sec)) return sec >= 0 ? Math.min(5e3, Math.round(sec * 1e3)) : fallback;
+  const at = text2 ? Date.parse(text2) : Number.NaN;
+  return Number.isFinite(at) ? Math.min(5e3, Math.max(0, at - Date.now())) : fallback;
+}
+function makePaper(p) {
+  const arxivId = p.arxivId?.toLowerCase(), oaPdfUrl = safeUrl(p.oaPdfUrl) ?? (arxivId ? `https://arxiv.org/pdf/${arxivId}.pdf` : void 0);
+  const url = safeUrl(p.url) ?? (p.doi ? `https://doi.org/${p.doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : p.openAlexId ? `https://openalex.org/${p.openAlexId}` : p.pmid ? `https://europepmc.org/article/MED/${p.pmid}` : void 0);
+  const id = p.id || p.openAlexId || p.s2Id || (p.pmid ? `pmid:${p.pmid}` : p.doi ? `doi:${p.doi.toLowerCase()}` : arxivId ? `arxiv:${arxivId}` : normTitle(p.title));
+  return { ...p, id, arxivId, oaPdfUrl, url, firstAuthor: p.authors[0] ?? "", lastAuthor: p.authors.at(-1) ?? "" };
+}
+async function cachedFetch(source2, key2, url, init, ttlMs, parse3, ctx, degraded) {
+  const cached = ctx.withDb(false, (db) => getGraphCache(db, key2));
+  if (cached && !cached.stale) return { data: cached.value, fromCache: true };
+  const fetcher = ctx.fetchFn ?? globalThis.fetch, sleep = ctx.sleepFn ?? defaultSleep, headers = new Headers(init.headers);
+  if (!headers.has("User-Agent")) headers.set("User-Agent", "DSH-Paper-Reader/0.1 (academic graph)");
+  let failed = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (ctx.signal?.aborted) throw new ServiceError(499, "Request canceled.");
+    if (!ctx.fetchFn || ctx.fetchFn === globalThis.fetch) {
+      const gap = source2 === "s2" ? ctx.settings?.semanticScholarApiKey ? 120 : 1050 : source2 === "arxiv" ? 350 : source2 === "europepmc" ? 200 : 100;
+      const now = Date.now(), prev = sourceNextAt.get(source2) ?? 0;
+      sourceNextAt.set(source2, Math.max(now, prev) + gap);
+      if (prev > now) await sleep(prev - now, ctx.signal);
+    }
+    try {
+      const timeout = AbortSignal.timeout(12e3), res = await fetcher(url, { ...init, headers, signal: ctx.signal ? AbortSignal.any([timeout, ctx.signal]) : timeout });
+      if (res.ok) {
+        const data = await parse3(res);
+        ctx.withDb(true, (db) => setGraphCache(db, key2, source2, data, ttlMs));
+        return { data, fromCache: false };
+      }
+      if (res.status === 404) return void 0;
+      failed = true;
+      if (![429, 502, 503, 504].includes(res.status) || attempt >= 2) break;
+      await sleep(retryDelay(res.headers.get("retry-after"), attempt), ctx.signal);
+    } catch {
+      if (ctx.signal?.aborted) throw new ServiceError(499, "Request canceled.");
+      failed = true;
+      if (attempt < 2) await sleep(250 * 2 ** attempt, ctx.signal);
+    }
+  }
+  if (failed) degraded.add(source2);
+  return cached ? { data: cached.value, fromCache: true } : void 0;
+}
+var fetchJson = (source2, key2, url, ctx, degraded, ttlMs = TTL_WORK, init = { method: "GET" }) => cachedFetch(source2, key2, url, init, ttlMs, (r) => r.json(), ctx, degraded);
+var oaUrl = (pathname, params, s) => {
+  const url = new URL("https://api.openalex.org" + pathname);
+  for (const [k, v] of Object.entries({ select: OA_SELECT, ...params, ...s?.openAlexEmail ? { mailto: s.openAlexEmail } : {}, ...s?.openAlexApiKey ? { api_key: s.openAlexApiKey } : {} })) url.searchParams.set(k, v);
+  return url.href;
+};
+function parseOaWork(raw) {
+  if (!isObject(raw)) return void 0;
+  const oaId = shortOaId(raw.id), title = str(raw.title) ?? str(raw.display_name);
+  if (!oaId || !title) return void 0;
+  const ids = isObject(raw.ids) ? raw.ids : {}, prim = isObject(raw.primary_location) ? raw.primary_location : {}, oa = isObject(raw.best_oa_location) ? raw.best_oa_location : {}, doi = cleanDoi2(raw.doi) ?? cleanDoi2(ids.doi);
+  const arxivId = extractArxivId(str(raw.doi), doi) ?? extractArxivId(str(prim.landing_page_url)) ?? extractArxivId(str(oa.landing_page_url)) ?? extractArxivId(str(oa.pdf_url));
+  const authors = arrOf(raw.authorships).map((a) => isObject(a) && isObject(a.author) ? str(a.author.display_name) ?? "" : "").filter(Boolean);
+  const abstract = isObject(raw.abstract_inverted_index) ? reconstructInvertedAbstract(raw.abstract_inverted_index) || void 0 : void 0;
+  return {
+    paper: makePaper({ id: oaId, openAlexId: oaId, title, authors, year: num(raw.publication_year), venue: isObject(prim.source) ? str(prim.source.display_name) : void 0, doi, arxivId, pmid: str(ids.pmid) ? /(\d+)\/?$/.exec(str(ids.pmid))?.[1] : void 0, abstract, citationCount: num(raw.cited_by_count), oaPdfUrl: str(oa.pdf_url), url: str(prim.landing_page_url), source: "openalex" }),
+    referencedIds: arrOf(raw.referenced_works).map(shortOaId).filter((v) => Boolean(v)),
+    relatedIds: arrOf(raw.related_works).map(shortOaId).filter((v) => Boolean(v)),
+    fromCache: false
+  };
+}
+function parseS2Paper(raw) {
+  if (!isObject(raw) || !str(raw.title)) return void 0;
+  const ext = isObject(raw.externalIds) ? raw.externalIds : {}, doi = cleanDoi2(ext.DOI);
+  const authors = arrOf(raw.authors).map((a) => isObject(a) ? str(a.name) ?? "" : "").filter(Boolean);
+  return makePaper({ id: str(raw.paperId), s2Id: str(raw.paperId), title: str(raw.title), authors, year: num(raw.year), venue: str(raw.venue), doi, arxivId: extractArxivId(str(ext.ArXiv), doi), pmid: cleanPmid(ext.PubMed), abstract: str(raw.abstract), citationCount: num(raw.citationCount), oaPdfUrl: isObject(raw.openAccessPdf) ? str(raw.openAccessPdf.url) : void 0, url: str(raw.url), source: "s2" });
+}
+function parseEpmcItem(raw) {
+  if (!isObject(raw) || !str(raw.title)) return void 0;
+  const authors = arrOf(isObject(raw.authorList) ? raw.authorList.author : void 0).map((a) => isObject(a) ? str(a.fullName) ?? "" : "").filter(Boolean);
+  if (!authors.length && str(raw.authorString)) authors.push(...str(raw.authorString).split(/\s*,\s*/).filter(Boolean));
+  const pdf = arrOf(isObject(raw.fullTextUrlList) ? raw.fullTextUrlList.fullTextUrl : void 0).find((u) => isObject(u) && u.documentStyle === "pdf" && u.availabilityCode === "OA" && str(u.url));
+  const year = Number(raw.pubYear), cited = Number(raw.citedByCount);
+  return makePaper({ title: decodeXml(str(raw.title)), authors, year: Number.isFinite(year) && year > 1800 ? year : void 0, venue: str(raw.journalTitle), doi: cleanDoi2(raw.doi), pmid: cleanPmid(raw.pmid) ?? cleanPmid(raw.id), abstract: str(raw.abstractText) ? decodeXml(str(raw.abstractText)) : void 0, citationCount: Number.isFinite(cited) ? cited : void 0, oaPdfUrl: isObject(pdf) ? str(pdf.url) : void 0, source: "europepmc" });
+}
+function parseArxivXml(xml) {
+  const entry = /<entry>([\s\S]*?)<\/entry>/i.exec(xml)?.[1];
+  if (!entry) return void 0;
+  const tag = (n) => new RegExp(`<${n}[^>]*>([\\s\\S]*?)<\\/${n}>`, "i").exec(entry)?.[1] ?? "";
+  const idUrl = decodeXml(tag("id")), title = decodeXml(tag("title")), arxivId = extractArxivId(idUrl);
+  const authors = [...entry.matchAll(/<author>\s*<name>([\s\S]*?)<\/name>/gi)].map((m) => decodeXml(m[1])).filter(Boolean), year = Number(/(\d{4})/.exec(tag("published"))?.[1]);
+  if (!title || /arxiv\.org\/api\/errors/i.test(idUrl) || !authors.length && !arxivId) return void 0;
+  return makePaper({ title, authors, year: Number.isFinite(year) && year > 1900 ? year : void 0, venue: "arXiv", doi: cleanDoi2(decodeXml(tag("arxiv:doi"))), arxivId, abstract: decodeXml(tag("summary")) || void 0, url: idUrl, source: "arxiv" });
+}
+async function fetchOpenAlexByIds(ids, ctx, degraded) {
+  const unique = [...new Set(ids.map(shortOaId).filter((v) => Boolean(v)))], works = [];
+  let allCached = unique.length > 0;
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50);
+    const res = await fetchJson("openalex", "oa:batch:" + [...chunk].sort().join("|"), oaUrl("/works", { filter: "openalex:" + chunk.join("|"), "per-page": String(chunk.length) }, ctx.settings), ctx, degraded);
+    if (!res?.fromCache) allCached = false;
+    for (const row of arrOf(isObject(res?.data) ? res.data.results : void 0)) {
+      const w = parseOaWork(row);
+      if (w) works.push({ ...w, fromCache: Boolean(res?.fromCache) });
+    }
+  }
+  return { works, fromCache: allCached };
+}
+var parsePaperWork = (paper, fromCache) => paper ? { paper, referencedIds: [], relatedIds: [], fromCache } : void 0;
+async function resolveWorkInternal(rawInput, ctx, degraded) {
+  const query = rawInput.trim();
+  if (!query) return void 0;
+  const oaDirect = shortOaId(query), pmidDirect = /^pmid:?\s*(\d+)$/i.exec(query)?.[1], parsed = parseAcademicInput(query);
+  const fetchOa = async (p, q, k) => {
+    const res = await fetchJson("openalex", k, oaUrl(p, q, ctx.settings), ctx, degraded);
+    const w = res ? parseOaWork(isObject(res.data) && Array.isArray(res.data.results) ? res.data.results[0] : res.data) : void 0;
+    return w && res ? { ...w, fromCache: res.fromCache } : void 0;
+  };
+  let work = oaDirect ? await fetchOa("/works/" + oaDirect, {}, "oa:id:" + oaDirect) : pmidDirect ? await fetchOa("/works/pmid:" + pmidDirect, {}, "oa:pmid:" + pmidDirect) : parsed?.kind === "doi" ? await fetchOa("/works/https://doi.org/" + encodeURIComponent(parsed.doi.toLowerCase()), {}, "oa:doi:" + parsed.doi.toLowerCase()) : parsed?.kind === "arxiv" ? await fetchOa("/works/https://doi.org/10.48550/arxiv." + encodeURIComponent(parsed.id.toLowerCase()), {}, "oa:arxiv:" + parsed.id.toLowerCase()) ?? await fetchOa("/works", { filter: "locations.landing_page_url:https://arxiv.org/abs/" + parsed.id.toLowerCase(), "per-page": "1" }, "oa:arxiv-loc:" + parsed.id.toLowerCase()) : await fetchOa("/works", { search: query, "per-page": "3" }, "oa:search:" + normTitle(query));
+  if (work && parsed?.kind === "arxiv") work = { ...work, paper: { ...work.paper, arxivId: work.paper.arxivId ?? parsed.id.toLowerCase(), oaPdfUrl: work.paper.oaPdfUrl ?? `https://arxiv.org/pdf/${parsed.id.toLowerCase()}.pdf` } };
+  if (!work && parsed?.kind === "arxiv") {
+    const res = await cachedFetch("arxiv", "arxiv:id:" + parsed.id, "https://export.arxiv.org/api/query?id_list=" + encodeURIComponent(parsed.id), { method: "GET" }, TTL_WORK, (r) => r.text(), ctx, degraded);
+    if (res) work = parsePaperWork(parseArxivXml(res.data), res.fromCache);
+  }
+  if (!work || !work.paper.abstract && (work.paper.doi || pmidDirect || parsed?.kind === "doi")) {
+    const doi = work?.paper.doi ?? (parsed?.kind === "doi" ? parsed.doi : void 0), pmid = work?.paper.pmid ?? pmidDirect, epmcQ = doi ? `DOI:"${doi}"` : pmid ? `EXT_ID:${pmid} AND SRC:MED` : !work ? query : "";
+    const res = epmcQ ? await fetchJson("europepmc", "epmc:" + epmcQ.toLowerCase(), `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(epmcQ)}&format=json&resultType=core&pageSize=1`, ctx, degraded) : void 0;
+    const epmc = parseEpmcItem(arrOf(isObject(res?.data) && isObject(res.data.resultList) ? res.data.resultList.result : void 0)[0]);
+    if (epmc && res) work = work ? { ...work, paper: { ...work.paper, abstract: work.paper.abstract ?? epmc.abstract, pmid: work.paper.pmid ?? epmc.pmid, oaPdfUrl: work.paper.oaPdfUrl ?? epmc.oaPdfUrl, venue: work.paper.venue ?? epmc.venue } } : parsePaperWork(epmc, res.fromCache);
+  }
+  if (!work) {
+    const s2Key = parsed?.kind === "doi" ? "DOI:" + parsed.doi : parsed?.kind === "arxiv" ? "ARXIV:" + parsed.id : pmidDirect ? "PMID:" + pmidDirect : "";
+    const url = s2Key ? `https://api.semanticscholar.org/graph/v1/paper/${encodeURIComponent(s2Key)}?fields=${S2_FIELDS}` : `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=1&fields=${S2_FIELDS}`;
+    const res = await fetchJson("s2", "s2:paper:" + (s2Key || normTitle(query)), url, ctx, degraded, TTL_WORK, { method: "GET", headers: s2Headers(ctx.settings) });
+    if (res) work = parsePaperWork(parseS2Paper(isObject(res.data) && Array.isArray(res.data.data) ? res.data.data[0] : res.data), res.fromCache);
+  }
+  return work;
+}
+var attachLibraryMatch = (paper, docs) => {
+  const pDoi = paper.doi?.toLowerCase(), pArxiv = paper.arxivId?.toLowerCase(), pTitle = normTitle(paper.title);
+  const hit = docs?.find((d) => pDoi && cleanDoi2(d.doi)?.toLowerCase() === pDoi || pArxiv && extractArxivId(d.url, d.doi)?.toLowerCase() === pArxiv || pTitle && pTitle === normTitle(d.paperTitle || d.title));
+  return hit ? { ...paper, inLibrary: true, docId: hit.id } : { ...paper, inLibrary: false };
+};
+async function resolveAcademicPaper(input, ctx) {
+  const degraded = /* @__PURE__ */ new Set(), work = await resolveWorkInternal(input, ctx, degraded);
+  return { paper: work ? attachLibraryMatch(work.paper, ctx.docs) : null, degraded: [...degraded], fromCache: Boolean(work?.fromCache) };
+}
+async function exploreCitationGraph(params, ctx) {
+  const limit = Math.min(45, Math.max(25, Math.floor(params.limit ?? 35))), degraded = /* @__PURE__ */ new Set(), resolvedSeeds = [], seedKeySet = /* @__PURE__ */ new Set();
+  for (const raw of params.seeds.slice(0, 5)) {
+    const w = await resolveWorkInternal(raw, ctx, degraded);
+    if (w && !seedKeySet.has(w.paper.id)) {
+      seedKeySet.add(w.paper.id);
+      resolvedSeeds.push(w);
+    }
+  }
+  if (!resolvedSeeds.length) return { seeds: [], nodes: [], edges: [], degraded: [...degraded], fromCache: false };
+  const seedNodes = resolvedSeeds.map((s) => ({ ...attachLibraryMatch(s.paper, ctx.docs), isSeed: true, direction: "seed" }));
+  const budget = Math.max(1, limit - seedNodes.length), discovered = [], edges = [];
+  let fromCache = resolvedSeeds.every((s) => s.fromCache);
+  const negSet = new Set((params.negativeSeeds ?? []).flatMap((r) => {
+    const p = parseAcademicInput(r);
+    return [r.trim().toLowerCase(), shortOaId(r)?.toLowerCase(), p?.kind === "doi" ? p.doi.toLowerCase() : void 0, p?.kind === "arxiv" ? p.id.toLowerCase() : void 0].filter((v) => Boolean(v));
+  }));
+  const pushDisc = (paper, dir, coCitations) => {
+    if (discovered.length >= budget || seedKeySet.has(paper.id) || negSet.has(paper.id.toLowerCase()) || paper.doi && negSet.has(paper.doi.toLowerCase()) || paper.arxivId && negSet.has(paper.arxivId.toLowerCase()) || discovered.some((d) => d.id === paper.id)) return false;
+    discovered.push({ ...attachLibraryMatch(paper, ctx.docs), isSeed: false, direction: dir, ...coCitations !== void 0 ? { coCitations } : {} });
+    return true;
+  };
+  if (params.direction === "earlier") {
+    const counts = /* @__PURE__ */ new Map();
+    for (const s of resolvedSeeds) for (const refId of new Set(s.referencedIds)) if (!seedKeySet.has(refId)) {
+      counts.set(refId, (counts.get(refId) ?? 0) + 1);
+      edges.push({ source: s.paper.id, target: refId, kind: "cites" });
+    }
+    const batch = await fetchOpenAlexByIds([...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 100).map(([id]) => id), ctx, degraded);
+    fromCache = fromCache && batch.fromCache;
+    for (const paper of rankEarlierByCoCitation(batch.works.map((w) => w.paper), counts, budget)) pushDisc(paper, "earlier", counts.get(paper.id) ?? 1);
+  } else if (params.direction === "later") {
+    const oaIds = resolvedSeeds.map((s) => s.paper.openAlexId).filter((v) => Boolean(v));
+    const res = oaIds.length ? await fetchJson("openalex", "oa:cites:" + [...oaIds].sort().join("|"), oaUrl("/works", { filter: "cites:" + oaIds.join("|"), sort: "cited_by_count:desc", "per-page": "50" }, ctx.settings), ctx, degraded, TTL_EXPLORE) : void 0;
+    fromCache = fromCache && Boolean(res?.fromCache);
+    for (const row of arrOf(isObject(res?.data) ? res.data.results : void 0)) {
+      const w = parseOaWork(row);
+      if (!w || !pushDisc(w.paper, "later")) continue;
+      const hits = resolvedSeeds.filter((s) => s.paper.openAlexId && w.referencedIds.includes(s.paper.openAlexId));
+      for (const t of hits.length ? hits : [resolvedSeeds[0]]) edges.push({ source: w.paper.id, target: t.paper.id, kind: "cites" });
+    }
+  } else {
+    const posIds = resolvedSeeds.map((s) => s.paper.s2Id ?? (s.paper.doi ? "DOI:" + s.paper.doi : s.paper.arxivId ? "ARXIV:" + s.paper.arxivId : s.paper.pmid ? "PMID:" + s.paper.pmid : "")).filter(Boolean);
+    const negIds = (params.negativeSeeds ?? []).map((r) => {
+      const p = parseAcademicInput(r);
+      return p?.kind === "doi" ? "DOI:" + p.doi : p?.kind === "arxiv" ? "ARXIV:" + p.id : r.trim();
+    }).filter(Boolean);
+    if (posIds.length) {
+      const res = await fetchJson("s2", `s2:rec:${posIds.join("|")}:${negIds.join("|")}`, `https://api.semanticscholar.org/recommendations/v1/papers/?fields=${S2_FIELDS}&limit=45`, ctx, degraded, TTL_EXPLORE, { method: "POST", headers: s2Headers(ctx.settings, true), body: JSON.stringify({ positivePaperIds: posIds, negativePaperIds: negIds }) });
+      fromCache = fromCache && Boolean(res?.fromCache);
+      for (const row of arrOf(isObject(res?.data) ? res.data.recommendedPapers : void 0)) {
+        const paper = parseS2Paper(row);
+        if (paper && pushDisc(paper, "similar")) edges.push({ source: resolvedSeeds[0].paper.id, target: paper.id, kind: "related" });
+      }
+    }
+    if (discovered.length < budget) {
+      const batch = await fetchOpenAlexByIds([...new Set(resolvedSeeds.flatMap((s) => s.relatedIds).filter((id) => !seedKeySet.has(id)))].slice(0, 50), ctx, degraded);
+      fromCache = fromCache && batch.fromCache;
+      for (const w of batch.works) if (pushDisc(w.paper, "similar")) edges.push({ source: (resolvedSeeds.find((s) => s.relatedIds.includes(w.paper.id)) ?? resolvedSeeds[0]).paper.id, target: w.paper.id, kind: "related" });
+    }
+  }
+  if (!discovered.length && params.direction !== "similar" && resolvedSeeds.some((s) => s.paper.pmid)) {
+    const pmidSeed = resolvedSeeds.find((s) => s.paper.pmid), ep = params.direction === "earlier" ? "references" : "citations";
+    const res = await fetchJson("europepmc", `epmc:${ep}:${pmidSeed.paper.pmid}`, `https://www.ebi.ac.uk/europepmc/webservices/rest/MED/${pmidSeed.paper.pmid}/${ep}?format=json&pageSize=45`, ctx, degraded, TTL_EXPLORE);
+    const listObj = isObject(res?.data) ? res.data[ep === "references" ? "referenceList" : "citationList"] : void 0;
+    for (const item of arrOf(isObject(listObj) ? listObj[ep === "references" ? "reference" : "citation"] : void 0)) {
+      const paper = parseEpmcItem(item);
+      if (paper && pushDisc(paper, params.direction)) edges.push(params.direction === "earlier" ? { source: pmidSeed.paper.id, target: paper.id, kind: "cites" } : { source: paper.id, target: pmidSeed.paper.id, kind: "cites" });
+    }
+  }
+  const nodes = [...seedNodes, ...discovered].slice(0, limit), nodeIds = new Set(nodes.map((n) => n.id));
+  return { seeds: seedNodes, nodes, edges: edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target)), degraded: [...degraded], fromCache };
+}
+function readGraphPaperInput(raw) {
+  const title = single(raw.title, "paper title", 250, true), authors = arrOf(raw.authors).map((a) => str(a) ?? "").filter(Boolean).slice(0, 100);
+  return makePaper({ id: str(raw.id), title, authors, year: num(raw.year), venue: str(raw.venue), doi: cleanDoi2(raw.doi), arxivId: extractArxivId(str(raw.arxivId)), pmid: cleanPmid(raw.pmid), openAlexId: shortOaId(raw.openAlexId), s2Id: str(raw.s2Id), abstract: str(raw.abstract), citationCount: num(raw.citationCount), oaPdfUrl: str(raw.oaPdfUrl), url: str(raw.url), source: raw.source === "s2" || raw.source === "europepmc" || raw.source === "arxiv" ? raw.source : "openalex" });
+}
+async function saveGraphPaper(input, deps) {
+  const { paper, mode } = input, title = single(paper.title, "paper title", 250, true), topicTag = input.topicTag ? single(input.topicTag, "topic tag", 40) : "";
+  const meta = { paperTitle: title, authors: paper.authors.filter(Boolean).join("; ") || void 0, venue: paper.venue, year: paper.year ? String(paper.year) : void 0, doi: cleanDoi2(paper.doi), abstract: paper.abstract };
+  const applyTag = (doc2) => {
+    const prev = deps.store.listDocMeta(doc2.id).get(doc2.id);
+    return !topicTag ? prev ? { ...doc2, meta: prev } : doc2 : { ...doc2, meta: deps.store.updateDocTriage({ docId: doc2.id, tags: [.../* @__PURE__ */ new Set([...prev?.tags ?? [], topicTag])].slice(0, 50) }) };
+  };
+  if (mode === "abstract") {
+    const doc2 = await deps.library.createAbstract({ title, url: paper.url, ...meta });
+    await deps.indexDoc(doc2, doc2.kind === "abstract").catch(() => 0);
+    return { doc: applyTag(doc2), mode };
+  }
+  const pdfUrl = paper.oaPdfUrl ?? (paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}.pdf` : void 0);
+  if (!pdfUrl) throw new ServiceError(400, "No open-access PDF URL is available for this paper.");
+  const res = await deps.readResource(pdfUrl, "document");
+  if (!isPdfBytes(res.bytes)) throw new ServiceError(415, "The open-access link did not return a valid PDF.");
+  const docs = await deps.library.list(), absId = abstractDocId({ title, url: paper.url, ...meta }), matchedId = attachLibraryMatch(paper, docs).docId;
+  const existing = docs.find((d) => d.id === absId) ?? (matchedId ? docs.find((d) => d.id === matchedId) : void 0);
+  if (existing?.kind === "abstract") {
+    const { doc: doc2, pages } = await deps.library.attachPdf(existing.id, res.bytes);
+    if (pages.length && deps.library.hasSync(doc2.id)) deps.store.withDb(true, (db) => replaceDocPages(db, doc2.id, pages));
+    return { doc: applyTag(doc2), upgraded: true, mode };
+  }
+  const doc = await deps.library.importPdf(title, res.bytes, paper.url ?? pdfUrl, meta);
+  await deps.indexDoc(doc, true).catch(() => 0);
+  return { doc: applyTag(doc), upgraded: false, mode };
+}
+
 // src/server/notebook.ts
 import { createHash as createHash7 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
@@ -2212,7 +2682,7 @@ function isLoopbackHost(host) {
   const lower = host.toLowerCase().replace(/\.+$/, "");
   return lower === "localhost" || lower.endsWith(".localhost") || lower === "[::1]" || lower === "::1" || lower === "0.0.0.0" || lower === "[::]" || lower === "::" || /^127(?:\.\d{1,3}){3}$/.test(lower) || /^\[?::ffff:(?:7f[\da-f]{2}:[\da-f]{1,4}|0:0|127(?:\.\d{1,3}){3}|0\.0\.0\.0)\]?$/.test(lower);
 }
-function safeUrl(raw, allowZotero = false) {
+function safeUrl2(raw, allowZotero = false) {
   const url = raw?.trim() ? URL.parse(raw.trim()) : null;
   if (!url || url.username || url.password) return void 0;
   if (allowZotero && url.protocol === "zotero:") return url.href;
@@ -2221,7 +2691,7 @@ function safeUrl(raw, allowZotero = false) {
 }
 function toZoteroItem(zotero) {
   if (!zotero) return null;
-  const url = safeUrl(zotero.url) ?? safeUrl(zotero.original);
+  const url = safeUrl2(zotero.url) ?? safeUrl2(zotero.original);
   return {
     key: zotero.key ?? "",
     title: zotero.title ?? "",
@@ -2258,8 +2728,8 @@ function formatYamlFrontmatter(doc, zotero) {
   push("venue", meta.venue ?? meta.publisher);
   push("doi", meta.doi);
   push("citekey", buildCiteKey(meta));
-  push("url", safeUrl(meta.url) ?? safeUrl(doc.url) ?? safeUrl(zotero?.original));
-  push("zotero", safeUrl(zotero?.link, true) ?? safeUrl(zotero?.webUrl, true));
+  push("url", safeUrl2(meta.url) ?? safeUrl2(doc.url) ?? safeUrl2(zotero?.original));
+  push("zotero", safeUrl2(zotero?.link, true) ?? safeUrl2(zotero?.webUrl, true));
   lines.push("---");
   return lines.join("\n");
 }
@@ -4290,7 +4760,11 @@ var ReaderModel = class {
       zoteroLibraryId: settings.zoteroLibraryId,
       zoteroLibraryType: settings.zoteroLibraryType,
       hasZoteroKey: Boolean(settings.zoteroApiKey),
-      zoteroMode: zoteroModeFor(settings)
+      zoteroMode: zoteroModeFor(settings),
+      openAlexEmail: settings.openAlexEmail || "",
+      hasOpenAlexApiKey: Boolean(settings.openAlexApiKey),
+      hasSemanticScholarApiKey: Boolean(settings.semanticScholarApiKey),
+      hasNcbiApiKey: Boolean(settings.ncbiApiKey)
     };
   }
   async #native(route, system, serialized, region, streamOptions) {
@@ -4717,154 +5191,6 @@ var PdfOutlines = class {
 
 // src/server/web-article.ts
 import { parse as parse2 } from "parse5";
-
-// src/shared/academic-intake.ts
-var ARXIV_URL_RE = /^\/(?:abs|pdf)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
-var DOI_RE2 = /^10\.\d{4,9}\/[^\s<>"]+$/i;
-var arxiv = (id, versionedId) => ({ kind: "arxiv", id, versionedId, absUrl: "https://arxiv.org/abs/" + versionedId, pdfUrl: "https://arxiv.org/pdf/" + versionedId + ".pdf" });
-function doiTarget(raw) {
-  let decoded = raw;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-  }
-  const doi = decoded.replace(/[.,;]+$/, "").trim();
-  return DOI_RE2.test(doi) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? { kind: "doi", doi, url: "https://doi.org/" + encodeURI(doi) } : null;
-}
-function parseAcademicInput(raw) {
-  if (typeof raw !== "string") return null;
-  const text2 = raw.trim();
-  if (!text2 || text2.length > 8192 || /[\u0000-\u001f\u007f]/.test(text2)) return null;
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(text2)?.[1]?.toLowerCase();
-  if (scheme && !["http", "https", "arxiv", "doi"].includes(scheme)) return null;
-  const ver = (s) => /(v\d+)\/?$/i.exec(s)?.[1]?.toLowerCase() ?? "";
-  if (scheme === "http" || scheme === "https") {
-    const url = URL.parse(text2);
-    if (!url || url.username || url.password) return null;
-    if (/(?:^|\.)arxiv\.org$/i.test(url.hostname)) {
-      const m = ARXIV_URL_RE.exec(url.pathname);
-      return m ? arxiv(extractArxivId(url.href) ?? m[1].toLowerCase().replace(/v\d+$/, ""), m[1].toLowerCase()) : { kind: "url", url: url.href };
-    }
-    if (/^(?:dx\.)?doi\.org$/i.test(url.hostname)) {
-      const id2 = extractArxivId(url.href);
-      return id2 ? arxiv(id2, id2 + ver(url.pathname)) : doiTarget(url.pathname.slice(1).replace(/\/+$/, ""));
-    }
-    return { kind: "url", url: url.href };
-  }
-  const id = extractArxivId(text2);
-  return id ? arxiv(id, id + ver(text2)) : doiTarget(text2.replace(/^doi:\s*/i, "").trim());
-}
-
-// src/server/academic-intake.ts
-var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
-function pdfFilename(url) {
-  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
-  try {
-    name2 = decodeURIComponent(name2);
-  } catch {
-  }
-  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
-}
-function decodeHtml(bytes, type, charset) {
-  if (type === "application/pdf" || bytes.length > 5 * 1024 * 1024) fail("This link did not return a readable HTML article or PDF.", 415);
-  const sniff = bytes.subarray(0, 4096).toString("latin1");
-  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
-  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
-  try {
-    return new TextDecoder(encoding).decode(bytes);
-  } catch {
-    return new TextDecoder().decode(bytes);
-  }
-}
-var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
-var mergeMeta = (p, f, doi) => ({
-  paperTitle: p.paperTitle ?? f.paperTitle,
-  authors: p.authors ?? f.authors,
-  venue: p.venue ?? f.venue,
-  year: p.year ?? f.year,
-  doi: p.doi ?? f.doi ?? doi,
-  publisher: p.publisher ?? f.publisher,
-  abstract: p.abstract ?? f.abstract
-});
-function parseCrossref(bytes) {
-  try {
-    const body = JSON.parse(bytes.toString("utf8"));
-    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
-    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
-    const authors = Array.isArray(m.author) ? m.author.map(
-      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
-    ).filter(Boolean).join("; ") : void 0;
-    let year;
-    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
-      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
-      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
-        year = String(part);
-        break;
-      }
-    }
-    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
-    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
-    return {
-      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
-      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
-    };
-  } catch {
-    return { meta: {} };
-  }
-}
-function safeHtmlMeta(parseArticle, res) {
-  let html;
-  try {
-    html = decodeHtml(res.bytes, res.type, res.charset);
-  } catch {
-    return { meta: {} };
-  }
-  try {
-    const parsed = parseArticle(html, res.url.href);
-    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
-  } catch {
-    try {
-      const stub = parseArticle(html + "<p>.</p>", res.url.href);
-      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
-    } catch {
-      return { meta: {} };
-    }
-  }
-}
-async function resolveAcademicIntake(library, target, readResource, parseArticle) {
-  if (target.kind === "arxiv") {
-    const [absRes, pdfRes] = await Promise.allSettled([readResource(target.absUrl, "document"), readResource(target.pdfUrl, "document")]);
-    const absInfo = absRes.status === "fulfilled" && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
-    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
-      const meta = absInfo?.meta ?? {};
-      return { doc: await library.importPdf(meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf", pdfRes.value.bytes, target.absUrl, meta) };
-    }
-    if (absInfo?.parsed) return library.importWebDocument(absInfo.parsed);
-    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
-  }
-  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
-  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
-  const tryPdf = async (candidate, sourceUrl2, meta) => {
-    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
-    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
-  };
-  if (landRes.status === "fulfilled") {
-    const land = landRes.value;
-    if (isPdfBytes(land.bytes)) {
-      const meta = mergeMeta({}, cr.meta, target.doi);
-      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
-    }
-    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
-    const primary = redirected?.kind === "arxiv" ? redirected.pdfUrl : landInfo.pdfUrl, sourceUrl2 = redirected?.kind === "arxiv" ? redirected.absUrl : land.url.href;
-    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
-    if (pdfDoc) return pdfDoc;
-    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
-    fail("This link did not return a readable HTML article or PDF.", 415);
-  }
-  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
-}
-
-// src/server/web-article.ts
 function parseWebArticle(html, url) {
   return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "").article;
 }
@@ -5516,6 +5842,31 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "topics.list": () => ({ topics: database.withDb(false, listTopics) }),
     "topics.save": (input) => ({ topic: database.withDb(true, (db) => saveTopic(db, input)) }),
     "topics.delete": (input) => database.withDb(true, (db) => deleteTopic(db, input.id)),
+    "graph.resolve": async (input, options) => {
+      const doc = !single(input.query, "query", 500) && input.docId !== void 0 ? await documents.get(input.docId) : void 0;
+      const query = single(input.query, "query", 500) || (doc ? doc.doi || doc.url || doc.paperTitle || doc.title : "");
+      if (!query) throw new ServiceError(400, "Enter a DOI, arXiv ID, or paper title.");
+      return resolveAcademicPaper(query, { withDb: (w, run2) => database.withDb(w, run2), settings: database.settings(), fetchFn: fetchImpl, docs: await documents.list(), signal: options?.signal });
+    },
+    "graph.explore": async (input, options) => {
+      if (!Array.isArray(input.seeds) || !input.seeds.length || input.seeds.length > 10) throw new ServiceError(400, "Provide 1 to 10 seed papers.");
+      const direction = input.direction;
+      if (direction !== "earlier" && direction !== "later" && direction !== "similar") throw new ServiceError(400, "Choose earlier, later, or similar.");
+      if (input.negativeSeeds !== void 0 && (!Array.isArray(input.negativeSeeds) || input.negativeSeeds.length > 10)) throw new ServiceError(400, "Invalid negative seeds.");
+      if (input.limit !== void 0 && (typeof input.limit !== "number" || !Number.isFinite(input.limit))) throw new ServiceError(400, "Invalid graph limit.");
+      return exploreCitationGraph({
+        seeds: input.seeds.map((s) => single(s, "seed paper", 500, true)),
+        direction,
+        negativeSeeds: input.negativeSeeds?.map((s) => single(s, "negative seed", 500, true)),
+        limit: input.limit
+      }, { withDb: (w, run2) => database.withDb(w, run2), settings: database.settings(), fetchFn: fetchImpl, docs: await documents.list(), signal: options?.signal });
+    },
+    "graph.savePaper": async (input) => {
+      if (input.mode !== "abstract" && input.mode !== "oa-pdf") throw new ServiceError(400, "Choose abstract or oa-pdf.");
+      if (!isObject(input.paper)) throw new ServiceError(400, "Invalid paper payload.");
+      const topicTag = input.topicTag === void 0 ? void 0 : single(input.topicTag, "topic tag", 40);
+      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode: input.mode, topicTag }, { library: documents, store: database, readResource, indexDoc });
+    },
     "web.import": async (input) => {
       const opened = await documents.importWebDocument(input);
       await indexDoc(opened.doc, true).catch(() => 0);

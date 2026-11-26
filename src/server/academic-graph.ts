@@ -1,0 +1,262 @@
+import type { DatabaseSync } from 'node:sqlite';
+import { parseAcademicInput } from '../shared/academic-intake.js';
+import { extractArxivId } from '../shared/citation-export.js';
+import { rankEarlierByCoCitation, reconstructInvertedAbstract } from '../shared/graph-layout.js';
+import type { DocumentInfo, GraphDirection, GraphEdge, GraphExploreResult, GraphNode, GraphPaper, GraphSource } from '../shared/types.js';
+import { articleUrl } from '../shared/web-article.js';
+import { abstractDocId } from './abstract-library.js';
+import { isPdfBytes, type ResourceReader } from './academic-intake.js';
+import type { Library } from './library.js';
+import type { ReaderStore } from './reader-store.js';
+import { getGraphCache, replaceDocPages, setGraphCache } from './research-store.js';
+import { isObject, ServiceError, single, type Input, type PrivateSettings } from './service-types.js';
+
+export interface GraphContext {
+  withDb: <T>(writer: boolean, run: (db: DatabaseSync) => T) => T;
+  settings?: Partial<PrivateSettings>; fetchFn?: typeof fetch; sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void>; docs?: DocumentInfo[]; signal?: AbortSignal;
+}
+interface ResolvedWork { paper: GraphPaper; referencedIds: string[]; relatedIds: string[]; fromCache: boolean }
+
+const OA_SELECT = 'id,doi,ids,title,display_name,publication_year,authorships,primary_location,best_oa_location,cited_by_count,referenced_works,related_works,abstract_inverted_index', S2_FIELDS = 'paperId,externalIds,title,abstract,year,venue,citationCount,authors,openAccessPdf,url';
+const TTL_WORK = 86_400_000, TTL_EXPLORE = 21_600_000, sourceNextAt = new Map<GraphSource, number>();
+const str = (v: unknown) => typeof v === 'string' && v.trim() ? v.trim() : undefined, num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+const safeUrl = (v: unknown) => str(v) ? articleUrl(str(v)!)?.href : undefined, arrOf = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
+const cleanDoi = (v: unknown) => str(v)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').trim() || undefined, cleanPmid = (v: unknown) => { const s = str(v); return s && /^\d+$/.test(s) ? s : undefined; };
+const shortOaId = (v: unknown) => str(v) ? /(?:^|\/)(W\d+)\/?$/i.exec(str(v)!)?.[1]?.toUpperCase() : undefined;
+const normTitle = (s?: string) => (s ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const decodeXml = (s: string) => s.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+const s2Headers = (s?: Partial<PrivateSettings>, json = false): Record<string, string> => ({ ...(json ? { 'Content-Type': 'application/json' } : {}), ...(s?.semanticScholarApiKey ? { 'x-api-key': s.semanticScholarApiKey } : {}) });
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new ServiceError(499, 'Request canceled.'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(timer); reject(new ServiceError(499, 'Request canceled.')); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+function retryDelay(raw: string | null, attempt: number): number {
+  const text = raw?.trim(), fallback = 250 * (2 ** attempt), sec = text ? Number(text) : Number.NaN;
+  if (Number.isFinite(sec)) return sec >= 0 ? Math.min(5000, Math.round(sec * 1000)) : fallback;
+  const at = text ? Date.parse(text) : Number.NaN;
+  return Number.isFinite(at) ? Math.min(5000, Math.max(0, at - Date.now())) : fallback;
+}
+
+function makePaper(p: Omit<GraphPaper, 'id' | 'firstAuthor' | 'lastAuthor'> & { id?: string }): GraphPaper {
+  const arxivId = p.arxivId?.toLowerCase(), oaPdfUrl = safeUrl(p.oaPdfUrl) ?? (arxivId ? `https://arxiv.org/pdf/${arxivId}.pdf` : undefined);
+  const url = safeUrl(p.url) ?? (p.doi ? `https://doi.org/${p.doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : p.openAlexId ? `https://openalex.org/${p.openAlexId}` : p.pmid ? `https://europepmc.org/article/MED/${p.pmid}` : undefined);
+  const id = p.id || p.openAlexId || p.s2Id || (p.pmid ? `pmid:${p.pmid}` : p.doi ? `doi:${p.doi.toLowerCase()}` : arxivId ? `arxiv:${arxivId}` : normTitle(p.title));
+  return { ...p, id, arxivId, oaPdfUrl, url, firstAuthor: p.authors[0] ?? '', lastAuthor: p.authors.at(-1) ?? '' };
+}
+async function cachedFetch<T>(
+  source: GraphSource, key: string, url: string, init: RequestInit, ttlMs: number, parse: (res: Response) => Promise<T>, ctx: GraphContext, degraded: Set<string>
+): Promise<{ data: T; fromCache: boolean } | undefined> {
+  const cached = ctx.withDb(false, db => getGraphCache<T>(db, key));
+  if (cached && !cached.stale) return { data: cached.value, fromCache: true };
+  const fetcher = ctx.fetchFn ?? globalThis.fetch, sleep = ctx.sleepFn ?? defaultSleep, headers = new Headers(init.headers);
+  if (!headers.has('User-Agent')) headers.set('User-Agent', 'DSH-Paper-Reader/0.1 (academic graph)');
+  let failed = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (ctx.signal?.aborted) throw new ServiceError(499, 'Request canceled.');
+    if (!ctx.fetchFn || ctx.fetchFn === globalThis.fetch) {
+      const gap = source === 's2' ? (ctx.settings?.semanticScholarApiKey ? 120 : 1050) : source === 'arxiv' ? 350 : source === 'europepmc' ? 200 : 100;
+      const now = Date.now(), prev = sourceNextAt.get(source) ?? 0;
+      sourceNextAt.set(source, Math.max(now, prev) + gap);
+      if (prev > now) await sleep(prev - now, ctx.signal);
+    }
+    try {
+      const timeout = AbortSignal.timeout(12_000), res = await fetcher(url, { ...init, headers, signal: ctx.signal ? AbortSignal.any([timeout, ctx.signal]) : timeout });
+      if (res.ok) { const data = await parse(res); ctx.withDb(true, db => setGraphCache(db, key, source, data, ttlMs)); return { data, fromCache: false }; }
+      if (res.status === 404) return undefined;
+      failed = true;
+      if (![429, 502, 503, 504].includes(res.status) || attempt >= 2) break;
+      await sleep(retryDelay(res.headers.get('retry-after'), attempt), ctx.signal);
+    } catch {
+      if (ctx.signal?.aborted) throw new ServiceError(499, 'Request canceled.');
+      failed = true;
+      if (attempt < 2) await sleep(250 * (2 ** attempt), ctx.signal);
+    }
+  }
+  if (failed) degraded.add(source);
+  return cached ? { data: cached.value, fromCache: true } : undefined;
+}
+const fetchJson = (source: GraphSource, key: string, url: string, ctx: GraphContext, degraded: Set<string>, ttlMs = TTL_WORK, init: RequestInit = { method: 'GET' }) =>
+  cachedFetch<unknown>(source, key, url, init, ttlMs, r => r.json(), ctx, degraded);
+const oaUrl = (pathname: string, params: Record<string, string>, s?: Partial<PrivateSettings>): string => {
+  const url = new URL('https://api.openalex.org' + pathname);
+  for (const [k, v] of Object.entries({ select: OA_SELECT, ...params, ...(s?.openAlexEmail ? { mailto: s.openAlexEmail } : {}), ...(s?.openAlexApiKey ? { api_key: s.openAlexApiKey } : {}) })) url.searchParams.set(k, v);
+  return url.href;
+};
+function parseOaWork(raw: unknown): ResolvedWork | undefined {
+  if (!isObject(raw)) return undefined;
+  const oaId = shortOaId(raw.id), title = str(raw.title) ?? str(raw.display_name);
+  if (!oaId || !title) return undefined;
+  const ids = isObject(raw.ids) ? raw.ids : {}, prim = isObject(raw.primary_location) ? raw.primary_location : {}, oa = isObject(raw.best_oa_location) ? raw.best_oa_location : {}, doi = cleanDoi(raw.doi) ?? cleanDoi(ids.doi);
+  const arxivId = extractArxivId(str(raw.doi), doi) ?? extractArxivId(str(prim.landing_page_url)) ?? extractArxivId(str(oa.landing_page_url)) ?? extractArxivId(str(oa.pdf_url));
+  const authors = arrOf(raw.authorships).map(a => isObject(a) && isObject(a.author) ? str(a.author.display_name) ?? '' : '').filter(Boolean);
+  const abstract = isObject(raw.abstract_inverted_index) ? reconstructInvertedAbstract(raw.abstract_inverted_index as Record<string, number[]>) || undefined : undefined;
+  return {
+    paper: makePaper({ id: oaId, openAlexId: oaId, title, authors, year: num(raw.publication_year), venue: isObject(prim.source) ? str(prim.source.display_name) : undefined, doi, arxivId, pmid: str(ids.pmid) ? /(\d+)\/?$/.exec(str(ids.pmid)!)?.[1] : undefined, abstract, citationCount: num(raw.cited_by_count), oaPdfUrl: str(oa.pdf_url), url: str(prim.landing_page_url), source: 'openalex' }),
+    referencedIds: arrOf(raw.referenced_works).map(shortOaId).filter((v): v is string => Boolean(v)),
+    relatedIds: arrOf(raw.related_works).map(shortOaId).filter((v): v is string => Boolean(v)), fromCache: false
+  };
+}
+function parseS2Paper(raw: unknown): GraphPaper | undefined {
+  if (!isObject(raw) || !str(raw.title)) return undefined;
+  const ext = isObject(raw.externalIds) ? raw.externalIds : {}, doi = cleanDoi(ext.DOI);
+  const authors = arrOf(raw.authors).map(a => isObject(a) ? str(a.name) ?? '' : '').filter(Boolean);
+  return makePaper({ id: str(raw.paperId), s2Id: str(raw.paperId), title: str(raw.title)!, authors, year: num(raw.year), venue: str(raw.venue), doi, arxivId: extractArxivId(str(ext.ArXiv), doi), pmid: cleanPmid(ext.PubMed), abstract: str(raw.abstract), citationCount: num(raw.citationCount), oaPdfUrl: isObject(raw.openAccessPdf) ? str(raw.openAccessPdf.url) : undefined, url: str(raw.url), source: 's2' });
+}
+function parseEpmcItem(raw: unknown): GraphPaper | undefined {
+  if (!isObject(raw) || !str(raw.title)) return undefined;
+  const authors = arrOf(isObject(raw.authorList) ? raw.authorList.author : undefined).map(a => isObject(a) ? str(a.fullName) ?? '' : '').filter(Boolean);
+  if (!authors.length && str(raw.authorString)) authors.push(...str(raw.authorString)!.split(/\s*,\s*/).filter(Boolean));
+  const pdf = arrOf(isObject(raw.fullTextUrlList) ? raw.fullTextUrlList.fullTextUrl : undefined).find(u => isObject(u) && u.documentStyle === 'pdf' && u.availabilityCode === 'OA' && str(u.url));
+  const year = Number(raw.pubYear), cited = Number(raw.citedByCount);
+  return makePaper({ title: decodeXml(str(raw.title)!), authors, year: Number.isFinite(year) && year > 1800 ? year : undefined, venue: str(raw.journalTitle), doi: cleanDoi(raw.doi), pmid: cleanPmid(raw.pmid) ?? cleanPmid(raw.id), abstract: str(raw.abstractText) ? decodeXml(str(raw.abstractText)!) : undefined, citationCount: Number.isFinite(cited) ? cited : undefined, oaPdfUrl: isObject(pdf) ? str(pdf.url) : undefined, source: 'europepmc' });
+}
+function parseArxivXml(xml: string): GraphPaper | undefined {
+  const entry = /<entry>([\s\S]*?)<\/entry>/i.exec(xml)?.[1];
+  if (!entry) return undefined;
+  const tag = (n: string) => new RegExp(`<${n}[^>]*>([\\s\\S]*?)<\\/${n}>`, 'i').exec(entry)?.[1] ?? '';
+  const idUrl = decodeXml(tag('id')), title = decodeXml(tag('title')), arxivId = extractArxivId(idUrl);
+  const authors = [...entry.matchAll(/<author>\s*<name>([\s\S]*?)<\/name>/gi)].map(m => decodeXml(m[1])).filter(Boolean), year = Number(/(\d{4})/.exec(tag('published'))?.[1]);
+  if (!title || /arxiv\.org\/api\/errors/i.test(idUrl) || (!authors.length && !arxivId)) return undefined;
+  return makePaper({ title, authors, year: Number.isFinite(year) && year > 1900 ? year : undefined, venue: 'arXiv', doi: cleanDoi(decodeXml(tag('arxiv:doi'))), arxivId, abstract: decodeXml(tag('summary')) || undefined, url: idUrl, source: 'arxiv' });
+}
+
+async function fetchOpenAlexByIds(ids: string[], ctx: GraphContext, degraded: Set<string>): Promise<{ works: ResolvedWork[]; fromCache: boolean }> {
+  const unique = [...new Set(ids.map(shortOaId).filter((v): v is string => Boolean(v)))], works: ResolvedWork[] = [];
+  let allCached = unique.length > 0;
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50);
+    const res = await fetchJson('openalex', 'oa:batch:' + [...chunk].sort().join('|'), oaUrl('/works', { filter: 'openalex:' + chunk.join('|'), 'per-page': String(chunk.length) }, ctx.settings), ctx, degraded);
+    if (!res?.fromCache) allCached = false;
+    for (const row of arrOf(isObject(res?.data) ? res.data.results : undefined)) { const w = parseOaWork(row); if (w) works.push({ ...w, fromCache: Boolean(res?.fromCache) }); }
+  }
+  return { works, fromCache: allCached };
+}
+const parsePaperWork = (paper: GraphPaper | undefined, fromCache: boolean): ResolvedWork | undefined => paper ? { paper, referencedIds: [], relatedIds: [], fromCache } : undefined;
+async function resolveWorkInternal(rawInput: string, ctx: GraphContext, degraded: Set<string>): Promise<ResolvedWork | undefined> {
+  const query = rawInput.trim();
+  if (!query) return undefined;
+  const oaDirect = shortOaId(query), pmidDirect = /^pmid:?\s*(\d+)$/i.exec(query)?.[1], parsed = parseAcademicInput(query);
+  const fetchOa = async (p: string, q: Record<string, string>, k: string) => {
+    const res = await fetchJson('openalex', k, oaUrl(p, q, ctx.settings), ctx, degraded);
+    const w = res ? parseOaWork(isObject(res.data) && Array.isArray(res.data.results) ? res.data.results[0] : res.data) : undefined;
+    return w && res ? { ...w, fromCache: res.fromCache } : undefined;
+  };
+  let work = oaDirect ? await fetchOa('/works/' + oaDirect, {}, 'oa:id:' + oaDirect)
+    : pmidDirect ? await fetchOa('/works/pmid:' + pmidDirect, {}, 'oa:pmid:' + pmidDirect)
+    : parsed?.kind === 'doi' ? await fetchOa('/works/https://doi.org/' + encodeURIComponent(parsed.doi.toLowerCase()), {}, 'oa:doi:' + parsed.doi.toLowerCase())
+    : parsed?.kind === 'arxiv' ? (await fetchOa('/works/https://doi.org/10.48550/arxiv.' + encodeURIComponent(parsed.id.toLowerCase()), {}, 'oa:arxiv:' + parsed.id.toLowerCase()) ?? await fetchOa('/works', { filter: 'locations.landing_page_url:https://arxiv.org/abs/' + parsed.id.toLowerCase(), 'per-page': '1' }, 'oa:arxiv-loc:' + parsed.id.toLowerCase()))
+    : await fetchOa('/works', { search: query, 'per-page': '3' }, 'oa:search:' + normTitle(query));
+  if (work && parsed?.kind === 'arxiv') work = { ...work, paper: { ...work.paper, arxivId: work.paper.arxivId ?? parsed.id.toLowerCase(), oaPdfUrl: work.paper.oaPdfUrl ?? `https://arxiv.org/pdf/${parsed.id.toLowerCase()}.pdf` } };
+  if (!work && parsed?.kind === 'arxiv') {
+    const res = await cachedFetch<string>('arxiv', 'arxiv:id:' + parsed.id, 'https://export.arxiv.org/api/query?id_list=' + encodeURIComponent(parsed.id), { method: 'GET' }, TTL_WORK, r => r.text(), ctx, degraded);
+    if (res) work = parsePaperWork(parseArxivXml(res.data), res.fromCache);
+  }
+  if (!work || (!work.paper.abstract && (work.paper.doi || pmidDirect || parsed?.kind === 'doi'))) {
+    const doi = work?.paper.doi ?? (parsed?.kind === 'doi' ? parsed.doi : undefined), pmid = work?.paper.pmid ?? pmidDirect, epmcQ = doi ? `DOI:"${doi}"` : pmid ? `EXT_ID:${pmid} AND SRC:MED` : !work ? query : '';
+    const res = epmcQ ? await fetchJson('europepmc', 'epmc:' + epmcQ.toLowerCase(), `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(epmcQ)}&format=json&resultType=core&pageSize=1`, ctx, degraded) : undefined;
+    const epmc = parseEpmcItem(arrOf(isObject(res?.data) && isObject(res.data.resultList) ? res.data.resultList.result : undefined)[0]);
+    if (epmc && res) work = work ? { ...work, paper: { ...work.paper, abstract: work.paper.abstract ?? epmc.abstract, pmid: work.paper.pmid ?? epmc.pmid, oaPdfUrl: work.paper.oaPdfUrl ?? epmc.oaPdfUrl, venue: work.paper.venue ?? epmc.venue } } : parsePaperWork(epmc, res.fromCache);
+  }
+  if (!work) {
+    const s2Key = parsed?.kind === 'doi' ? 'DOI:' + parsed.doi : parsed?.kind === 'arxiv' ? 'ARXIV:' + parsed.id : pmidDirect ? 'PMID:' + pmidDirect : '';
+    const url = s2Key ? `https://api.semanticscholar.org/graph/v1/paper/${encodeURIComponent(s2Key)}?fields=${S2_FIELDS}` : `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=1&fields=${S2_FIELDS}`;
+    const res = await fetchJson('s2', 's2:paper:' + (s2Key || normTitle(query)), url, ctx, degraded, TTL_WORK, { method: 'GET', headers: s2Headers(ctx.settings) });
+    if (res) work = parsePaperWork(parseS2Paper(isObject(res.data) && Array.isArray(res.data.data) ? res.data.data[0] : res.data), res.fromCache);
+  }
+  return work;
+}
+
+const attachLibraryMatch = <T extends GraphPaper>(paper: T, docs?: DocumentInfo[]): T => {
+  const pDoi = paper.doi?.toLowerCase(), pArxiv = paper.arxivId?.toLowerCase(), pTitle = normTitle(paper.title);
+  const hit = docs?.find(d => (pDoi && cleanDoi(d.doi)?.toLowerCase() === pDoi) || (pArxiv && extractArxivId(d.url, d.doi)?.toLowerCase() === pArxiv) || (pTitle && pTitle === normTitle(d.paperTitle || d.title)));
+  return hit ? { ...paper, inLibrary: true, docId: hit.id } : { ...paper, inLibrary: false };
+};
+
+export async function resolveAcademicPaper(input: string, ctx: GraphContext): Promise<{ paper: GraphPaper | null; degraded: string[]; fromCache: boolean }> {
+  const degraded = new Set<string>(), work = await resolveWorkInternal(input, ctx, degraded);
+  return { paper: work ? attachLibraryMatch(work.paper, ctx.docs) : null, degraded: [...degraded], fromCache: Boolean(work?.fromCache) };
+}
+export async function exploreCitationGraph(params: { seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, ctx: GraphContext): Promise<GraphExploreResult> {
+  const limit = Math.min(45, Math.max(25, Math.floor(params.limit ?? 35))), degraded = new Set<string>(), resolvedSeeds: ResolvedWork[] = [], seedKeySet = new Set<string>();
+  for (const raw of params.seeds.slice(0, 5)) { const w = await resolveWorkInternal(raw, ctx, degraded); if (w && !seedKeySet.has(w.paper.id)) { seedKeySet.add(w.paper.id); resolvedSeeds.push(w); } }
+  if (!resolvedSeeds.length) return { seeds: [], nodes: [], edges: [], degraded: [...degraded], fromCache: false };
+  const seedNodes: GraphNode[] = resolvedSeeds.map(s => ({ ...attachLibraryMatch(s.paper, ctx.docs), isSeed: true, direction: 'seed' }));
+  const budget = Math.max(1, limit - seedNodes.length), discovered: GraphNode[] = [], edges: GraphEdge[] = [];
+  let fromCache = resolvedSeeds.every(s => s.fromCache);
+  const negSet = new Set((params.negativeSeeds ?? []).flatMap(r => { const p = parseAcademicInput(r); return [r.trim().toLowerCase(), shortOaId(r)?.toLowerCase(), p?.kind === 'doi' ? p.doi.toLowerCase() : undefined, p?.kind === 'arxiv' ? p.id.toLowerCase() : undefined].filter((v): v is string => Boolean(v)); }));
+  const pushDisc = (paper: GraphPaper, dir: GraphDirection, coCitations?: number) => {
+    if (discovered.length >= budget || seedKeySet.has(paper.id) || negSet.has(paper.id.toLowerCase()) || (paper.doi && negSet.has(paper.doi.toLowerCase())) || (paper.arxivId && negSet.has(paper.arxivId.toLowerCase())) || discovered.some(d => d.id === paper.id)) return false;
+    discovered.push({ ...attachLibraryMatch(paper, ctx.docs), isSeed: false, direction: dir, ...(coCitations !== undefined ? { coCitations } : {}) });
+    return true;
+  };
+  if (params.direction === 'earlier') {
+    const counts = new Map<string, number>();
+    for (const s of resolvedSeeds) for (const refId of new Set(s.referencedIds)) if (!seedKeySet.has(refId)) { counts.set(refId, (counts.get(refId) ?? 0) + 1); edges.push({ source: s.paper.id, target: refId, kind: 'cites' }); }
+    const batch = await fetchOpenAlexByIds([...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 100).map(([id]) => id), ctx, degraded);
+    fromCache = fromCache && batch.fromCache;
+    for (const paper of rankEarlierByCoCitation(batch.works.map(w => w.paper), counts, budget)) pushDisc(paper, 'earlier', counts.get(paper.id) ?? 1);
+  } else if (params.direction === 'later') {
+    const oaIds = resolvedSeeds.map(s => s.paper.openAlexId).filter((v): v is string => Boolean(v));
+    const res = oaIds.length ? await fetchJson('openalex', 'oa:cites:' + [...oaIds].sort().join('|'), oaUrl('/works', { filter: 'cites:' + oaIds.join('|'), sort: 'cited_by_count:desc', 'per-page': '50' }, ctx.settings), ctx, degraded, TTL_EXPLORE) : undefined;
+    fromCache = fromCache && Boolean(res?.fromCache);
+    for (const row of arrOf(isObject(res?.data) ? res.data.results : undefined)) {
+      const w = parseOaWork(row);
+      if (!w || !pushDisc(w.paper, 'later')) continue;
+      const hits = resolvedSeeds.filter(s => s.paper.openAlexId && w.referencedIds.includes(s.paper.openAlexId));
+      for (const t of hits.length ? hits : [resolvedSeeds[0]]) edges.push({ source: w.paper.id, target: t.paper.id, kind: 'cites' });
+    }
+  } else {
+    const posIds = resolvedSeeds.map(s => s.paper.s2Id ?? (s.paper.doi ? 'DOI:' + s.paper.doi : s.paper.arxivId ? 'ARXIV:' + s.paper.arxivId : s.paper.pmid ? 'PMID:' + s.paper.pmid : '')).filter(Boolean);
+    const negIds = (params.negativeSeeds ?? []).map(r => { const p = parseAcademicInput(r); return p?.kind === 'doi' ? 'DOI:' + p.doi : p?.kind === 'arxiv' ? 'ARXIV:' + p.id : r.trim(); }).filter(Boolean);
+    if (posIds.length) {
+      const res = await fetchJson('s2', `s2:rec:${posIds.join('|')}:${negIds.join('|')}`, `https://api.semanticscholar.org/recommendations/v1/papers/?fields=${S2_FIELDS}&limit=45`, ctx, degraded, TTL_EXPLORE, { method: 'POST', headers: s2Headers(ctx.settings, true), body: JSON.stringify({ positivePaperIds: posIds, negativePaperIds: negIds }) });
+      fromCache = fromCache && Boolean(res?.fromCache);
+      for (const row of arrOf(isObject(res?.data) ? res.data.recommendedPapers : undefined)) { const paper = parseS2Paper(row); if (paper && pushDisc(paper, 'similar')) edges.push({ source: resolvedSeeds[0].paper.id, target: paper.id, kind: 'related' }); }
+    }
+    if (discovered.length < budget) {
+      const batch = await fetchOpenAlexByIds([...new Set(resolvedSeeds.flatMap(s => s.relatedIds).filter(id => !seedKeySet.has(id)))].slice(0, 50), ctx, degraded);
+      fromCache = fromCache && batch.fromCache;
+      for (const w of batch.works) if (pushDisc(w.paper, 'similar')) edges.push({ source: (resolvedSeeds.find(s => s.relatedIds.includes(w.paper.id)) ?? resolvedSeeds[0]).paper.id, target: w.paper.id, kind: 'related' });
+    }
+  }
+  if (!discovered.length && params.direction !== 'similar' && resolvedSeeds.some(s => s.paper.pmid)) {
+    const pmidSeed = resolvedSeeds.find(s => s.paper.pmid)!, ep = params.direction === 'earlier' ? 'references' : 'citations';
+    const res = await fetchJson('europepmc', `epmc:${ep}:${pmidSeed.paper.pmid}`, `https://www.ebi.ac.uk/europepmc/webservices/rest/MED/${pmidSeed.paper.pmid}/${ep}?format=json&pageSize=45`, ctx, degraded, TTL_EXPLORE);
+    const listObj = isObject(res?.data) ? res.data[ep === 'references' ? 'referenceList' : 'citationList'] : undefined;
+    for (const item of arrOf(isObject(listObj) ? listObj[ep === 'references' ? 'reference' : 'citation'] : undefined)) { const paper = parseEpmcItem(item); if (paper && pushDisc(paper, params.direction)) edges.push(params.direction === 'earlier' ? { source: pmidSeed.paper.id, target: paper.id, kind: 'cites' } : { source: paper.id, target: pmidSeed.paper.id, kind: 'cites' }); }
+  }
+  const nodes = [...seedNodes, ...discovered].slice(0, limit), nodeIds = new Set(nodes.map(n => n.id));
+  return { seeds: seedNodes, nodes, edges: edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)), degraded: [...degraded], fromCache };
+}
+export function readGraphPaperInput(raw: Input): GraphPaper {
+  const title = single(raw.title, 'paper title', 250, true), authors = arrOf(raw.authors).map(a => str(a) ?? '').filter(Boolean).slice(0, 100);
+  return makePaper({ id: str(raw.id), title, authors, year: num(raw.year), venue: str(raw.venue), doi: cleanDoi(raw.doi), arxivId: extractArxivId(str(raw.arxivId)), pmid: cleanPmid(raw.pmid), openAlexId: shortOaId(raw.openAlexId), s2Id: str(raw.s2Id), abstract: str(raw.abstract), citationCount: num(raw.citationCount), oaPdfUrl: str(raw.oaPdfUrl), url: str(raw.url), source: raw.source === 's2' || raw.source === 'europepmc' || raw.source === 'arxiv' ? raw.source : 'openalex' });
+}
+export async function saveGraphPaper(
+  input: { paper: GraphPaper; mode: 'abstract' | 'oa-pdf'; topicTag?: string },
+  deps: { library: Library; store: ReaderStore; readResource: ResourceReader; indexDoc: (doc: DocumentInfo, force?: boolean) => Promise<number> }
+): Promise<{ doc: DocumentInfo; upgraded?: boolean; mode: 'abstract' | 'oa-pdf' }> {
+  const { paper, mode } = input, title = single(paper.title, 'paper title', 250, true), topicTag = input.topicTag ? single(input.topicTag, 'topic tag', 40) : '';
+  const meta = { paperTitle: title, authors: paper.authors.filter(Boolean).join('; ') || undefined, venue: paper.venue, year: paper.year ? String(paper.year) : undefined, doi: cleanDoi(paper.doi), abstract: paper.abstract };
+  const applyTag = (doc: DocumentInfo): DocumentInfo => { const prev = deps.store.listDocMeta(doc.id).get(doc.id); return !topicTag ? (prev ? { ...doc, meta: prev } : doc) : { ...doc, meta: deps.store.updateDocTriage({ docId: doc.id, tags: [...new Set([...(prev?.tags ?? []), topicTag])].slice(0, 50) }) }; };
+  if (mode === 'abstract') { const doc = await deps.library.createAbstract({ title, url: paper.url, ...meta }); await deps.indexDoc(doc, doc.kind === 'abstract').catch(() => 0); return { doc: applyTag(doc), mode }; }
+  const pdfUrl = paper.oaPdfUrl ?? (paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}.pdf` : undefined);
+  if (!pdfUrl) throw new ServiceError(400, 'No open-access PDF URL is available for this paper.');
+  const res = await deps.readResource(pdfUrl, 'document');
+  if (!isPdfBytes(res.bytes)) throw new ServiceError(415, 'The open-access link did not return a valid PDF.');
+  const docs = await deps.library.list(), absId = abstractDocId({ title, url: paper.url, ...meta }), matchedId = attachLibraryMatch(paper, docs).docId;
+  const existing = docs.find(d => d.id === absId) ?? (matchedId ? docs.find(d => d.id === matchedId) : undefined);
+  if (existing?.kind === 'abstract') {
+    const { doc, pages } = await deps.library.attachPdf(existing.id, res.bytes);
+    if (pages.length && deps.library.hasSync(doc.id)) deps.store.withDb(true, db => replaceDocPages(db, doc.id, pages));
+    return { doc: applyTag(doc), upgraded: true, mode };
+  }
+  const doc = await deps.library.importPdf(title, res.bytes, paper.url ?? pdfUrl, meta);
+  await deps.indexDoc(doc, true).catch(() => 0);
+  return { doc: applyTag(doc), upgraded: false, mode };
+}
