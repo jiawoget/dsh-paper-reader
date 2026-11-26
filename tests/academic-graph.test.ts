@@ -6,10 +6,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { computeCitationMapLayout, rankEarlierByCoCitation, reconstructInvertedAbstract } from '../src/shared/graph-layout.js';
 import type { GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
-import { exploreCitationGraph, resolveAcademicPaper, type GraphContext } from '../src/server/academic-graph.js';
+import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from '../src/server/academic-graph.js';
 import { Library } from '../src/server/library.js';
 import { ReaderStore } from '../src/server/reader-store.js';
 import { ensureResearchSchema, getGraphCache, setGraphCache } from '../src/server/research-store.js';
+import { ServiceError } from '../src/server/service-types.js';
 import { createServices } from '../src/server/services.js';
 
 const jsonRes = (body: unknown, status = 200, headers?: Record<string, string>) =>
@@ -79,6 +80,15 @@ test('429 retry-after backoff succeeds; persistent failures use stale SQLite cac
     const degraded = await resolveAcademicPaper('W99', { withDb: (_, run) => run(db), fetchFn: async () => jsonRes({}, 429), sleepFn: async ms => { staleSleeps.push(ms); } });
     assert.ok(degraded.paper?.title === 'Stale Cached Paper' && degraded.fromCache && degraded.degraded.includes('openalex'));
     assert.deepEqual(staleSleeps, [250, 500]);
+    const dateSleeps: number[] = [];
+    await resolveAcademicPaper('W98', { withDb: (_, run) => run(db), fetchFn: async u => String(u).includes('openalex') ? jsonRes({}, 429, { 'retry-after': new Date(Date.now() + 2000).toUTCString() }) : jsonRes({}, 404), sleepFn: async ms => { dateSleeps.push(ms); } });
+    assert.ok(dateSleeps.length === 2 && dateSleeps[0] >= 500 && dateSleeps[0] <= 2500);
+    const ac = new AbortController(), t0 = Date.now();
+    setTimeout(() => ac.abort(), 30);
+    await assert.rejects(() => resolveAcademicPaper('W55', { withDb: (_, run) => run(db), fetchFn: async () => jsonRes({}, 429, { 'retry-after': '5' }), signal: ac.signal }), err => err instanceof ServiceError && err.status === 499);
+    assert.ok(Date.now() - t0 < 200);
+    assert.equal((await resolveAcademicPaper('2309.06180', { withDb: (_, run) => run(db), fetchFn: async u => String(u).includes('export.arxiv.org') ? new Response('<feed><entry><id>http://arxiv.org/api/errors#bad</id><title>Error</title><author><name>arXiv api core</name></author></entry></feed>') : jsonRes({}, 404) })).paper, null);
+    assert.deepEqual([readGraphPaperInput({ title: 'T', arxivId: '../bad', pmid: '12a' }).arxivId, readGraphPaperInput({ title: 'T', arxivId: 'arXiv:2309.06180v2', pmid: '33567185' }).arxivId, readGraphPaperInput({ title: 'T', pmid: '12a' }).pmid, readGraphPaperInput({ title: 'T', pmid: '33567185' }).pmid], [undefined, '2309.06180', undefined, '33567185']);
   } finally { db.close(); }
 });
 
