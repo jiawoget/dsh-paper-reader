@@ -3,6 +3,7 @@ import type { BookPlace } from './book-place.js';
 import type { PdfOutlineEntry, PdfOutlinePage } from './pdf-outline.js';
 import type { AnnotationColor, AnnotationSaveInput, PaperAnnotation } from './annotations.js';
 import type { ArticleLayout, WebArticle } from './web-article.js';
+import type { BulkRefFormat } from './citation-bulk.js';
 
 export type ReadingSide = 'source' | 'translation';
 
@@ -168,6 +169,8 @@ export interface Operations {
   'library.updateMeta': [{ id: string; paperTitle?: string; authors?: string | string[]; venue?: string; year?: string; doi?: string }, { doc: DocumentInfo }];
   'library.delete': [{ id: string }, { id: string; deleted: boolean }];
   'library.createAbstract': [CreateAbstractInput, { doc: DocumentInfo }];
+  'library.importRefs': [{ text: string; format?: BulkRefFormat | 'auto'; tag?: string }, { created: number; existing: number; skipped: number; docs: DocumentInfo[] }];
+  'library.exportRefs': [{ docIds?: string[]; format: BulkRefFormat }, { format: BulkRefFormat; filename: string; content: string; count: number }];
   'library.progress.save': [{ docId: string; lastPage?: number; pageCount?: number; scrollFraction?: number }, { meta: DocMeta }];
   'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[] }, { meta: DocMeta }];
   'library.search': [{ query: string }, { hits: LibrarySearchHit[] }];

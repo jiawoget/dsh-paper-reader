@@ -10,6 +10,8 @@ import { AnnotationLayer } from './annotation-layer.js';
 import { discardNotebook, insertNotebookPassage, leaveNotebook, refreshNotebookHighlights } from './notebook.js';
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
 import { renderArticle } from './article-view.js';
+import { abstractOnlyLabel, attachPdfToAbstract, renderAbstractView } from './abstract-view.js';
+import { initReaderChrome, openLibraryLabel } from './reader-chrome.js';
 import { installCitationPreviews } from './citation-preview.js';
 import { openPdf, bundledPdfUrl, type PdfDocument, type PdfPageView } from './pdf-view.js';
 import { collectionsDialog } from './collections-dialog.js';
@@ -27,7 +29,7 @@ import { readRegion } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
 import { discussionId } from './passage-links.js';
 import type { DiscussionRef } from './discussion-drafts.js';
-import { api, button, byId, el, icon, message, readerLabel as label, sourceUrl, syncTheme, toast, type Glyph, type ReaderPort } from './ui.js';
+import { api, button, byId, el, message, readerLabel as label, sourceUrl, toast, type Glyph, type ReaderPort } from './ui.js';
 import { DocSearch } from './doc-search.js';
 import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './jump-history.js';
 import { bindPdfControls, runRetranslate, type PdfControlsHandle, type ZoomSetting } from './pdf-controls.js';
@@ -340,14 +342,14 @@ class Reader implements ReaderPort {
     return this.navigate(opened.doc.id,opened.page,opened.anchor,'',undefined,undefined,{opened:opened.doc});
   }
   async navigate(id:string,page?:number,anchor='',quote='',target?:TranslatedLocator,range?:SavedSelectionRange,
-    options?:{opened?:DocumentInfo;restoreWithinPage?:boolean;fromContents?:boolean;skipHistory?:boolean}):Promise<void>{
+    options?:{opened?:DocumentInfo;restoreWithinPage?:boolean;fromContents?:boolean;skipHistory?:boolean;forceReload?:boolean}):Promise<void>{
     if(!options?.skipHistory && this.view && this.loadedId===id && ((page??this.page)!==this.page || Boolean(anchor) || Boolean(options?.fromContents && byId('paperScroll').scrollTop>4)))this.jumpHistory.push(this.readingPosition(false));
     this.cancelCapture(false); this.beforeCapture=undefined;
     this.cancelPin();this.marks.closePageEditor();
     const readingLink=Boolean(anchor && !options?.fromContents && !outlineLocation(anchor));
     if(readingLink)this.desk.dismissDrawer();
     this.card.close();
-    if(readingLink || id!==this.loadedId) {
+    if(readingLink || id!==this.loadedId || options?.forceReload) {
       this.readingText=false;
       this.updatePageFormat();
     }
@@ -355,7 +357,7 @@ class Reader implements ReaderPort {
     const revealTranslation=translatedSource && !this.parallel;
     if(revealTranslation)this.setReadingMode('bilingual');
     else if(readingLink && !translatedSource && this.desk.isNarrow)this.setReadingMode('source');
-    if(!revealTranslation && this.view && !this.navigating && id===this.loadedId && (page??this.page)===this.page){
+    if(!options?.forceReload && !revealTranslation && this.view && !this.navigating && id===this.loadedId && (page??this.page)===this.page){
       if(anchor)this.locateAnchor(this.view,anchor,quote,target,range);
       else if(this.doc.book && page && options?.opened)byId('paperScroll').scrollTop=0;
       this.remember(anchor,quote,target,range);return;
@@ -364,7 +366,7 @@ class Reader implements ReaderPort {
     this.navigating=version;
     byId('loading').textContent=label('Opening document…','正在打开文档…');byId('loading').hidden=false;
     try{
-      const changed=id!==this.loadedId;
+      const changed=Boolean(options?.forceReload) || id!==this.loadedId;
       const opened=options?.opened;
       let doc=opened && (opened.book?.sections.length || opened.paragraphs || opened.kind==='pdf') ? opened :
         changed ? (await api('library.get',{id})).doc : this.doc;
@@ -440,7 +442,7 @@ class Reader implements ReaderPort {
     const section=doc.book?.sections[page-1];
     byId('docMeta').textContent=section ? section.title : doc.authors ? [doc.authors,doc.venue].filter(Boolean).join(' · ') : doc.kind==='web' && doc.url ? new URL(doc.url).hostname : '';
     byId('docMeta').title=section ? section.chapterTitle+' · '+section.title : '';
-    byId('sourceInfo').textContent=doc.id==='pagedattention'?label('English','英文'):doc.book?label('Book section','书籍小节'):doc.kind==='web'?label('Web article','网页文章'):'PDF';
+    byId('sourceInfo').textContent=doc.id==='pagedattention'?label('English','英文'):doc.book?label('Book section','书籍小节'):doc.kind==='abstract'?abstractOnlyLabel():doc.kind==='web'?label('Web article','网页文章'):'PDF';
     byId('pageCount').closest<HTMLElement>('.page-navigation')!.hidden = !pdf;
     showSectionControls(doc,page);
     const pages=this.pdf?.pages||1, count=byId<HTMLButtonElement>('pageCount');
@@ -516,7 +518,14 @@ class Reader implements ReaderPort {
         this.pdfControls?.syncFocus(eff,focusLabel,Boolean(degraded),this.desk.focus);
       }};
     let view: PageView;
-    try { view=pdf?await pdf.render(options):renderArticle({...options,zoom:this.zoom==='fit-page'?1:this.zoom}); }
+    try {
+      view = pdf ? await pdf.render(options)
+        : doc.kind === 'abstract' ? renderAbstractView({
+            doc, sourceEl, translationEl, translations, targetLanguage, onSelect,
+            onAttached: upgraded => this.handleAttachedPdf(upgraded)
+          })
+        : renderArticle({...options,zoom:this.zoom==='fit-page'?1:this.zoom});
+    }
     catch (error) {
       if(version!==this.epoch)return;
       this.card.close();this.view=undefined;
@@ -529,7 +538,7 @@ class Reader implements ReaderPort {
     this.paintMarks();
     this.translate.hidden=Boolean(pdf)||!view.blocks.some(b=>b.text && !b.translation && !translations[b.id]);
     this.syncRetranslate();
-    this.translate.textContent = doc.book ? label('Translate section','翻译本节') : doc.kind === 'web' ? label('Translate article', '翻译文章') : label('Translate page', '翻译本页');
+    this.translate.textContent = doc.book ? label('Translate section','翻译本节') : doc.kind === 'abstract' ? label('Translate abstract', '翻译摘要') : doc.kind === 'web' ? label('Translate article', '翻译文章') : label('Translate page', '翻译本页');
     byId('loading').hidden=true;
     this.repaintNotes();
     this.search.syncPage();
@@ -544,7 +553,7 @@ class Reader implements ReaderPort {
     if (!active() || this.translatingView===view) return;
     if (!view.blocks.length) {
       view.setTranslationState('scanned', label('This page has no selectable text. Run OCR on the PDF, then import the searchable copy.','本页没有可选中文字。请先对 PDF 做 OCR，再导入可检索副本。'),
-        [{label: label('Open library','打开资料库'), run: () => { void libraryDialog(this).catch(error => toast(message(error))); }}]);
+        [{label: openLibraryLabel(), run: () => { void libraryDialog(this).catch(error => toast(message(error))); }}]);
       return;
     }
     if (view.blocks.every(block => block.translation)) {
@@ -610,6 +619,13 @@ class Reader implements ReaderPort {
     await runRetranslate({docId:doc.id,page,isPdf:Boolean(this.pdf),target:this.targetLanguage,settings:this.state.settings,view,blockIds,isActive:()=>version===this.epoch&&this.view===view},
       translations=>{this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.syncRetranslate();},()=>settingsDialog(this,'ai'));
   }
+  private async handleAttachedPdf(upgraded: DocumentInfo): Promise<void> {
+    await this.navigate(upgraded.id, 1, '', '', undefined, undefined, { opened: upgraded, forceReload: true, skipHistory: true });
+    toast(label('PDF attached and indexed.', '已附加 PDF 并建立全文索引。'), {
+      label: label('Re-extract matrix cells', '重抽该篇矩阵列'),
+      run: () => window.dispatchEvent(new CustomEvent('paper-reader:reextract-matrix', { detail: { docId: upgraded.id } }))
+    });
+  }
   async importFiles(files: readonly File[], onProgress?: (text: string) => void): Promise<boolean> {
     const { imported, summary } = await importPdfFiles(files, onProgress);
     if (imported.length) await this.navigate(imported.at(-1)!.id);
@@ -626,7 +642,7 @@ class Reader implements ReaderPort {
       const {translations}=await api('translation.page',{docId:doc.id,page,targetLanguage:this.targetLanguage,blocks:blocks.map(({id,text})=>({id,text}))});
       if(version===this.epoch){this.view?.setTranslations?.(translations);this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.translate.hidden=true;this.syncRetranslate();}
     }catch(error){if(version===this.epoch)toast(message(error));}
-    finally{if(version===this.epoch){this.translate.disabled=false;this.translate.textContent=doc.book ? label('Translate section','翻译本节') : doc.kind==='web' ? label('Translate article','翻译文章') : label('Translate page','翻译本页');}}
+    finally{if(version===this.epoch){this.translate.disabled=false;this.translate.textContent=doc.book ? label('Translate section','翻译本节') : doc.kind==='abstract' ? label('Translate abstract','翻译摘要') : doc.kind==='web' ? label('Translate article','翻译文章') : label('Translate page','翻译本页');}}
   }
   private updatePageFormat(): void {
     const view=this.pdfView;
@@ -651,7 +667,7 @@ class Reader implements ReaderPort {
     pin.setAttribute('aria-pressed',String(this.placingPin));
     byId('readText').textContent=reading?label('View PDF page','查看 PDF 原页'):label('Read text','读正文');
     byId('pageTextHint').textContent=this.capturing?label('Drag over the area, then choose Explain or Ask.','拖框选中图或文字，再点「解释」或「提问」。'):this.placingPin?label('Click the PDF, or use arrow keys and Enter.','点击原页放置，或用方向键定位后按回车。'):reading?label('Figures and equations are in the PDF.','图表和公式可在 PDF 原页查看。'):this.parallel?'':label('Select a passage to translate or highlight.','划选原文可查看译文或高亮。');
-    byId('zoomControl').hidden=reading;
+    byId('zoomControl').hidden=reading || this.doc.kind==='abstract';
     byId('pdfThemeControl').hidden=!this.pdf || reading;
     view?.setTextView(reading); this.search.paintPage(); this.syncMenuActions();
   }
@@ -744,85 +760,15 @@ class Reader implements ReaderPort {
     byId('translated').scrollTo({top:initial.translationTop,left:initial.translationLeft,behavior:'instant'});
   }
   private controls():void{
-    document.documentElement.lang=/^zh(?:-|$)/i.test(navigator.language)?'zh-CN':'en';
-    syncTheme();
-    const click=(id:string,fn:()=>unknown)=>byId(id).addEventListener('click',()=>{void Promise.resolve().then(fn).catch(error=>toast(message(error)));});
-    const glyphs:Record<string,Glyph>={library:'library',prev:'back',next:'next',more:'more',mobileRail:'book',closeRail:'close',closeDialog:'close',closeShortcuts:'close'};
-    for(const [id,name] of Object.entries(glyphs))byId(id).append(icon(name));
-    document.querySelector<HTMLElement>('.workspace')!.ariaLabel=label('Reading area','阅读区');
-    document.querySelector<HTMLElement>('.toolbar')!.ariaLabel=label('Reading tools','阅读工具');
-    document.querySelector<HTMLElement>('.reader-mode-switch')!.ariaLabel=label('Reading mode','阅读模式');
-    byId('menu').ariaLabel=label('Reader actions','更多菜单');
-    byId('pageJump').ariaLabel=label('Go to page','跳转到页码');
-    byId('pageJump').querySelector('label')!.textContent=label('Page number','页码');
-    byId('pageJump').querySelector('button[type="submit"]')!.textContent=label('Go','跳转');
-    byId('paperScroll').ariaLabel=label('Document pages','文档页面');
-    byId('pageSplit').ariaLabel=byId('pageSplit').title=label('Resize original and translation','调整原文与译文宽度');
-    byId('loading').textContent=label('Opening document…','正在打开文档…');
-    byId('selectionDock').ariaLabel=label('Passage workspace','选段工具区');
-    byId('notesSplit').ariaLabel=byId('notesSplit').title=label('Resize notes','调整笔记宽度');
-    byId('rail').ariaLabel=label('Reading notes','阅读笔记');
-    byId('notebookPose').ariaLabel=byId('notebookPose').title=label('Notes position','笔记位置');
-    byId('card').ariaLabel=label('Selection card','选区卡片');
-    byId('shortcutsTitle').textContent=label('Keyboard shortcuts','快捷键');
-    byId('closeShortcuts').ariaLabel=byId('closeShortcuts').title=label('Close keyboard shortcuts','关闭快捷键帮助');
-    byId('library').append(el('span','',label('Library','资料库')));
-    byId('library').ariaLabel=byId('library').title=label('Open library','打开资料库');
-    byId('closeDialog').ariaLabel=label('Close dialog','关闭窗口');
-    const contents=byId('contentsToggle');
-    contents.replaceChildren(icon('contents'),el('span','',label('Contents','目录')));
-    contents.ariaLabel=label('Contents','目录');
-    byId('contentsTab').textContent=label('Contents','目录');
-    byId('contentsTab').parentElement!.ariaLabel=label('Reading sidebar','阅读侧边栏');
-    click('contentsToggle',()=>this.toggleSidebar('contents'));
-    click('mobileRail',()=>this.toggleSidebar('notes'));
-    for (const [id,step,name] of [['previousSection',-1,label('Previous section','上一节')],['nextSection',1,label('Next section','下一节')]] as const){
-      const control=byId(id); control.ariaLabel=control.title=name; control.append(icon(step<0?'back':'next'));
-      click(id,()=>this.navigate(this.doc.id,this.page+step));
-    }
-    byId('mobileRail').append(el('span','',label('Notes','笔记')));
-    byId('captureRegion').append(icon('capture'),el('span','capture-label'));
-    click('captureRegion',()=>this.beginCapture());
-    byId('originalMode').querySelector('.mode-full')!.textContent=label('Original','原文');byId('originalMode').querySelector('.mode-compact')!.textContent=label('Orig','原文');
-    byId('parallel').querySelector('.mode-wide')!.textContent=label('Bilingual','双语对照');
-    byId('parallel').querySelector('.mode-narrow')!.textContent=label('Translation','译文');byId('parallel').querySelector('.mode-compact')!.textContent=label('Trans','译文');
-    byId('notebookHandle').textContent=label('Notes','笔记');
-    byId('closeRail').ariaLabel=byId('closeRail').title=label('Close notes','关闭笔记');
-    byId('annotationsTab').textContent=label('Marks','标记');
-    byId('notesTab').textContent=label('Notes','笔记');
-    byId('refsTab').textContent=label('Reference','文献');
-    const display=byId<HTMLSelectElement>('highlightDisplay');
-    display.ariaLabel=label('Highlight display','高亮显示');
-    display.closest('label')!.querySelector('span')!.textContent=label('Highlights','高亮');
-    display.options[0].text=label('In Notes','随笔记显示');
-    display.options[1].text=label('In Marks only','仅在标记中显示');
-    byId('parallel').prepend(icon('columns',14));
-    byId('prev').ariaLabel=label('Previous page','上一页');
-    byId('next').ariaLabel=label('Next page','下一页');
-    byId('pageCount').ariaLabel=byId('pageCount').title=label('Go to page','跳转到页码');
-    byId('more').ariaLabel=label('More actions','更多操作');
-    const [sourceHead,targetHead]=document.querySelectorAll<HTMLElement>('.headings b');
-    if(sourceHead)sourceHead.textContent=label('Original','原文');
-    if(targetHead)targetHead.textContent=label('Translation','译文');
-    click('library',()=>libraryDialog(this));click('prev',()=>this.navigate(this.doc.id,this.page-1));click('next',()=>this.navigate(this.doc.id,this.page+1));
-    const jump=byId<HTMLFormElement>('pageJump'), input=byId<HTMLInputElement>('pageNumber');
-    jump.addEventListener('beforetoggle',event=>{
-      if(event.newState==='open')input.value=String(this.page);
+    const click = initReaderChrome({
+      getPage: () => this.page,
+      onJumpPage: page => this.navigate(this.doc.id, page),
+      onStepPage: step => this.navigate(this.doc.id, this.page + step),
+      onToggleSidebar: tab => this.toggleSidebar(tab),
+      onCapture: () => this.beginCapture(),
+      onOpenLibrary: () => libraryDialog(this),
+      onCloseMenu: () => this.closeMenu()
     });
-    jump.addEventListener('toggle',()=>{
-      if(!jump.matches(':popover-open'))return;
-      const anchor=byId('pageCount').getBoundingClientRect();
-      const below=anchor.bottom+6+jump.offsetHeight<=innerHeight-8;
-      jump.style.top=Math.max(8,Math.min(innerHeight-jump.offsetHeight-8,below?anchor.bottom+6:anchor.top-jump.offsetHeight-6))+'px';
-      jump.style.left=Math.max(8,Math.min(anchor.left,innerWidth-jump.offsetWidth-8))+'px';
-      input.select();
-    });
-    jump.addEventListener('submit',event=>{
-      event.preventDefault();
-      jump.hidePopover();
-      void this.navigate(this.doc.id,input.valueAsNumber).catch(error=>toast(message(error)));
-    });
-    window.addEventListener('resize',()=>{if(jump.matches(':popover-open'))jump.hidePopover();if(!byId('menu').hidden)this.closeMenu();});
     const toggleReadText=()=>{
       this.cancelCapture(false);
       this.cancelPin();this.marks.closePageEditor();
@@ -908,7 +854,13 @@ class Reader implements ReaderPort {
     byId('menu').append(...this.jumpControls.menuButtons,this.menuPin,this.menuRead);
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
     this.desk.connect(mode=>this.pdfView?.setFocusMode(mode), () => refreshNotebookHighlights(this));
-    bindPdfDropTarget(byId('reader'), files => { void this.importFiles(files, text => toast(text)).catch(e => toast(message(e))); }, { isBlocked: () => Boolean(document.querySelector('dialog[open]')) });
+    bindPdfDropTarget(byId('reader'), files => {
+      if (this.doc.kind === 'abstract' && files.length === 1) {
+        void attachPdfToAbstract(this.doc.id, files[0]).then(({ doc }) => this.handleAttachedPdf(doc), e => toast(message(e)));
+        return;
+      }
+      void this.importFiles(files, text => toast(text)).catch(e => toast(message(e)));
+    }, { isBlocked: () => Boolean(document.querySelector('dialog[open]')) });
     byId('menu').addEventListener('focusout',event=>{
       if(event.relatedTarget instanceof HTMLElement && !event.relatedTarget.closest('#menu,#more,#pdfThemeMenu'))this.closeMenu();
     });
@@ -937,5 +889,5 @@ class Reader implements ReaderPort {
 }
 const reader=new Reader();
 void reader.start().catch(error=>{
-  const panel=byId('loading');panel.hidden=false;panel.replaceChildren(el('p','',message(error)),button(label('Open library','打开资料库'),()=>libraryDialog(reader),'text-btn'));
+  const panel=byId('loading');panel.hidden=false;panel.replaceChildren(el('p','',message(error)),button(openLibraryLabel(),()=>libraryDialog(reader),'text-btn'));
 });

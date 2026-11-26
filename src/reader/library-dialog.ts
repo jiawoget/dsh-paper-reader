@@ -1,10 +1,11 @@
 import { parseAcademicInput } from '../shared/academic-intake.js';
+import type { BulkRefFormat } from '../shared/citation-bulk.js';
 import type { OpenDocument } from '../shared/types.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { renderDeviceLibrary } from './library-triage.js';
 import { bindPdfDropTarget } from './pdf-import.js';
 import { settingsDialog } from './settings-dialog.js';
-import { api, bindTablist, button, byId, el, message, modal, readerLabel as t, safeWeb, toast, webPageError, type ReaderPort } from './ui.js';
+import { api, bindTablist, button, byId, downloadFile, el, message, modal, readerLabel as t, safeWeb, toast, webPageError, type ReaderPort } from './ui.js';
 import { browseZotero, type ZoteroBrowsePosition } from './zotero-browser.js';
 
 let lastSource: 'zotero' | 'device' | undefined;
@@ -103,10 +104,24 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   imports.append(openWeb, pdf, file);
   const tabs = el('div', 'library-tabs');
   tabs.ariaLabel = t('Library source', '资料库来源');
-  const toolbar = el('div', 'library-toolbar');
-  toolbar.append(tabs, imports);
-  const holder = el('div');
-  root.append(toolbar, importStatus, form, holder);
+  const toolbar = el('div', 'library-toolbar'); toolbar.append(tabs, imports);
+  const refsFile = el('input');
+  refsFile.type = 'file'; refsFile.accept = '.bib,.ris,.csv,text/csv,application/x-bibtex,application/x-research-info-systems'; refsFile.hidden = true;
+  const importRefsBtn = button(t('Import .bib / .ris / .csv', '导入 .bib / .ris / .csv'), () => refsFile.click(), 'btn', 'import');
+  const exportWrap = el('div', 'library-bulk-export');
+  exportWrap.append(el('span', 'library-bulk-label', t('Export library', '导出资料库')));
+  const exportMime: Record<BulkRefFormat, string> = { bibtex: 'application/x-bibtex;charset=utf-8', ris: 'application/x-research-info-systems;charset=utf-8', csv: 'text/csv;charset=utf-8' };
+  for (const [fmt, labelText] of [['bibtex', 'BibTeX'], ['ris', 'RIS'], ['csv', 'CSV']] as const) {
+    const expBtn = button(labelText, async () => {
+      const res = await api('library.exportRefs', { format: fmt });
+      downloadFile(res.filename, res.content, exportMime[fmt]);
+      toast(t(`Exported ${res.count} items as ${labelText}.`, `已导出 ${res.count} 篇文献为 ${labelText}。`));
+    }, 'btn');
+    expBtn.ariaLabel = expBtn.title = t(`Export library as ${labelText}`, `导出资料库为 ${labelText}`);
+    exportWrap.append(expBtn);
+  }
+  const bulkBar = el('div', 'library-bulk-bar'); bulkBar.append(importRefsBtn, refsFile, exportWrap);
+  const holder = el('div'); root.append(toolbar, bulkBar, importStatus, form, holder);
   const zotero = el('button', 'library-tab', 'Zotero');
   zotero.id = 'library-tab-zotero';
   zotero.dataset.source = 'zotero';
@@ -117,7 +132,7 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   device.setAttribute('aria-controls', 'library-source');
   tabs.append(zotero, device);
   let shownSource: 'zotero' | 'device' | undefined;
-  bindTablist(tabs, [
+  const selectSource = bindTablist(tabs, [
     { key: 'zotero', button: zotero },
     { key: 'device', button: device }
   ], startSource, source => {
@@ -137,6 +152,21 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
       () => settingsDialog(app, 'zotero', () => { void libraryDialog(app, 'zotero'); }),
       () => localStorage.setItem('reader.zotero-connected', '1')
     );
+  });
+  refsFile.addEventListener('change', async () => {
+    const picked = refsFile.files?.[0]; if (!picked) return;
+    importRefsBtn.disabled = true;
+    try {
+      const ext = picked.name.toLowerCase();
+      const format = ext.endsWith('.bib') ? 'bibtex' : ext.endsWith('.ris') ? 'ris' : ext.endsWith('.csv') ? 'csv' : 'auto';
+      const res = await api('library.importRefs', { text: await picked.text(), format });
+      if (!active()) return;
+      toast(res.created || res.existing
+        ? t(`Imported ${res.created} paper${res.created === 1 ? '' : 's'}${res.existing ? `, ${res.existing} already in library` : ''}.`, `已导入 ${res.created} 篇文献${res.existing ? `，${res.existing} 篇已在资料库中` : ''}。`)
+        : t('No valid references found in this file.', '该文件中未找到有效引文条目。'));
+      shownSource = undefined; selectSource('device');
+    } catch (error) { if (active()) toast(message(error)); }
+    finally { importRefsBtn.disabled = false; refsFile.value = ''; }
   });
   dialog.scrollTop = 0;
   (startSource === 'zotero' ? zotero : device).focus({ preventScroll: true });

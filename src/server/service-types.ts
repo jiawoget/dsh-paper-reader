@@ -162,6 +162,8 @@ export interface ServiceResults {
   'library.updateMeta': Operations['library.updateMeta'][1];
   'library.delete': Operations['library.delete'][1];
   'library.createAbstract': Operations['library.createAbstract'][1];
+  'library.importRefs': Operations['library.importRefs'][1];
+  'library.exportRefs': Operations['library.exportRefs'][1];
   'library.progress.save': Operations['library.progress.save'][1];
   'library.triage': Operations['library.triage'][1];
   'library.search': Operations['library.search'][1];

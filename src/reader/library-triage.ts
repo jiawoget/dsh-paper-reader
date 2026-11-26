@@ -1,4 +1,5 @@
 import type { DocStatus, DocumentInfo, LibrarySearchHit, LibrarySearchKind } from '../shared/types.js';
+import { abstractOnlyLabel } from './abstract-view.js';
 import { localBookPlace } from './book-position.js';
 import { api, button, byId, el, icon, message, readerLabel as t, toast, type ReaderPort } from './ui.js';
 
@@ -35,7 +36,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
     ['all', t('All status', '全部状态')], ['unread', t('Unread', '未读')], ['reading', t('Reading', '在读')], ['done', t('Done', '已读')], ['starred', t('Starred', '星标')]
   ]);
   const typeSelect = makeSelect(t('Filter by type', '按类型筛选'), [
-    ['all', t('All types', '全部类型')], ['pdf', 'PDF'], ['web', t('Web', '网页')], ['book', t('Book', '书籍')]
+    ['all', t('All types', '全部类型')], ['pdf', 'PDF'], ['abstract', abstractOnlyLabel()], ['web', t('Web', '网页')], ['book', t('Book', '书籍')]
   ]);
   const sortSelect = makeSelect(t('Sort documents', '排序方式'), [
     ['recent', t('Recently read', '最近阅读')], ['added', t('Recently added', '最近添加')], ['title', t('Title', '标题')]
@@ -129,6 +130,9 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           const total = doc.meta?.pageCount || Number(localStorage.getItem('reader.pdf-pages.' + doc.id)) || 0;
           if (doc.meta?.lastPage && doc.meta.lastPage > 1 && total > 1) details.push(t('p. ' + doc.meta.lastPage + ' / ' + total, '第 ' + doc.meta.lastPage + ' / ' + total + ' 页'));
           else details.push(total > 0 ? t(total + (total === 1 ? ' page' : ' pages'), total + ' 页') : 'PDF');
+        } else if (doc.kind === 'abstract') {
+          const venueYear = [doc.venue, doc.year && !doc.venue?.includes(doc.year) ? doc.year : undefined].filter(Boolean).join(' · ');
+          if (venueYear) details.push(venueYear);
         } else {
           if (doc.url) details.push(new URL(doc.url).hostname);
           if (doc.meta?.scrollFraction && doc.meta.scrollFraction > 0) details.push(Math.round(doc.meta.scrollFraction * 100) + '%');
@@ -137,13 +141,16 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
         if (group.length > 1) details.push(t('Copy ' + (group.indexOf(doc) + 1), '第 ' + (group.indexOf(doc) + 1) + ' 份'));
 
         const row = button('', () => read(doc), 'doc-row library-document'), text = el('span', 'library-row-text');
-        text.append(el('strong', '', doc.title), el('small', '', details.join(' · ')));
+        const heading = el('span', 'library-row-heading');
+        heading.append(el('strong', '', doc.title));
+        if (doc.kind === 'abstract') heading.append(el('span', 'library-kind-badge', abstractOnlyLabel()));
+        text.append(heading, el('small', '', details.join(' · ')));
         if (doc.meta?.tags.length) {
           const tagRow = el('span', 'library-tags');
           for (const tag of doc.meta.tags) tagRow.append(el('span', 'library-tag', tag));
           text.append(tagRow);
         }
-        row.append(icon(doc.book ? 'book' : doc.kind === 'pdf' ? 'note' : 'globe', 18), text);
+        row.append(icon(doc.book ? 'book' : doc.kind === 'pdf' || doc.kind === 'abstract' ? 'note' : 'globe', 18), text);
         if (doc.id === app.doc.id) { row.setAttribute('aria-current', 'true'); row.append(el('small', 'library-current', t('Open', '正在阅读'))); }
 
         const wrap = el('div', 'library-device-item'), actions = el('div', 'library-item-actions');

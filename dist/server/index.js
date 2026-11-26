@@ -386,6 +386,7 @@ var ARXIV_BARE_RE = new RegExp(`^(?:arxiv:\\s*)?(${ARXIV_ID_SOURCE})(?:v\\d+)?$`
 var YEAR_RE = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
 var NAME_SUFFIX_RE = /^(?:jr\.?|sr\.?|ii|iii|iv|v|ph\.?d\.?|m\.?d\.?)$/i;
 var NOBILIARY_PARTICLE_RE = /^(?:van|von|de|del|della|di|da|du|la|le|der|den|ter|ten|dos|das)\b/i;
+var CONFERENCE_VENUE_RE = /\b(?:sosp|osdi|nsdi|sigcomm|sigmod|vldb|icml|neurips|nips|iclr|cvpr|iccv|eccv|acl|emnlp|naacl|aaai|ijcai|chi|uist|pldi|popl|icse|fse|ase|ccs|ndss|usenix|eurosys|asplos|isca|micro|hpca|sc|kdd|www|icde|pods|stoc|focs|soda|crypto|eurocrypt|proc(?:eedings)?|conf(?:erence)?|symp(?:osium)?|workshop|colloquium|congress)\b/i;
 var TITLE_STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -426,6 +427,48 @@ var LATIN_FOLD = {
   "\u0111": "d",
   "\u0110": "d"
 };
+var BIBTEX_ESCAPES = {
+  "\\": "\\textbackslash{}",
+  "{": "\\textbraceleft{}",
+  "}": "\\textbraceright{}",
+  "%": "\\%",
+  "&": "\\&",
+  "#": "\\#",
+  "_": "\\_",
+  "$": "\\$",
+  "~": "\\textasciitilde{}",
+  "^": "\\textasciicircum{}"
+};
+var ZOTERO_BIBTEX_TYPES = {
+  journalarticle: "article",
+  magazinearticle: "article",
+  newspaperarticle: "article",
+  conferencepaper: "inproceedings",
+  book: "book",
+  booksection: "incollection",
+  thesis: "phdthesis",
+  report: "techreport",
+  preprint: "misc",
+  webpage: "misc",
+  blogpost: "misc",
+  document: "misc",
+  manuscript: "misc"
+};
+var ZOTERO_RIS_TYPES = {
+  journalarticle: "JOUR",
+  conferencepaper: "CONF",
+  book: "BOOK",
+  booksection: "CHAP",
+  thesis: "THES",
+  report: "RPRT",
+  magazinearticle: "MGZN",
+  newspaperarticle: "NEWS",
+  webpage: "ELEC",
+  blogpost: "ELEC",
+  preprint: "GEN",
+  document: "GEN",
+  manuscript: "GEN"
+};
 function nonEmpty(value) {
   if (typeof value !== "string") return void 0;
   const trimmed = value.trim();
@@ -456,6 +499,15 @@ function fnv1aHex(seed) {
 }
 function normalizeInline(value) {
   return value.replace(/[\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function escapeBibTeX(value) {
+  return normalizeInline(value).replace(/[\\{}%&#_$~^]/g, (ch) => BIBTEX_ESCAPES[ch] ?? ch);
+}
+function sanitizeBibTeXUrl(value) {
+  return value.replace(/[\r\n\t\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, "").trim().replace(/\\/g, "%5C").replace(/\{/g, "%7B").replace(/\}/g, "%7D");
+}
+function sanitizeBibTeXIdentifier(value) {
+  return value.replace(/[\r\n\t\u0000-\u001f\u007f\u0085\u2028\u2029{}\\]+/g, "").trim();
 }
 function splitCommaAuthors(segment) {
   if (!segment.includes(",")) return [segment];
@@ -586,6 +638,120 @@ function buildCiteKey(meta) {
   }
   const seed = [meta.id ?? "", meta.title ?? "", (meta.authors ?? []).join(";"), yearPart].join("|");
   return `ref${yearPart}${fnv1aHex(seed)}`;
+}
+function resolveBibTeXType(meta) {
+  const zoteroKey = nonEmpty(meta.zoteroType)?.toLowerCase();
+  if (zoteroKey && Object.hasOwn(ZOTERO_BIBTEX_TYPES, zoteroKey)) return ZOTERO_BIBTEX_TYPES[zoteroKey];
+  if (meta.kind === "book") return "book";
+  const venue = nonEmpty(meta.venue);
+  if (venue) return CONFERENCE_VENUE_RE.test(venue) ? "inproceedings" : "article";
+  return "misc";
+}
+function formatBibTeXAuthors(authors) {
+  if (!authors?.length) return void 0;
+  const formatted = authors.map((author) => normalizeInline(author ?? "")).filter(Boolean).map((author) => {
+    if (/\s+et\s+al\.?$/i.test(author)) {
+      const base = author.replace(/\s+et\s+al\.?$/i, "").trim();
+      return base ? `${escapeBibTeX(base)} and others` : "others";
+    }
+    return escapeBibTeX(author);
+  }).filter(Boolean);
+  return formatted.length ? formatted.join(" and ") : void 0;
+}
+function formatBibTeX(meta) {
+  const type = resolveBibTeXType(meta);
+  const key2 = buildCiteKey(meta);
+  const title = escapeBibTeX(meta.title ?? "") || "Untitled";
+  const fields = [["title", title]];
+  const author = formatBibTeXAuthors(meta.authors);
+  if (author) fields.push(["author", author]);
+  const venue = meta.venue ? escapeBibTeX(meta.venue) : "";
+  if (venue) {
+    const fieldName = type === "inproceedings" || type === "incollection" ? "booktitle" : type === "article" ? "journal" : type === "techreport" ? "institution" : type === "phdthesis" ? "school" : "howpublished";
+    fields.push([fieldName, venue]);
+  }
+  const publisher = meta.publisher ? escapeBibTeX(meta.publisher) : "";
+  if (publisher) fields.push(["publisher", publisher]);
+  const year = extractYear(meta.year);
+  if (year) fields.push(["year", year]);
+  const doi = cleanDoi(meta.doi);
+  if (doi) {
+    const safeDoi = sanitizeBibTeXIdentifier(doi);
+    if (safeDoi) fields.push(["doi", safeDoi]);
+  }
+  const url = nonEmpty(meta.url);
+  if (url) {
+    const safeUrl2 = sanitizeBibTeXUrl(url);
+    if (safeUrl2) fields.push(["url", safeUrl2]);
+  }
+  const arxivId = nonEmpty(meta.arxivId) ?? extractArxivId(meta.url, meta.doi);
+  if (arxivId) {
+    const safeArxiv = sanitizeBibTeXIdentifier(arxivId);
+    if (safeArxiv) {
+      fields.push(["eprint", safeArxiv]);
+      fields.push(["archivePrefix", "arXiv"]);
+    }
+  }
+  const abstract = meta.abstract ? escapeBibTeX(meta.abstract) : "";
+  if (abstract) fields.push(["abstract", abstract]);
+  const body = fields.map(([name2, value]) => `  ${name2} = {${value}}`).join(",\n");
+  return `@${type}{${key2},
+${body}
+}`;
+}
+function resolveRISType(meta) {
+  const zoteroKey = nonEmpty(meta.zoteroType)?.toLowerCase();
+  if (zoteroKey && Object.hasOwn(ZOTERO_RIS_TYPES, zoteroKey)) return ZOTERO_RIS_TYPES[zoteroKey];
+  if (meta.kind === "book") return "BOOK";
+  const venue = nonEmpty(meta.venue);
+  if (venue) return CONFERENCE_VENUE_RE.test(venue) ? "CONF" : "JOUR";
+  if (meta.kind === "web" && nonEmpty(meta.url)) return "ELEC";
+  return "GEN";
+}
+function formatRIS(meta) {
+  const type = resolveRISType(meta);
+  const lines = [
+    `TY  - ${type}`,
+    `TI  - ${normalizeInline(meta.title ?? "") || "Untitled"}`
+  ];
+  for (const author of meta.authors ?? []) {
+    const value = normalizeInline(author);
+    if (value) lines.push(`AU  - ${value}`);
+  }
+  const year = extractYear(meta.year);
+  if (year) lines.push(`PY  - ${year}`);
+  const venue = nonEmpty(meta.venue);
+  if (venue) {
+    const cleanVenue = normalizeInline(venue);
+    if (cleanVenue) lines.push(`${type === "JOUR" ? "JO" : "T2"}  - ${cleanVenue}`);
+  }
+  const publisher = nonEmpty(meta.publisher);
+  if (publisher) {
+    const cleanPublisher = normalizeInline(publisher);
+    if (cleanPublisher) lines.push(`PB  - ${cleanPublisher}`);
+  }
+  const doi = cleanDoi(meta.doi);
+  if (doi) {
+    const cleanDoiValue = normalizeInline(doi);
+    if (cleanDoiValue) lines.push(`DO  - ${cleanDoiValue}`);
+  }
+  const url = nonEmpty(meta.url);
+  if (url) {
+    const cleanUrl = normalizeInline(url);
+    if (cleanUrl) lines.push(`UR  - ${cleanUrl}`);
+  }
+  const arxivId = nonEmpty(meta.arxivId) ?? extractArxivId(meta.url, meta.doi);
+  if (arxivId) {
+    const cleanArxiv = normalizeInline(arxivId);
+    if (cleanArxiv) lines.push(`N1  - arXiv:${cleanArxiv}`);
+  }
+  const abstract = nonEmpty(meta.abstract);
+  if (abstract) {
+    const cleanAbstract = normalizeInline(abstract);
+    if (cleanAbstract) lines.push(`AB  - ${cleanAbstract}`);
+  }
+  lines.push("ER  - ");
+  return lines.join("\n");
 }
 
 // src/server/service-types.ts
@@ -1650,17 +1816,17 @@ function buildFtsQuery(raw) {
   return clauses.slice(0, 24).join(" ");
 }
 function makeSnippet(text2, query) {
-  const clean2 = text2.replace(/\s+/g, " ").trim();
-  if (!clean2) return "";
-  const lower = clean2.toLocaleLowerCase();
+  const clean3 = text2.replace(/\s+/g, " ").trim();
+  if (!clean3) return "";
+  const lower = clean3.toLocaleLowerCase();
   const terms = (query.match(new RegExp("\\p{Script=Han}+|(?:(?!\\p{Script=Han})[\\p{L}\\p{N}]){2,}", "gu")) ?? []).map((t) => t.toLocaleLowerCase()).sort((a, b) => b.length - a.length);
   for (const term of terms) {
     const idx = lower.indexOf(term);
     if (idx < 0) continue;
-    const start = Math.max(0, idx - 60), end = Math.min(clean2.length, idx + term.length + 120);
-    return (start > 0 ? "\u2026" : "") + clean2.slice(start, end).trim() + (end < clean2.length ? "\u2026" : "");
+    const start = Math.max(0, idx - 60), end = Math.min(clean3.length, idx + term.length + 120);
+    return (start > 0 ? "\u2026" : "") + clean3.slice(start, end).trim() + (end < clean3.length ? "\u2026" : "");
   }
-  return clean2.slice(0, 180) + (clean2.length > 180 ? "\u2026" : "");
+  return clean3.slice(0, 180) + (clean3.length > 180 ? "\u2026" : "");
 }
 function replaceDocPages(db, docId, pages) {
   const id = single(docId, "document ID", 512, true), now = Date.now();
@@ -1728,6 +1894,268 @@ function saveTopic(db, input) {
 function deleteTopic(db, id) {
   const topicId = single(id, "topic ID", 128, true);
   return { id: topicId, deleted: Boolean(db.prepare("DELETE FROM topics WHERE id=?").run(topicId).changes) };
+}
+
+// src/shared/citation-bulk.ts
+var ACCENTS = {
+  "'": "\u0301",
+  "`": "\u0300",
+  "^": "\u0302",
+  '"': "\u0308",
+  "~": "\u0303",
+  "=": "\u0304",
+  ".": "\u0307",
+  c: "\u0327",
+  v: "\u030C",
+  u: "\u0306",
+  H: "\u030B",
+  r: "\u030A",
+  k: "\u0328"
+};
+var SPECIAL = {
+  ss: "\xDF",
+  o: "\xF8",
+  O: "\xD8",
+  ae: "\xE6",
+  AE: "\xC6",
+  oe: "\u0153",
+  OE: "\u0152",
+  aa: "\xE5",
+  AA: "\xC5",
+  l: "\u0142",
+  L: "\u0141"
+};
+var clean2 = (raw) => raw?.replace(/\s+/g, " ").trim() || void 0;
+var splitTags = (raw) => {
+  const t = raw?.split(/[;,]/).map((s) => s.trim()).filter(Boolean) ?? [];
+  return t.length ? [...new Set(t)] : void 0;
+};
+function makeEntry(r) {
+  const title = clean2(r.title);
+  if (!title) return void 0;
+  return {
+    title,
+    paperTitle: title,
+    ...r.authors && { authors: r.authors },
+    ...r.venue && { venue: r.venue },
+    ...r.publisher && { publisher: r.publisher },
+    ...r.year && { year: r.year },
+    ...r.doi && { doi: r.doi },
+    ...r.url && { url: r.url },
+    ...r.abstract && { abstract: r.abstract },
+    ...r.tags?.length && { tags: [...new Set(r.tags)] }
+  };
+}
+function unescapeLatex(raw) {
+  return raw.replace(/\\textbraceleft\{\}/g, "\uE000").replace(/\\textbraceright\{\}/g, "\uE001").replace(/\\textbackslash\{\}/g, "\uE002").replace(/\\textasciitilde\{\}/g, "~").replace(/\\textasciicircum\{\}/g, "^").replace(/\\([%&#_$])/g, "$1").replace(/\\(['`^"~=.])\{?([A-Za-z])\}?/g, (_, c, ch) => (ch + ACCENTS[c]).normalize("NFC")).replace(/\\([cvuHrk])(?:\{([A-Za-z])\}|\s+([A-Za-z]))/g, (_, c, a, b) => ((a || b) + ACCENTS[c]).normalize("NFC")).replace(/\\(ss|ae|AE|oe|OE|aa|AA|o|O|l|L)(?:\{\}|(?![A-Za-z]))/g, (_, k) => SPECIAL[k] ?? k).replace(/---/g, "\u2014").replace(/--/g, "\u2013").replace(/[{}]/g, "").replace(/\uE000/g, "{").replace(/\uE001/g, "}").replace(/\uE002/g, "\\").replace(/\s+/g, " ").trim();
+}
+function splitBibAuthors(raw) {
+  const parts = [];
+  for (let i = 0, depth = 0, start = 0; i <= raw.length; i++) {
+    if (i === raw.length) {
+      parts.push(raw.slice(start));
+      break;
+    }
+    if (raw[i] === "{") depth++;
+    else if (raw[i] === "}" && depth > 0) depth--;
+    else if (depth === 0) {
+      const m = /^\s+and\s+/i.exec(raw.slice(i));
+      if (m) {
+        parts.push(raw.slice(start, i));
+        i += m[0].length - 1;
+        start = i + 1;
+      }
+    }
+  }
+  const list = parts.map(unescapeLatex).filter((p) => p && !/^others$/i.test(p));
+  return list.length ? list.join("; ") : void 0;
+}
+function readBibValue(text2, pos) {
+  const parts = [];
+  let i = pos;
+  while (i < text2.length) {
+    while (i < text2.length && /\s/.test(text2[i])) i++;
+    if (i >= text2.length) break;
+    if (text2[i] === "{" || text2[i] === '"') {
+      const quote = text2[i] === '"', start = ++i;
+      for (let depth = quote ? 0 : 1; i < text2.length; i++) {
+        if (text2[i] === "\\" && i + 1 < text2.length) {
+          i++;
+          continue;
+        }
+        if (quote && text2[i] === '"' && depth === 0) break;
+        if (text2[i] === "{") depth++;
+        else if (text2[i] === "}") {
+          if (!quote && depth === 1) break;
+          if (depth > 0) depth--;
+        }
+      }
+      parts.push(text2.slice(start, i));
+      if (i < text2.length) i++;
+    } else {
+      const start = i;
+      while (i < text2.length && !/[,})\s#]/.test(text2[i])) i++;
+      parts.push(text2.slice(start, i));
+    }
+    while (i < text2.length && /\s/.test(text2[i])) i++;
+    if (text2[i] === "#") {
+      i++;
+      continue;
+    }
+    break;
+  }
+  return [parts.join(""), i];
+}
+function parseBibTeX(text2) {
+  const out = [];
+  for (let i = 0; (i = text2.indexOf("@", i)) >= 0; ) {
+    let p = ++i;
+    while (p < text2.length && /[A-Za-z]/.test(text2[p])) p++;
+    const type = text2.slice(i, p).toLowerCase();
+    while (p < text2.length && /\s/.test(text2[p])) p++;
+    if (!type || text2[p] !== "{" && text2[p] !== "(") {
+      i = p;
+      continue;
+    }
+    const open2 = text2[p], close = open2 === "{" ? "}" : ")", bodyStart = ++p;
+    for (let depth = 1; p < text2.length && depth > 0; p++) {
+      if (text2[p] === "\\" && p + 1 < text2.length) {
+        p++;
+        continue;
+      }
+      if (text2[p] === open2) depth++;
+      else if (text2[p] === close) depth--;
+    }
+    i = p;
+    if (type === "comment" || type === "preamble" || type === "string") continue;
+    const body = text2.slice(bodyStart, Math.max(bodyStart, p - 1)), comma = body.indexOf(",");
+    if (comma < 0) continue;
+    const f = {};
+    for (let k = comma + 1; k < body.length; ) {
+      while (k < body.length && /[\s,]/.test(body[k])) k++;
+      const s = k;
+      while (k < body.length && /[A-Za-z0-9_-]/.test(body[k])) k++;
+      const name2 = body.slice(s, k).toLowerCase();
+      while (k < body.length && /\s/.test(body[k])) k++;
+      if (!name2 || body[k] !== "=") break;
+      const [val, next] = readBibValue(body, k + 1);
+      f[name2] = val;
+      k = next;
+    }
+    const eprint = clean2(f.eprint), venueRaw = f.journal || f.booktitle || f.howpublished || f.institution || f.school;
+    const entry = makeEntry({
+      title: f.title ? unescapeLatex(f.title) : void 0,
+      authors: f.author ? splitBibAuthors(f.author) : void 0,
+      venue: venueRaw ? clean2(unescapeLatex(venueRaw)) : void 0,
+      publisher: f.publisher ? clean2(unescapeLatex(f.publisher)) : void 0,
+      year: extractYear(f.year, f.date),
+      doi: f.doi ? clean2(unescapeLatex(f.doi)) : void 0,
+      url: clean2(f.url) ?? (eprint && /arxiv/i.test(f.archiveprefix ?? "") ? `https://arxiv.org/abs/${eprint}` : void 0),
+      abstract: f.abstract ? clean2(unescapeLatex(f.abstract)) : void 0,
+      tags: splitTags(f.keywords || f.tags)
+    });
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+function parseRIS(text2) {
+  const out = [];
+  let f = {}, last = "";
+  const flush = () => {
+    const arxiv2 = (f.N1 ?? []).map((n) => /^arxiv:\s*(\S+)/i.exec(n)?.[1]).find(Boolean);
+    const entry = makeEntry({
+      title: (f.TI ?? f.T1)?.join(" "),
+      authors: [...f.AU ?? [], ...f.A1 ?? []].map((s) => s.trim()).filter(Boolean).join("; ") || void 0,
+      venue: clean2((f.JF ?? f.JO ?? f.T2 ?? f.JA)?.[0]),
+      publisher: clean2(f.PB?.[0]),
+      year: extractYear((f.PY ?? f.Y1 ?? f.DA)?.[0]),
+      doi: clean2(f.DO?.[0]),
+      url: clean2((f.UR ?? f.L1)?.[0]) ?? (arxiv2 ? `https://arxiv.org/abs/${arxiv2}` : void 0),
+      abstract: clean2((f.AB ?? f.N2)?.join("\n")),
+      tags: (f.KW ?? []).map((s) => s.trim()).filter(Boolean)
+    });
+    if (entry) out.push(entry);
+    f = {};
+    last = "";
+  };
+  for (const line of text2.split(/\r?\n/)) {
+    const m = /^([A-Z][A-Z0-9])\s{1,2}-\s?(.*)$/.exec(line);
+    if (m) {
+      if (m[1] === "TY") {
+        if (Object.keys(f).length) flush();
+        f.TY = [m[2].trim()];
+        last = "TY";
+      } else if (m[1] === "ER") flush();
+      else {
+        (f[m[1]] ??= []).push(m[2].trim());
+        last = m[1];
+      }
+    } else if (last && line.trim() && ["TI", "T1", "AB", "N2"].includes(last) && f[last]?.length) f[last][f[last].length - 1] += " " + line.trim();
+  }
+  if (Object.keys(f).length) flush();
+  return out;
+}
+function parseCsv(text2) {
+  const rows = [];
+  let row = [], cell = "", inQuotes = false;
+  for (let i = 0; i < text2.length; i++) {
+    const ch = text2[i];
+    if (inQuotes) {
+      if (ch === '"' && text2[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') inQuotes = false;
+      else cell += ch;
+    } else if (ch === '"' && !cell) inQuotes = true;
+    else if (ch === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text2[i + 1] === "\n") i++;
+      row.push(cell);
+      cell = "";
+      if (row.some((c) => c.trim())) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell);
+  if (row.some((c) => c.trim())) rows.push(row);
+  if (rows.length < 2) return [];
+  const hdr = /* @__PURE__ */ new Map();
+  rows[0].forEach((h, idx) => {
+    const k = h.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (k && !hdr.has(k)) hdr.set(k, idx);
+  });
+  const col = (r, ...keys) => keys.map((k) => hdr.get(k)).filter((i) => i !== void 0).map((i) => r[i]?.trim()).find(Boolean);
+  return rows.slice(1).map((r) => makeEntry({
+    title: col(r, "title", "papertitle", "documenttitle"),
+    authors: clean2(col(r, "authors", "author", "creators")),
+    year: extractYear(col(r, "year", "publicationyear", "date")),
+    venue: clean2(col(r, "venue", "journal", "booktitle", "publication", "conference")),
+    publisher: clean2(col(r, "publisher")),
+    doi: clean2(col(r, "doi")),
+    url: clean2(col(r, "url", "link")),
+    abstract: col(r, "abstract", "summary"),
+    tags: splitTags(col(r, "tags", "keywords", "collections"))
+  })).filter((e) => Boolean(e));
+}
+function parseBulkRefs(text2, format = "auto") {
+  const trimmed = text2.replace(/^\ufeff/, "").trim();
+  if (!trimmed) return [];
+  const resolved = format !== "auto" ? format : /^\s*@[a-z]+\s*[{(]/im.test(trimmed) ? "bibtex" : /^\s*TY\s{1,2}-/m.test(trimmed) ? "ris" : "csv";
+  return resolved === "bibtex" ? parseBibTeX(trimmed) : resolved === "ris" ? parseRIS(trimmed) : parseCsv(trimmed);
+}
+var csvCell = (v) => {
+  const s = /^[=+\-@\t\r]/.test(v) ? "'" + v : v;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+function exportBulkRefs(docs, format) {
+  if (format === "bibtex") return docs.map((d) => formatBibTeX(buildCitationMetadata(d))).join("\n\n") + (docs.length ? "\n" : "");
+  if (format === "ris") return docs.map((d) => formatRIS(buildCitationMetadata(d))).join("\n\n") + (docs.length ? "\n" : "");
+  return ["title,authors,year,venue,doi,url,abstract,tags", ...docs.map((doc) => {
+    const m = buildCitationMetadata(doc);
+    return [m.title, (m.authors ?? []).join("; "), m.year ?? "", m.venue ?? "", m.doi ?? "", m.url ?? "", m.abstract ?? "", (doc.meta?.tags ?? []).join("; ")].map(csvCell).join(",");
+  })].join("\n") + "\n";
 }
 
 // src/server/notebook.ts
@@ -2084,11 +2512,11 @@ function sanitizeTags(raw) {
   if (!Array.isArray(raw) || raw.length > 50 || !raw.every((item) => typeof item === "string")) throw new ServiceError(400, "Tags must be an array of strings.");
   const seen = /* @__PURE__ */ new Set(), tags = [];
   for (const item of raw) {
-    const clean2 = item.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
-    const key2 = clean2.toLocaleLowerCase();
-    if (!clean2 || seen.has(key2)) continue;
+    const clean3 = item.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+    const key2 = clean3.toLocaleLowerCase();
+    if (!clean3 || seen.has(key2)) continue;
     seen.add(key2);
-    tags.push(clean2);
+    tags.push(clean3);
     if (tags.length >= 20) break;
   }
   return tags;
@@ -2109,10 +2537,10 @@ function deleteDocMeta(db, docId) {
   db.prepare("DELETE FROM doc_meta WHERE docId=?").run(docId);
 }
 function snippetFor(raw, needle) {
-  const clean2 = raw.replace(/\s+/g, " ").trim(), idx = clean2.toLocaleLowerCase().indexOf(needle);
-  if (idx < 0) return clean2.slice(0, 120);
-  const start = Math.max(0, idx - 40), end = Math.min(clean2.length, idx + needle.length + 72);
-  return (start > 0 ? "\u2026" : "") + clean2.slice(start, end).trim() + (end < clean2.length ? "\u2026" : "");
+  const clean3 = raw.replace(/\s+/g, " ").trim(), idx = clean3.toLocaleLowerCase().indexOf(needle);
+  if (idx < 0) return clean3.slice(0, 120);
+  const start = Math.max(0, idx - 40), end = Math.min(clean3.length, idx + needle.length + 72);
+  return (start > 0 ? "\u2026" : "") + clean3.slice(start, end).trim() + (end < clean3.length ? "\u2026" : "");
 }
 function matchFields(fields, needle) {
   for (const field of fields) if (field && field.toLocaleLowerCase().includes(needle)) return snippetFor(field, needle);
@@ -5000,6 +5428,47 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       const doc = await documents.createAbstract(input);
       await indexDoc(doc, doc.kind === "abstract").catch(() => 0);
       return { doc };
+    },
+    "library.importRefs": async (input) => {
+      const text2 = stringValue(input.text, "references text", 4 * 1024 * 1024, true, true);
+      const format = input.format === void 0 ? "auto" : input.format;
+      if (format !== "auto" && format !== "bibtex" && format !== "ris" && format !== "csv") throw new ServiceError(400, "Choose BibTeX, RIS, CSV, or auto.");
+      const tag = single(input.tag, "tag", 40), parsed = parseBulkRefs(text2, format);
+      if (parsed.length > 500) throw new ServiceError(400, "Import at most 500 references at once.");
+      const before = new Set((await documents.list()).map((d) => d.id)), seen = /* @__PURE__ */ new Set(), docs = [];
+      let created = 0, existing = 0, skipped = 0;
+      for (const entry of parsed) {
+        try {
+          const doc = await documents.createAbstract(entry);
+          if (before.has(doc.id) || seen.has(doc.id)) existing++;
+          else created++;
+          const extra = [...entry.tags ?? [], ...tag ? [tag] : []];
+          let meta = database.listDocMeta(doc.id).get(doc.id);
+          if (extra.length) meta = database.updateDocTriage({ docId: doc.id, tags: [.../* @__PURE__ */ new Set([...meta?.tags ?? [], ...extra])].slice(0, 50) });
+          await indexDoc(doc, doc.kind === "abstract").catch(() => 0);
+          if (!seen.has(doc.id)) {
+            seen.add(doc.id);
+            docs.push(meta ? { ...doc, meta } : doc);
+          }
+        } catch {
+          skipped++;
+        }
+      }
+      return { created, existing, skipped, docs };
+    },
+    "library.exportRefs": async (input) => {
+      const format = input.format;
+      if (format !== "bibtex" && format !== "ris" && format !== "csv") throw new ServiceError(400, "Choose BibTeX, RIS, or CSV.");
+      const filter = input.docIds === void 0 ? void 0 : (() => {
+        if (!Array.isArray(input.docIds) || input.docIds.length > 1e3) throw new ServiceError(400, "Invalid document filter.");
+        return new Set(input.docIds.map((id) => single(id, "document ID", 512, true)));
+      })();
+      const listed = (await documents.list()).filter((d) => !filter || filter.has(d.id)), metas = database.listDocMeta();
+      const fullDocs = await Promise.all(listed.map(async (d) => {
+        const full = d.id === "pagedattention" ? d : await documents.get(d.id).catch(() => d), meta = metas.get(full.id);
+        return meta ? { ...full, meta } : full;
+      }));
+      return { format, filename: `paper-reader-library.${format === "bibtex" ? "bib" : format}`, content: exportBulkRefs(fullDocs, format), count: fullDocs.length };
     },
     "library.progress.save": (input) => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
     "library.triage": (input) => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
