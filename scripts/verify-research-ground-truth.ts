@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { exploreCitationGraph, resolveAcademicPaper, saveGraphPaper } from '../src/server/academic-graph.js';
+import { queryFieldTrends, queryTrendPapers } from '../src/server/field-trends.js';
 import { Library } from '../src/server/library.js';
 import { extractDocumentPages, extractPdfPages } from '../src/server/pdf-text.js';
 import { publicResource } from '../src/server/public-resource.js';
@@ -47,4 +48,30 @@ try {
     assert.ok(saved.doc.kind === 'abstract' && saved.doc.doi?.toLowerCase() === '10.1056/nejmoa2032183' && saved.doc.meta?.tags.includes('glp-1'));
     console.log(`PASS PR-2 Medicine live ground-truth: NEJM ${nejm.paper.year} abstract=${nejm.paper.abstract!.length} chars | linked=${clinical.length} (top: "${clinical[0].title}", ${clinical[0].year}) | saved=${saved.doc.id} (${saved.doc.kind})`);
   } finally { await rm(tempRoot, { recursive: true, force: true }); }
+
+  for (const fieldQuery of ['LLM inference', 'GLP-1']) {
+    const trends = await queryFieldTrends({ query: fieldQuery, source: 'openalex', windowYears: 5, topicLimit: 3 }, liveCtx);
+    assert.ok(trends.topics.length >= 2, `expected >=2 topics for "${fieldQuery}", got ${trends.topics.length}`);
+    let verifiedCells = 0;
+    for (const topic of trends.topics) {
+      const rawUrl = `https://api.openalex.org/works?search=${encodeURIComponent(fieldQuery)}&filter=primary_topic.id:${topic.topicId},publication_year:${trends.years[0]}-${trends.ytdYear}&group_by=publication_year`;
+      const rawRes = await fetch(rawUrl, { headers: { 'User-Agent': 'DSH-Paper-Reader/0.1 (ground-truth)' } });
+      assert.equal(rawRes.status, 200, `raw OpenAlex check failed (${rawRes.status}) for ${fieldQuery}/${topic.topicId}`);
+      const rawJson = await rawRes.json() as { group_by?: { key?: string; count?: number }[] };
+      const rawMap = new Map<number, number>((rawJson.group_by ?? []).map(g => [Number(g.key), Number(g.count ?? 0)]));
+      for (const cell of topic.cells) {
+        assert.equal(cell.volume, rawMap.get(cell.year) ?? 0, `cell mismatch for "${fieldQuery}" ${topic.topicId}/${cell.year}`);
+        verifiedCells++;
+      }
+    }
+    const targetTopic = trends.topics.find(t => t.cells.some(c => !c.isYtd && c.volume > 0)) ?? trends.topics[0];
+    const targetCell = targetTopic.cells.find(c => !c.isYtd && c.volume > 0) ?? targetTopic.cells.find(c => c.volume > 0)!;
+    const drill = await queryTrendPapers({ query: fieldQuery, topicId: targetTopic.topicId, topicName: targetTopic.topicName, year: targetCell.year, source: 'openalex', sort: 'representative', limit: 5 }, liveCtx);
+    assert.ok(drill.papers.length >= 1, `expected drilldown papers for "${fieldQuery}" ${targetTopic.topicId}/${targetCell.year}`);
+    for (const p of drill.papers) {
+      assert.equal(p.year, targetCell.year, `paper year mismatch for ${p.id}`);
+      assert.equal(p.primaryTopicId, targetTopic.topicId, `paper primary_topic mismatch for ${p.id}`);
+    }
+    console.log(`PASS PR-3a live ground-truth ("${fieldQuery}"): ${trends.topics.length} topics, ${verifiedCells}/${verifiedCells} cells exact match | drilldown ${targetTopic.topicId}/${targetCell.year} -> ${drill.papers.length} papers (top: "${drill.papers[0].title}")`);
+  }
 } finally { db.close(); }

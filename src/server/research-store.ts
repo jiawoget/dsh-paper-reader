@@ -139,10 +139,11 @@ export function deleteTopic(db: DatabaseSync, id: unknown): { id: string; delete
   return { id: topicId, deleted: Boolean(db.prepare('DELETE FROM topics WHERE id=?').run(topicId).changes) };
 }
 
-export function getGraphCache<T>(db: DatabaseSync, key: string): { value: T; stale: boolean } | undefined {
+export function getGraphCache<T>(db: DatabaseSync, key: string): { value: T; stale: boolean; fetchedAt: number } | undefined {
   const row = db.prepare('SELECT payload, fetchedAt, ttlMs FROM graph_cache WHERE cacheKey=?').get(key);
   if (!row || typeof row.payload !== 'string') return undefined;
-  try { return { value: JSON.parse(row.payload) as T, stale: Date.now() - Number(row.fetchedAt ?? 0) > Number(row.ttlMs ?? 0) }; }
+  const fetchedAt = Number(row.fetchedAt ?? 0);
+  try { return { value: JSON.parse(row.payload) as T, stale: Date.now() - fetchedAt > Number(row.ttlMs ?? 0), fetchedAt }; }
   catch { return undefined; }
 }
 
