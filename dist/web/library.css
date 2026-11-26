@@ -23,10 +23,13 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .reader-library .btn { min-height: 34px; padding-inline: 10px; font-size: 13px; }
 .library-source { padding-top: 16px; min-width: 0; }
 .library-filters { display: grid; grid-template-columns: minmax(0, 3fr) minmax(9em, 2fr); gap: 8px; }
+.library-triage-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.library-triage-controls select { flex: 1 1 110px; min-height: 34px; padding: 4px 8px; font-size: 13px; }
 .reader-library :is(.search, select) {
   min-width: 0; min-height: 38px; padding: 7px 10px; border: 1px solid var(--border-strong);
   border-radius: 6px; background-color: var(--paper); color: inherit; font: inherit;
 }
+.reader-library .library-source > .search { width: 100%; }
 .reader-library .search::placeholder { color: var(--ink-muted); }
 .library-results { margin: 10px 0 0; max-height: min(45dvh, 430px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .library-results:empty { display: none; }
@@ -34,9 +37,23 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .library-source:has(.library-results:empty) .library-footer { margin-top: auto; }
 .zotero-item, .library-device-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
 .zotero-item + .zotero-item, .library-results > :is(.doc-row, .library-device-item, .library-rename) + :is(.doc-row, .library-device-item, .library-rename) { border-top: 1px solid var(--line); }
-.library-item-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.library-item-actions { display: flex; align-items: center; gap: 3px; flex: none; }
 .library-item-actions .icon-btn { min-width: 32px; height: 32px; color: var(--ink-muted); }
 .library-item-actions .icon-btn:hover { color: var(--accent); background: var(--lavender); }
+.library-star[aria-pressed="true"] { color: var(--accent); }
+.library-star[aria-pressed="true"] svg { fill: currentColor; }
+.library-status-btn { min-height: 28px; padding: 2px 7px; font-size: 12px; color: var(--ink-muted); }
+.library-status-btn[data-status="reading"] { color: var(--accent); border-color: var(--accent); }
+.library-status-btn[data-status="done"] { color: var(--success); border-color: var(--success); }
+.library-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.library-tag { padding: 1px 6px; border-radius: 999px; background: var(--surface-sunken); color: var(--ink-muted); font-size: 12px; }
+.library-search-matches { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); max-height: 30dvh; overflow-y: auto; scrollbar-width: thin; }
+.library-matches-title { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--ink-muted); }
+.library-search-hit { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 44px; padding: 7px 6px; text-align: left; border-radius: 4px; color: inherit; }
+.library-search-hit:hover { color: var(--accent); background: var(--lavender); }
+.library-hit-kind { flex: none; padding: 2px 6px; border-radius: 4px; background: var(--surface-sunken); color: var(--ink-muted); font-size: 12px; font-weight: 600; }
+.library-hit-kind[data-kind="note"] { color: var(--accent); }
+.library-hit-kind[data-kind="mark"] { color: var(--success); }
 .library-delete-confirm { color: var(--danger); border-color: var(--danger-border); }
 .library-rename { display: flex; align-items: center; gap: 6px; padding: 8px 4px; }
 .library-rename .search { flex: 1; }
@@ -72,6 +89,10 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
   .library-imports { margin: 0 0 10px; }
   .library-tabs { order: 1; }
   .library-tab, .reader-library .btn, .library-footer :is(.text-btn, a), .library-zotero-link, .reader-library :is(.search, select) { min-height: 44px; }
+  .library-device-item { grid-template-columns: minmax(0, 1fr); }
+  .library-item-actions { justify-content: flex-end; flex-wrap: wrap; gap: 4px; padding-bottom: 6px; }
+  .library-item-actions :is(.icon-btn, .btn) { min-width: 44px; min-height: 44px; height: 44px; }
+  .library-triage-controls select { min-width: 44px; min-height: 44px; flex: 1 1 140px; }
   .library-filters { grid-template-columns: minmax(0, 3fr) minmax(7em, 2fr); }
   .library-results { max-height: 42dvh; }
   .library-source { padding-top: 12px; }

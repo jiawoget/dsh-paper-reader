@@ -172,6 +172,8 @@ try {
       assert.equal((await rpc(context.request, host.origin, 'notebook.write', {
         docId: doc.id, title: doc.id, page: 1, sourceUrl: url, expectedRevision: nb.revision, markdown: '# Notes for ' + doc.id
       })).status, 200);
+      assert.equal((await rpc(context.request, host.origin, 'library.triage', { docId: doc.id, status: 'reading', starred: true, tags: ['hygiene'] })).status, 200);
+      assert.equal((await rpc(context.request, host.origin, 'library.progress.save', { docId: doc.id, lastPage: 1, pageCount: 1, scrollFraction: 0.4 })).status, 200);
     }
 
     // Open Doc A (active!) and populate localStorage keys for both Doc A & Doc B
@@ -237,6 +239,7 @@ try {
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM entries WHERE docId=?', docB.id), 2);
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM annotations WHERE docId=?', docB.id), 1);
       assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=?', docB.id), 1);
+      assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', docB.id), 1);
     } finally { db.close(); }
 
     // localStorage & sessionStorage hygiene + Doc B isolation (T1-F9-05 & T2-F9-06)

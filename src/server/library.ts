@@ -72,6 +72,7 @@ export class Library {
     await writeOnce(path.join(this.directory, doc.id + '.json'), JSON.stringify(doc));
     return this.get(doc.id);
   }
+  hasSync(id: unknown): boolean { return id === sample.id || (validDocId(id) && existsSync(path.join(this.directory, id + '.json'))); }
   async get(id: unknown): Promise<DocumentInfo> {
     if (!validDocId(id)) fail('Invalid document ID.', 404);
     if (id === sample.id) return sample;

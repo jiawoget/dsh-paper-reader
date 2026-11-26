@@ -96,6 +96,8 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
       .run(id, 1, 'region-1', new Uint8Array([137, 80, 78, 71]), 'region text', 'Figure 1');
     db.prepare('INSERT INTO citations VALUES(?,?,?)')
       .run('/users/1', 'document/' + id, 'ITEM' + id.slice(4, 8).toUpperCase());
+    db.prepare('INSERT INTO doc_meta VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, 'reading', 1, '["ml"]', Date.now(), 2, 10, 0.4);
   };
 
   populateDoc(docA.id);
@@ -123,6 +125,7 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
     assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM pdf_outlines WHERE docId=?', deletedId), 0);
     assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM article_captures WHERE docId=?', deletedId), 0);
     assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM citations WHERE identity=?', 'document/' + deletedId), 0);
+    assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', deletedId), 0);
   }
 
   // Verify disk files removed for Doc A & Book C
@@ -146,6 +149,7 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM pdf_outlines WHERE docId=?', docB.id), 1);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM article_captures WHERE docId=?', docB.id), 1);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM citations WHERE identity=?', 'document/' + docB.id), 1);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', docB.id), 1);
   assert.equal(existsSync(path.join(docsDir, docB.id + '.pdf')), true);
   assert.equal(existsSync(path.join(root, 'translations', docB.id, 'ja', '1.json')), true);
 
@@ -159,6 +163,7 @@ test('library.delete cascades all 10 document-scoped SQLite tables and disk file
   store.deleteDocument('pagedattention');
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM entries WHERE docId=?', 'pagedattention'), 3);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM annotations WHERE docId=?', 'pagedattention'), 2);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', 'pagedattention'), 1);
 });
 
 test('library.delete enforces boundary status codes (400 sample, 404 traversal/malformed, 200 nonexistent)', async t => {
@@ -213,9 +218,14 @@ test('book.progress.save, notebook.get, and notebook.write reject deleted stored
   const bookNb = await act('notebook.get', { docId: bookId, title: 'Resurrect Guard Book', page: 1, sourceUrl: bookUrl });
   await act('notebook.write', { docId: bookId, title: 'Resurrect Guard Book', page: 1, sourceUrl: bookUrl, expectedRevision: bookNb.revision, markdown: '# Initial Book' });
   await act('book.progress.save', { docId: bookId, place: { page: 1, anchor: 'p-1', fraction: 0.25, side: 'source', updated: 100 } });
+  await act('library.progress.save', { docId: pdfDoc.id, lastPage: 2, pageCount: 5, scrollFraction: 0.3 });
+  await act('library.triage', { docId: pdfDoc.id, starred: true, tags: ['guard'] });
 
   assert.deepEqual(await library.delete(pdfDoc.id), { id: pdfDoc.id, deleted: true });
   assert.deepEqual(await library.delete(bookId), { id: bookId, deleted: true });
+
+  await assert.rejects(act('library.progress.save', { docId: pdfDoc.id, lastPage: 1 }), { status: 404 });
+  await assert.rejects(act('library.triage', { docId: pdfDoc.id, starred: false }), { status: 404 });
 
   await assert.rejects(
     act('book.progress.save', { docId: bookId, place: { page: 1, anchor: 'p-2', fraction: 0.5, side: 'source', updated: 200 } }),
@@ -241,4 +251,25 @@ test('book.progress.save, notebook.get, and notebook.write reject deleted stored
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM book_positions WHERE docId=?', bookId), 0);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=?', pdfDoc.id), 0);
   assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM notebook_documents WHERE docId=? OR substr(docId,1,?)=?', bookId, bookPrefix.length, bookPrefix), 0);
+  assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', pdfDoc.id), 0);
+});
+
+test('concurrent library.delete vs library.progress.save and library.triage never resurrects doc_meta', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-delete-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const act = createServices({ root });
+  const ids: string[] = [];
+  for (let i = 0; i < 15; i++) {
+    const { doc } = await act('web.import', { url: `https://example.org/race-${i}`, title: `Race ${i}`, paragraphs: [`Paragraph ${i}`] });
+    await act('library.progress.save', { docId: doc.id, lastPage: 1, scrollFraction: 0.25 });
+    ids.push(doc.id);
+    await Promise.allSettled([
+      act('library.delete', { id: doc.id }),
+      act('library.progress.save', { docId: doc.id, lastPage: 1, scrollFraction: 0.85 }),
+      act('library.triage', { docId: doc.id, starred: true, status: 'done', tags: ['race'] })
+    ]);
+  }
+  const db = new DatabaseSync(path.join(root, 'reader.sqlite'), { readOnly: true });
+  t.after(() => db.close());
+  for (const id of ids) assert.equal(countRows(db, 'SELECT COUNT(*) AS n FROM doc_meta WHERE docId=?', id), 0);
 });

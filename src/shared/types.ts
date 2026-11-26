@@ -1,7 +1,7 @@
 import type { SavedSelectionRange, TranslatedLocator } from './source-link.js';
 import type { BookPlace } from './book-place.js';
 import type { PdfOutlineEntry, PdfOutlinePage } from './pdf-outline.js';
-import type { AnnotationSaveInput, PaperAnnotation } from './annotations.js';
+import type { AnnotationColor, AnnotationSaveInput, PaperAnnotation } from './annotations.js';
 import type { ArticleLayout, WebArticle } from './web-article.js';
 
 export type ReadingSide = 'source' | 'translation';
@@ -17,6 +17,16 @@ export interface BookInfo { slug: string; sections: BookSection[] }
 export interface DocMetadata {
   paperTitle?: string; authors?: string; venue?: string; year?: string; doi?: string; publisher?: string; abstract?: string;
 }
+export type DocStatus = 'unread' | 'reading' | 'done';
+export interface DocMeta {
+  status: DocStatus; starred: boolean; tags: string[];
+  lastOpenedAt?: number; lastPage?: number; pageCount?: number; scrollFraction?: number;
+}
+export type LibrarySearchKind = 'doc' | 'note' | 'mark';
+export interface LibrarySearchHit {
+  docId: string; docTitle: string; docKind: 'pdf' | 'web' | 'book'; kind: LibrarySearchKind; snippet: string;
+  page?: number; anchor?: string; quote?: string; id?: string; color?: AnnotationColor; updatedAt?: string;
+}
 export interface DocumentInfo extends DocMetadata {
   id: string;
   kind: 'pdf' | 'web';
@@ -29,6 +39,7 @@ export interface DocumentInfo extends DocMetadata {
   sectionPage?: number;
   defaultPage?: number;
   createdAt?: string;
+  meta?: DocMeta;
 }
 export interface OpenDocument { doc: DocumentInfo; page?: number; anchor?: string }
 
@@ -148,6 +159,9 @@ export interface Operations {
   'library.rename': [{ id: string; title: string }, { doc: DocumentInfo }];
   'library.updateMeta': [{ id: string; paperTitle?: string; authors?: string | string[]; venue?: string; year?: string; doi?: string }, { doc: DocumentInfo }];
   'library.delete': [{ id: string }, { id: string; deleted: boolean }];
+  'library.progress.save': [{ docId: string; lastPage?: number; pageCount?: number; scrollFraction?: number }, { meta: DocMeta }];
+  'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[] }, { meta: DocMeta }];
+  'library.search': [{ query: string }, { hits: LibrarySearchHit[] }];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];

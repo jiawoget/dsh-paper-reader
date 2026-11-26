@@ -17,7 +17,7 @@ export function assertZeroSqliteRows(dbPath: string, docId: string): void {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const prefix = docId + '\u001f';
-    for (const table of ['entries', 'annotations', 'chat_exchanges', 'book_positions', 'pdf_outlines', 'article_captures']) {
+    for (const table of ['entries', 'annotations', 'chat_exchanges', 'book_positions', 'pdf_outlines', 'article_captures', 'doc_meta']) {
       assert.equal(countRows(db, `SELECT COUNT(*) AS n FROM ${table} WHERE docId=?`, docId), 0, `${table} must have 0 rows`);
     }
     for (const table of ['notebook_documents', 'notebook_vaults', 'notebooks']) {

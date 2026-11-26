@@ -1,25 +1,42 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { chromium, type Page } from 'playwright-core';
 import { cardElement, clickCard, openToolbar, until } from './extension-controls.js';
 import { withHost } from './host.js';
 
+const preload = new URL('./book-reading-preload.ts', import.meta.url).href;
+const logFile = path.join(os.tmpdir(), 'paper-reader-ext-journeys-' + randomUUID() + '.ndjson');
+const pdfBytes = Buffer.concat([await readFile(path.resolve('public/assets/pagedattention.pdf')), Buffer.from('\n%ext-journey\n')]);
 const paragraph = 'A repeated paragraph about blocks.';
 let revised = false, rejectModel = true;
 const fixture = createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/v1/chat/completions') {
-    for await (const _ of req) { /* Consume the request before replying. */ }
+    for await (const _ of req) {}
     res.writeHead(rejectModel ? 403 : 200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(rejectModel ? { error: 'Invalid test key' } : { choices: [{ message: { content: '内存块' } }] }));
+    return;
+  }
+  if (req.url === '/pdf/2309.06180.pdf') {
+    res.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': 'inline; filename="2309.06180.pdf"' });
+    res.end(pdfBytes); return;
+  }
+  if (req.url === '/abs/2309.06180') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<meta name="citation_title" content="Direct ArXiv PDF Capture"><meta name="citation_author" content="Ada Lovelace"><article><p>Abstract.</p></article>');
     return;
   }
   const second = paragraph.replace('blocks', '<strong id="pick">blocks</strong>');
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(req.url === '/empty' ? '<body><canvas></canvas></body>' :
+    req.url === '/silent' ? '<title>Silent Saved Article</title><main><h1>Silent Saved Article</h1><p>Saved without switching browser tabs.</p></main>' :
     '<title>Reader capture test</title><main><h1><span id="other-pick">Test</span> article</h1><p>' + paragraph + '</p><p>' + second + '</p>' +
     (revised ? '<p>New paragraph in the second edition.</p>' : '') + '</main>');
 });
+await writeFile(logFile, '', { flag: 'wx' });
 await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve));
 const address = fixture.address();
 assert.ok(address && typeof address !== 'string');
@@ -29,7 +46,7 @@ try {
   await withHost(async host => {
     const ctx = await chromium.launchPersistentContext(path.join(host.scratch, 'extension-journeys'), {
       executablePath: host.executable, headless: true, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
-      args: ['--enable-unsafe-extension-debugging', '--no-proxy-server', '--host-resolver-rules=MAP reading-notes.test 127.0.0.1']
+      args: ['--enable-unsafe-extension-debugging', '--no-proxy-server', '--host-resolver-rules=MAP reading-notes.test 127.0.0.1, MAP arxiv.org 127.0.0.1']
     });
     try {
       const cdp = await ctx.browser()!.newBrowserCDPSession();
@@ -139,9 +156,29 @@ try {
       popup = await menu(restricted); await popup.click('#read');
       await until(() => popup.evaluate(() => /regular webpage/.test(document.querySelector('#message')!.textContent!), null), 'Restricted pages should explain the failure.');
       await popup.detach();
-      console.log('PASS unchanged capture reuses the document, an updated article gets its own snapshot, and empty/restricted pages report a recoverable error.');
+      const silentTab = await ctx.newPage(); await silentTab.goto(article + '/silent');
+      const tabsBeforeSilent = ctx.pages().length;
+      popup = await menu(silentTab); await popup.click('#save');
+      await until(() => popup.evaluate(() => /Saved to library/.test(document.querySelector('#message')!.textContent!), null), 'Silent save should report success.');
+      assert.equal(ctx.pages().length, tabsBeforeSilent);
+      await popup.detach();
+      const arxivPdfTab = await ctx.newPage(); await arxivPdfTab.goto('http://arxiv.org:' + address.port + '/pdf/2309.06180.pdf');
+      popup = await menu(arxivPdfTab);
+      const pdfOpened = ctx.waitForEvent('page'); await popup.click('#read'); await popup.detach();
+      const pdfReaderTab = await pdfOpened;
+      await pdfReaderTab.locator('#docTitle').waitFor({ state: 'visible' });
+      const libRes = await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'library.list', payload: {} } });
+      const libDocs = (await libRes.json()).docs as { title: string; kind: string; paperTitle?: string }[];
+      assert.ok(libDocs.some(d => d.title === 'Silent Saved Article'));
+      assert.ok(libDocs.some(d => d.kind === 'pdf' && d.paperTitle === 'Direct ArXiv PDF Capture'));
+      console.log('PASS unchanged capture, silent save without tab switch, direct arXiv PDF capture, and empty/restricted error handling.');
     } finally { await ctx.close(); }
+  }, {
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, '--import=' + preload].filter(Boolean).join(' '),
+    PAPER_READER_E2E_PUBLISHER_FIXTURE: 'http://127.0.0.1:' + address.port,
+    PAPER_READER_E2E_PUBLISHER_LOG: logFile
   });
 } finally {
+  await rm(logFile, { force: true });
   await new Promise<void>(resolve => { fixture.close(() => resolve()); fixture.closeAllConnections(); });
 }
