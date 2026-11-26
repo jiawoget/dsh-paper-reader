@@ -12,6 +12,10 @@ import type {
   ReviewBatchResult, ReviewExportInput, ReviewExportResult, ReviewExtractInput, ReviewGetInput, ReviewGetResult,
   ReviewSaveTableInput, ReviewSaveTableResult, ReviewScreenInput, ReviewSetCellInput, ReviewSetCellResult
 } from './review-types.js';
+import type {
+  DeepSearchClarifyInput, DeepSearchClarifyResult, DeepSearchResult, DeepSearchRunInput,
+  WatchlistCheckResult, WatchlistEntry, WatchlistSaveInput
+} from './deep-search-types.js';
 
 export type ReadingSide = 'source' | 'translation';
 
@@ -213,6 +217,13 @@ export interface Operations {
   'review.extract': [ReviewExtractInput, ReviewBatchResult];
   'review.setCell': [ReviewSetCellInput, ReviewSetCellResult];
   'review.export': [ReviewExportInput, ReviewExportResult];
+  'deepSearch.clarify': [DeepSearchClarifyInput, DeepSearchClarifyResult];
+  'deepSearch.run': [DeepSearchRunInput, DeepSearchResult];
+  'watchlist.list': [Record<string, never>, { entries: WatchlistEntry[] }];
+  'watchlist.save': [WatchlistSaveInput, { entry: WatchlistEntry }];
+  'watchlist.delete': [{ id: string }, { id: string; deleted: boolean }];
+  'watchlist.check': [{ id?: string }, WatchlistCheckResult];
+  'watchlist.markRead': [{ id: string; keys?: string[] }, { entry: WatchlistEntry }];
   'web.import': [WebArticle, OpenDocument];
   'web.open': [{ url: string }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];

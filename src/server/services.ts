@@ -5,6 +5,8 @@ import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, saveGr
 import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
 import { ensurePaperCards, runLibraryChat } from './library-chat.js';
 import { exportReviewTable, getReviewTable, runReviewExtraction, runReviewScreening, saveReviewTable, setReviewCell } from './review-table.js';
+import { clarifyDeepSearch, runDeepSearch } from './deep-search.js';
+import { checkWatchlist, deleteWatchlist, listWatchlist, markWatchlistRead, saveWatchlist } from './watchlist.js';
 import { PaperNotebooks } from './notebook.js';
 import { installedObsidian, type ObsidianLauncher } from './obsidian-desktop.js';
 import { publicResource } from './public-resource.js';
@@ -183,6 +185,13 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'review.extract': (input, options) => runReviewExtraction(input, { store: database, library: documents, model, indexDoc }, options),
     'review.setCell': input => setReviewCell(input, { store: database, library: documents, model, indexDoc }),
     'review.export': input => exportReviewTable(input, { store: database, library: documents, model, indexDoc }),
+    'deepSearch.clarify': (input, options) => clarifyDeepSearch({ store: database, library: documents, model, fetchFn: fetchImpl }, input, options),
+    'deepSearch.run': (input, options) => runDeepSearch({ store: database, library: documents, model, fetchFn: fetchImpl }, input, undefined, options),
+    'watchlist.list': () => listWatchlist({ store: database, library: documents, fetchFn: fetchImpl }),
+    'watchlist.save': input => saveWatchlist(input, { store: database, library: documents, fetchFn: fetchImpl }),
+    'watchlist.delete': input => deleteWatchlist(input, { store: database, library: documents, fetchFn: fetchImpl }),
+    'watchlist.check': (input, options) => checkWatchlist(input, { store: database, library: documents, fetchFn: fetchImpl }, options?.signal),
+    'watchlist.markRead': input => markWatchlistRead(input, { store: database, library: documents, fetchFn: fetchImpl }),
     'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),

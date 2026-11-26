@@ -162,30 +162,27 @@ export function apply(ctx:ReaderHost):void {
       case 'chat.ask':
       case 'library.chat':
       case 'review.screen':
-      case 'review.extract': {
-        const op = body.op;
+      case 'review.extract':
+      case 'deepSearch.run': {
+        const op = body.op, structured = op === 'deepSearch.run';
         if (req.headers.get('accept')?.includes('application/x-ndjson')) {
-          const encoder = new TextEncoder();
-          const controller = new AbortController();
-          const abort = () => controller.abort();
+          const encoder = new TextEncoder(), controller = new AbortController(), abort = () => controller.abort();
+          let closed = false;
           req.signal.addEventListener('abort', abort, { once: true });
+          if (req.signal.aborted) abort();
           const stream = new ReadableStream<Uint8Array>({
             start(sink) {
-              const sendLine = (value: unknown) => {
-                if (!controller.signal.aborted) sink.enqueue(encoder.encode(JSON.stringify(value) + '\n'));
-              };
-              void service(op, input, { signal: controller.signal, onDelta: delta => sendLine({ delta }) }).then(
-                result => { sendLine(result); if (!controller.signal.aborted) sink.close(); },
-                error => {
-                  if (!controller.signal.aborted) {
-                    const msg = error instanceof Error ? error.message : 'The request failed.';
-                    sendLine({ error: msg });
-                    sink.close();
-                  }
-                }
+              const closeSink = () => { if (!closed) { closed = true; try { sink.close(); } catch {} } };
+              const sendLine = (value: unknown) => { if (!closed && !controller.signal.aborted) try { sink.enqueue(encoder.encode(JSON.stringify(value) + '\n')); } catch { closed = true; abort(); } };
+              void service(op, input, {
+                signal: controller.signal,
+                onDelta: delta => { if (structured) { try { sendLine(JSON.parse(delta)); } catch {} } else sendLine({ delta }); }
+              }).then(
+                result => { sendLine(structured ? { type: 'result', result } : result); closeSink(); },
+                error => { if (!closed && !controller.signal.aborted) sendLine({ error: error instanceof Error ? error.message : 'The request failed.' }); closeSink(); }
               ).finally(() => req.signal.removeEventListener('abort', abort));
             },
-            cancel() { controller.abort(); }
+            cancel() { closed = true; abort(); }
           });
           return new Response(stream, { headers: { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
         }

@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
+import type { WatchlistEntry, WatchlistItem, WatchlistKind } from '../shared/deep-search-types.js';
 import type { PaperCard } from '../shared/research-types.js';
-import type { DocPageRecord, TopicRecord } from '../shared/types.js';
+import type { DocPageRecord, GraphSource, TopicRecord } from '../shared/types.js';
 import { isObject, single, stringValue, type Input } from './service-types.js';
 
 type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
 
 export function hasResearchSchema(db: DatabaseSync): boolean {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells')").get();
-  return Number(row?.n ?? 0) === 7;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist')").get();
+  return Number(row?.n ?? 0) === 8;
 }
 
 export function ensureResearchSchema(db: DatabaseSync): void {
@@ -20,6 +21,7 @@ export function ensureResearchSchema(db: DatabaseSync): void {
   db.exec('CREATE TABLE IF NOT EXISTS paper_cards(doc_id TEXT PRIMARY KEY, card_json TEXT NOT NULL, source_hash TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT');
   db.exec('CREATE TABLE IF NOT EXISTS extraction_tables(id TEXT PRIMARY KEY, name TEXT NOT NULL, preset TEXT NOT NULL, criteria_json TEXT NOT NULL, columns_json TEXT NOT NULL, strict_criterion INTEGER NOT NULL DEFAULT 0, threshold REAL NOT NULL DEFAULT 0.6, updated_at INTEGER NOT NULL) STRICT');
   db.exec("CREATE TABLE IF NOT EXISTS extraction_cells(table_id TEXT NOT NULL, doc_id TEXT NOT NULL, col_id TEXT NOT NULL, value TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', page INTEGER, reasoning TEXT NOT NULL DEFAULT '', verified INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, source_kind TEXT NOT NULL DEFAULT 'pdf', status TEXT NOT NULL DEFAULT 'done', updated_at INTEGER NOT NULL, PRIMARY KEY(table_id, doc_id, col_id)) STRICT");
+  db.exec(`CREATE TABLE IF NOT EXISTS watchlist(id TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, query TEXT NOT NULL, doc_id TEXT, work_id TEXT, sources_json TEXT NOT NULL DEFAULT '["openalex","europepmc","arxiv"]', cursor_date TEXT NOT NULL, seen_keys_json TEXT NOT NULL DEFAULT '[]', unread_json TEXT NOT NULL DEFAULT '[]', last_checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT`);
 }
 
 export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
@@ -27,6 +29,7 @@ export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
   db.prepare('DELETE FROM doc_pages_fts WHERE docId=?').run(docId);
   db.prepare('DELETE FROM paper_cards WHERE doc_id=?').run(docId);
   db.prepare('DELETE FROM extraction_cells WHERE doc_id=?').run(docId);
+  db.prepare('DELETE FROM watchlist WHERE doc_id=?').run(docId);
 }
 
 export function segmentFtsText(text: string): string {
@@ -194,4 +197,31 @@ export function listPaperCards(db: DatabaseSync, docIds?: readonly string[]): Pa
     ? db.prepare(`SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards WHERE doc_id IN (${docIds.map(() => '?').join(',')}) ORDER BY updated_at DESC`).all(...docIds)
     : db.prepare('SELECT doc_id, card_json, source_hash, updated_at FROM paper_cards ORDER BY updated_at DESC').all();
   return rows.map(decodePaperCard).filter((c): c is PaperCard => Boolean(c));
+}
+
+export const VALID_GRAPH_SOURCES = new Set<GraphSource>(['openalex', 's2', 'europepmc', 'arxiv']);
+const parseArr = <T>(raw: SQLOutputValue | undefined): T[] => { try { const v: unknown = typeof raw === 'string' ? JSON.parse(raw) : []; return Array.isArray(v) ? (v as T[]) : []; } catch { return []; } };
+function decodeWatchlist(r: Row): WatchlistEntry {
+  const kind: WatchlistKind = r.kind === 'paper' ? 'paper' : 'topic';
+  const sources = parseArr<string>(r.sources_json).filter((s): s is GraphSource => VALID_GRAPH_SOURCES.has(s as GraphSource));
+  return {
+    id: String(r.id ?? ''), kind, label: String(r.label ?? ''), query: String(r.query ?? ''),
+    ...(typeof r.doc_id === 'string' && r.doc_id ? { docId: r.doc_id } : {}), ...(typeof r.work_id === 'string' && r.work_id ? { workId: r.work_id } : {}),
+    sources: sources.length ? sources : (kind === 'paper' ? ['openalex', 's2'] : ['openalex', 'europepmc', 'arxiv']),
+    cursorDate: String(r.cursor_date ?? ''), seenKeys: parseArr<string>(r.seen_keys_json).filter(k => typeof k === 'string'),
+    unread: parseArr<WatchlistItem>(r.unread_json).filter(i => isObject(i) && typeof i.key === 'string' && isObject(i.paper)),
+    ...(typeof r.last_checked_at === 'string' && r.last_checked_at ? { lastCheckedAt: r.last_checked_at } : {}),
+    createdAt: String(r.created_at ?? ''), updatedAt: String(r.updated_at ?? '')
+  };
+}
+export const listWatchlistEntries = (db: DatabaseSync): WatchlistEntry[] => db.prepare('SELECT * FROM watchlist ORDER BY updated_at DESC, label ASC').all().map(decodeWatchlist);
+export const getWatchlistEntry = (db: DatabaseSync, id: string): WatchlistEntry | undefined => { const r = db.prepare('SELECT * FROM watchlist WHERE id=?').get(id); return r ? decodeWatchlist(r) : undefined; };
+export function upsertWatchlistEntry(db: DatabaseSync, e: WatchlistEntry): WatchlistEntry {
+  db.prepare(`INSERT INTO watchlist(id,kind,label,query,doc_id,work_id,sources_json,cursor_date,seen_keys_json,unread_json,last_checked_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,label=excluded.label,query=excluded.query,doc_id=excluded.doc_id,work_id=excluded.work_id,sources_json=excluded.sources_json,cursor_date=excluded.cursor_date,seen_keys_json=excluded.seen_keys_json,unread_json=excluded.unread_json,last_checked_at=excluded.last_checked_at,updated_at=excluded.updated_at`)
+    .run(e.id, e.kind, e.label, e.query, e.docId ?? null, e.workId ?? null, JSON.stringify(e.sources), e.cursorDate, JSON.stringify(e.seenKeys), JSON.stringify(e.unread), e.lastCheckedAt ?? null, e.createdAt, e.updatedAt);
+  return e;
+}
+export function deleteWatchlistEntry(db: DatabaseSync, id: string): { id: string; deleted: boolean } {
+  const watchId = single(id, 'watchlist ID', 128, true);
+  return { id: watchId, deleted: Boolean(db.prepare('DELETE FROM watchlist WHERE id=?').run(watchId).changes) };
 }
