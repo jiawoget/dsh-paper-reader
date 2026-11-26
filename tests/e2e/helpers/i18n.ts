@@ -6,7 +6,8 @@ const ZH_ENGLISH_ALLOWLIST = new Set([
   'openstax', 'html', 'api', 'http', 'https', 'ocr', 'ctrl', 'cmd', 'shift', 'alt', 'esc',
   'enter', 'home', 'end', 'pagedattention', 'sosp', 'kwon', 'paper', 'reader', 'vllm', 'token',
   'efficient', 'management', 'large', 'language', 'model', 'serving', 'with',
-  'woosuk', 'et', 'al', 'key', 'value', 'kv'
+  'woosuk', 'et', 'al', 'key', 'value', 'kv',
+  'earlier', 'later', 'similar', 'openalex', 'semantic', 'scholar', 'ncbi', 'pubmed', 'europe', 'pmc'
 ]);
 
 const BANNED_EN_RE = /\b(?:Annotations|Paper conversation|Paper discussion|Reading notebook|Notebook)\b/i;

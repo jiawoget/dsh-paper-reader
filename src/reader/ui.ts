@@ -192,8 +192,8 @@ export async function responseJson<T>(response:Response):Promise<T> {
   }
   return body as T;
 }
-export async function api<K extends keyof Operations>(op:K, payload:Operations[K][0], keepalive=false):Promise<Operations[K][1]> {
-  return responseJson(await fetch('../action',{method:'POST',credentials:'same-origin',cache:'no-store',keepalive,headers:{'content-type':'application/json'},body:JSON.stringify({op,payload})}));
+export async function api<K extends keyof Operations>(op:K, payload:Operations[K][0], keepalive=false, signal?:AbortSignal):Promise<Operations[K][1]> {
+  return responseJson(await fetch('../action',{method:'POST',credentials:'same-origin',cache:'no-store',keepalive,signal,headers:{'content-type':'application/json'},body:JSON.stringify({op,payload})}));
 }
 export async function apiStream<K extends 'ai'|'chat.ask'>(op:K, payload:Operations[K][0], onDelta:(delta:string)=>void, signal?:AbortSignal):Promise<Operations[K][1]> {
   const response = await fetch('../action', {
