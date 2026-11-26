@@ -32,9 +32,8 @@ export interface TrendPapersResult {
   papers: TrendPaper[]; degraded: string[]; fromCache: boolean; cachedAt?: number;
 }
 
-const isCountMap = (c: ReadonlyMap<number, number> | Record<number, number>): c is ReadonlyMap<number, number> => c instanceof Map;
 const readCount = (counts: ReadonlyMap<number, number> | Record<number, number>, year: number): number =>
-  isCountMap(counts) ? (counts.get(year) ?? 0) : (counts[year] ?? 0);
+  'get' in counts ? (counts.get(year) ?? 0) : (counts[year] ?? 0);
 
 export function computeTrendGrowth(
   counts: ReadonlyMap<number, number> | Record<number, number>, ytdYear: number

@@ -103,6 +103,15 @@ test('queryFieldTrends parses OpenAlex/Europe PMC, caches in graph_cache, falls 
     ac.abort();
     setGraphCache(db, 'oa:trends:topics:abortcheck:2022-2026', 'openalex', { group_by: [{ key: 'https://openalex.org/T1', key_display_name: 'A', count: 5 }] }, 60_000);
     await assert.rejects(() => queryFieldTrends({ query: 'abortcheck', windowYears: 5 }, { ...ctx, signal: ac.signal }), e => e instanceof ServiceError && e.status === 499);
+    setGraphCache(db, 'oa:trends:topics:abortempty:2022-2026', 'openalex', { group_by: [] }, 60_000);
+    await assert.rejects(() => queryFieldTrends({ query: 'abortempty', windowYears: 5 }, { ...ctx, fetchFn: async () => { throw new Error('must not fetch'); }, signal: ac.signal }), e => e instanceof ServiceError && e.status === 499);
+
+    setGraphCache(db, 'oa:trends:topics:partialfail:2024-2026', 'openalex', { group_by: [{ key: 'https://openalex.org/T10028', key_display_name: 'Topic Modeling', count: 145 }, { key: 'https://openalex.org/T11714', key_display_name: 'Multimodal Learning', count: 38 }] }, 60_000);
+    const partialCtx: TrendContext = { ...ctx, sleepFn: async () => {}, fetchFn: async u => String(u).includes('T11714') ? jsonRes({}, 500) : fetchFn(u) };
+    await queryFieldTrends({ query: 'partialfail', source: 'openalex', windowYears: 3 }, partialCtx);
+    const partial = await queryFieldTrends({ query: 'partialfail', source: 'openalex', windowYears: 3 }, partialCtx);
+    assert.deepEqual(partial.topics.map(r => r.topicId), ['T10028']);
+    assert.ok(!partial.fromCache && partial.degraded.includes('openalex'));
   } finally { db.close(); }
 });
 
@@ -148,15 +157,25 @@ test('trends.query local coverage matches doc_meta live on add/tag/delete, and t
   await act('library.delete', { id: doc.id });
   assert.equal((await act('trends.query', { query: 'quantization', windowYears: 5 })).topics[0].localCount, 0);
   assert.deepEqual(matchLocalDocsForTopic('T1', 'Topic Modeling', [{ id: 'd1', kind: 'abstract', title: 'Unrelated', meta: { status: 'unread', starred: false, tags: ['mod'] } }]), []);
+  assert.deepEqual(matchLocalDocsForTopic('epmc:all', 'GLP-1 (Europe PMC / PubMed)', [{ id: 'd1', kind: 'abstract', title: 'Semaglutide GLP-1 Trial' }, { id: 'd2', kind: 'pdf', title: 'Unrelated Study' }], new Map([['d2', 'Europe PMC / PubMed Central']])), ['d1']);
+  assert.deepEqual(matchLocalDocsForTopic('T1', 'Models for Language and Vision', [{ id: 'd3', kind: 'abstract', title: 'Unrelated', meta: { status: 'unread', starred: false, tags: ['for', 'and'] } }]), []);
 
   const db = new DatabaseSync(':memory:');
   ensureResearchSchema(db);
   try {
-    const epmcDrill = await queryTrendPapers({ query: 'GLP-1', topicId: 'epmc:mesh:obesity', topicName: 'Obesity', year: 2024, source: 'europepmc', sort: 'newest' }, {
+    let seenEpmcQ = '';
+    const epmcDrill = await queryTrendPapers({ query: 'cancer) OR (PUB_YEAR:2020', topicId: 'epmc:mesh:obesity', topicName: 'Obesity\\', year: 2024, source: 'europepmc', sort: 'newest' }, {
       withDb: (_, run) => run(db),
-      fetchFn: async () => jsonRes({ resultList: { result: [{ pmid: '12345', title: 'GLP-1 Trial', pubYear: '2024', citedByCount: 15 }, { pmid: '12346', title: 'Old Trial', pubYear: '2021', citedByCount: 50 }] } })
+      fetchFn: async u => { seenEpmcQ = new URL(String(u)).searchParams.get('query') ?? ''; return jsonRes({ resultList: { result: [{ pmid: '12345', title: 'GLP-1 Trial', pubYear: '2024', citedByCount: 15 }, { pmid: '12346', title: 'Old Trial', pubYear: '2021', citedByCount: 50 }] } }); }
     });
+    assert.equal(seenEpmcQ, '(cancer or PUB_YEAR 2020) AND MESH:"Obesity" AND PUB_YEAR:2024');
     assert.ok(epmcDrill.papers.length === 1 && epmcDrill.papers[0].year === 2024 && epmcDrill.papers[0].primaryTopicId === 'epmc:mesh:obesity');
+    const epmcLib = await queryTrendPapers({ query: 'GLP-1', topicId: 'epmc:all', topicName: 'GLP-1 (Europe PMC / PubMed)', year: 2024, source: 'europepmc', sort: 'library' }, {
+      withDb: (_, run) => run(db), docs: [{ id: 'd1', kind: 'abstract', title: 'Semaglutide GLP-1 Trial', year: '2024' }]
+    });
+    assert.ok(epmcLib.papers.length === 1 && epmcLib.papers[0].source === 'europepmc');
+    await assert.rejects(() => queryTrendPapers({ query: 'GLP-1', topicId: 'epmc:mesh:', year: 2024, source: 'europepmc' }, { withDb: (_, run) => run(db) }), e => e instanceof ServiceError && e.status === 400);
+    await assert.rejects(() => queryTrendPapers({ query: 'GLP-1', topicId: 'bad-id', year: 2024, source: 'europepmc' }, { withDb: (_, run) => run(db) }), e => e instanceof ServiceError && e.status === 400);
   } finally { db.close(); }
 
   await assert.rejects(() => act('trends.query', { query: 'x', windowYears: 4 as 5 }), e => e instanceof ServiceError && e.status === 400);

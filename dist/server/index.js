@@ -2395,6 +2395,7 @@ function makePaper(p) {
   return { ...p, id, arxivId, oaPdfUrl, url, firstAuthor: p.authors[0] ?? "", lastAuthor: p.authors.at(-1) ?? "" };
 }
 async function cachedFetch(source2, key2, url, init, ttlMs, parse3, ctx, degraded) {
+  if (ctx.signal?.aborted) throw new ServiceError(499, "Request canceled.");
   const cached = ctx.withDb(false, (db) => getGraphCache(db, key2));
   if (cached && !cached.stale) return { data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   const fetcher = ctx.fetchFn ?? globalThis.fetch, sleep = ctx.sleepFn ?? defaultSleep, headers = new Headers(init.headers);
@@ -2635,8 +2636,7 @@ async function saveGraphPaper(input, deps) {
 }
 
 // src/shared/research-types.ts
-var isCountMap = (c) => c instanceof Map;
-var readCount = (counts, year) => isCountMap(counts) ? counts.get(year) ?? 0 : counts[year] ?? 0;
+var readCount = (counts, year) => "get" in counts ? counts.get(year) ?? 0 : counts[year] ?? 0;
 function computeTrendGrowth(counts, ytdYear) {
   const recent2yr = readCount(counts, ytdYear - 2) + readCount(counts, ytdYear - 1);
   const prior2yr = readCount(counts, ytdYear - 4) + readCount(counts, ytdYear - 3);
@@ -2672,13 +2672,14 @@ var TTL_TRENDS = 216e5;
 var STOPWORDS = /* @__PURE__ */ new Set(["and", "the", "for", "with", "from", "into", "via", "of", "in", "on", "to", "by", "at", "an", "or", "using", "based"]);
 var sigTokens = (text2) => [...new Set(normTitle(text2).split(" ").filter((t) => t.length >= 3 && !STOPWORDS.has(t)))];
 function matchLocalDocsForTopic(topicId, topicName, docs, pageSnippets) {
-  const idLow = topicId.trim().toLowerCase(), normName = normTitle(topicName), nameTokens = sigTokens(topicName);
+  const cleanName = topicName.replace(/\s*\(Europe PMC \/ PubMed\)$/i, "").trim();
+  const idLow = topicId.trim().toLowerCase(), normName = normTitle(cleanName), nameTokens = sigTokens(cleanName);
   const nameTokenSet = new Set(nameTokens), needed = nameTokens.length >= 2 ? 2 : 1, matched = [];
   for (const doc of docs) {
     const tagHit = (doc.meta?.tags ?? []).some((raw) => {
       const low = raw.trim().toLowerCase(), normTag = normTitle(raw);
       if (!low || !normTag) return false;
-      if (low === idLow || normTag === normName || normTag.length >= 3 && (" " + normName + " ").includes(" " + normTag + " ")) return true;
+      if (low === idLow || normTag === normName || normTag.length >= 3 && !STOPWORDS.has(normTag) && (" " + normName + " ").includes(" " + normTag + " ")) return true;
       const tks = sigTokens(raw);
       return tks.length > 0 && tks.every((t) => nameTokenSet.has(t));
     });
@@ -2717,17 +2718,15 @@ function loadPageSnippets(ctx) {
   const out = /* @__PURE__ */ new Map();
   try {
     ctx.withDb(false, (db) => {
-      for (const row of db.prepare("SELECT docId, text FROM doc_pages WHERE page=1").all()) {
-        if (typeof row.docId === "string" && typeof row.text === "string") out.set(row.docId, row.text.slice(0, 1500));
-      }
+      for (const r of db.prepare("SELECT docId, text FROM doc_pages WHERE page=1").all()) if (typeof r.docId === "string" && typeof r.text === "string") out.set(r.docId, r.text.slice(0, 1500));
     });
   } catch {
   }
   return out;
 }
 var trackCache = (tracker, res) => {
-  if (!res) return;
   tracker.total++;
+  if (!res) return;
   if (res.fromCache) tracker.hits++;
   if (res.fetchedAt > 0 && (tracker.minAt === void 0 || res.fetchedAt < tracker.minAt)) tracker.minAt = res.fetchedAt;
 };
@@ -2769,6 +2768,9 @@ function parseGroupByYear(data, fetchStart, endYear) {
   }
   return counts;
 }
+var sanitizeEpmcQuery = (q) => q.replace(/[()"[\]{}\\:]/g, " ").replace(/&&|\|\|/g, " ").replace(/\b(?:AND|OR|NOT)\b/g, (m) => m.toLowerCase()).replace(/\s+/g, " ").trim();
+var sanitizeEpmcMesh = (m) => m.replace(/[\\"]/g, "").trim();
+var epmcResults = (data) => arrOf(isObject(data) && isObject(data.resultList) ? data.resultList.result : void 0);
 var epmcUrl = (q, resultType, pageSize, sort) => {
   const url = new URL("https://www.ebi.ac.uk/europepmc/webservices/rest/search");
   for (const [k, v] of Object.entries({ query: q, format: "json", resultType, pageSize: String(pageSize), ...sort ? { sort } : {} })) url.searchParams.set(k, v);
@@ -2790,8 +2792,7 @@ async function fetchEpmcTrendRow(topicId, topicName, baseQuery, years, fetchStar
   const sampleQ = `(${baseQuery}) AND PUB_YEAR:[${years[0]} TO ${ytdYear}]`;
   const sampleRes = await fetchJson("europepmc", `epmc:trends:cites:${normTitle(baseQuery)}:${years[0]}-${ytdYear}`, epmcUrl(sampleQ, "lite", 25, "CITED desc"), ctx, degraded, TTL_TRENDS);
   trackCache(cache, sampleRes);
-  const results = arrOf(isObject(sampleRes?.data) && isObject(sampleRes.data.resultList) ? sampleRes.data.resultList.result : void 0);
-  return buildTopicRow(topicId, topicName, years, ytdYear, counts, aggregateCitations(results, "pubYear", "citedByCount"), docs, snippets);
+  return buildTopicRow(topicId, topicName, years, ytdYear, counts, aggregateCitations(epmcResults(sampleRes?.data), "pubYear", "citedByCount"), docs, snippets);
 }
 async function queryFieldTrends(rawInput, ctx) {
   const query = single(rawInput.query, "search query", 250, true), source2 = rawInput.source ?? "openalex";
@@ -2820,19 +2821,23 @@ async function queryFieldTrends(rawInput, ctx) {
       ]);
       trackCache(cache, yrRes);
       trackCache(cache, ctRes);
-      const counts = parseGroupByYear(yrRes?.data, fetchStart, ytdYear);
+      if (!yrRes) return void 0;
+      const counts = parseGroupByYear(yrRes.data, fetchStart, ytdYear);
       const cites = aggregateCitations(arrOf(isObject(ctRes?.data) ? ctRes.data.results : void 0), "publication_year", "cited_by_count");
       return buildTopicRow(topic.id, topic.name, years, ytdYear, counts, cites, docs, snippets);
     });
-    rows.push(...oaRows);
+    for (const row of oaRows) if (row) rows.push(row);
   }
+  const safeQ = sanitizeEpmcQuery(query);
+  let needEpmcAll = source2 === "all";
   if (source2 === "europepmc") {
-    const coreRes = await fetchJson("europepmc", `epmc:trends:mesh:${normQ}:${startYear}-${ytdYear}`, epmcUrl(`(${query}) AND PUB_YEAR:[${startYear} TO ${ytdYear}]`, "core", 25), ctx, degraded, TTL_TRENDS);
+    if (!safeQ) throw new ServiceError(400, "Enter a valid search query.");
+    const coreRes = await fetchJson("europepmc", `epmc:trends:mesh:${normQ}:${startYear}-${ytdYear}`, epmcUrl(`(${safeQ}) AND PUB_YEAR:[${startYear} TO ${ytdYear}]`, "core", 25), ctx, degraded, TTL_TRENDS);
     trackCache(cache, coreRes);
     const meshCounts = /* @__PURE__ */ new Map();
-    for (const item of arrOf(isObject(coreRes?.data) && isObject(coreRes.data.resultList) ? coreRes.data.resultList.result : void 0)) {
+    for (const item of epmcResults(coreRes?.data)) {
       for (const h of arrOf(isObject(item) && isObject(item.meshHeadingList) ? item.meshHeadingList.meshHeading : void 0)) {
-        const desc = isObject(h) && typeof h.descriptorName === "string" ? h.descriptorName.trim() : "";
+        const desc = isObject(h) && typeof h.descriptorName === "string" ? sanitizeEpmcMesh(h.descriptorName) : "";
         if (desc && !/^(humans|animals|male|female|adult|aged|middle aged)$/i.test(desc)) meshCounts.set(desc, (meshCounts.get(desc) ?? 0) + 1);
       }
     }
@@ -2842,22 +2847,20 @@ async function queryFieldTrends(rawInput, ctx) {
         topMesh,
         2,
         ctx.signal,
-        (m) => fetchEpmcTrendRow(`epmc:mesh:${normTitle(m)}`, m, `(${query}) AND MESH:"${m.replace(/"/g, "")}"`, years, fetchStart, ytdYear, docs, snippets, ctx, degraded, cache)
+        (m) => fetchEpmcTrendRow(`epmc:mesh:${normTitle(m)}`, m, `(${safeQ}) AND MESH:"${m}"`, years, fetchStart, ytdYear, docs, snippets, ctx, degraded, cache)
       );
       for (const row of epmcRows) if (row) rows.push(row);
-    } else {
-      const fallback = await fetchEpmcTrendRow("epmc:all", `${query} (Europe PMC / PubMed)`, query, years, fetchStart, ytdYear, docs, snippets, ctx, degraded, cache);
-      if (fallback) rows.push(fallback);
-    }
-  } else if (source2 === "all") {
-    const epmcSummary = await fetchEpmcTrendRow("epmc:all", `${query} (Europe PMC / PubMed)`, query, years, fetchStart, ytdYear, docs, snippets, ctx, degraded, cache);
+    } else needEpmcAll = true;
+  }
+  if (needEpmcAll && safeQ) {
+    const epmcSummary = await fetchEpmcTrendRow("epmc:all", `${query} (Europe PMC / PubMed)`, safeQ, years, fetchStart, ytdYear, docs, snippets, ctx, degraded, cache);
     if (epmcSummary) rows.push(epmcSummary);
   }
   const topics = filterTrendTopics(sortTrendTopics(rows, sort, metric), blindSpotsOnly);
   const fromCache = cache.total > 0 && cache.hits === cache.total;
   return { query, source: source2, windowYears, years, ytdYear, metric, sort, blindSpotsOnly, topics, degraded: [...degraded], fromCache, ...cache.minAt !== void 0 ? { cachedAt: cache.minAt } : {} };
 }
-function docToTrendPaper(doc, topicId, topicName) {
+function docToTrendPaper(doc, topicId, topicName, source2) {
   const authors = (doc.authors ?? "").split(/\s*[;,]\s*/).filter(Boolean), yr = Number(doc.year);
   return {
     id: doc.id,
@@ -2870,7 +2873,7 @@ function docToTrendPaper(doc, topicId, topicName) {
     doi: doc.doi,
     abstract: doc.abstract,
     url: doc.url,
-    source: "openalex",
+    source: source2,
     inLibrary: true,
     docId: doc.id,
     localDocId: doc.id,
@@ -2882,10 +2885,14 @@ var withLibraryMatch = (paper, docs, primaryTopicId, primaryTopicName) => {
   const matched = attachLibraryMatch(paper, docs);
   return { ...matched, ...matched.docId ? { localDocId: matched.docId } : {}, primaryTopicId, primaryTopicName };
 };
-var readSource = (v) => {
-  const s = v === void 0 ? "openalex" : v;
-  if (s !== "openalex" && s !== "europepmc" && s !== "all") throw new ServiceError(400, "Choose openalex, europepmc, or all.");
-  return s;
+var readEnum = (v, def, allowed, msg) => {
+  const hit = allowed.find((a) => a === (v === void 0 ? def : v));
+  if (hit === void 0) throw new ServiceError(400, msg);
+  return hit;
+};
+var readInt = (v, min, max, msg) => {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < min || v > max) throw new ServiceError(400, msg);
+  return v;
 };
 async function queryTrendPapers(rawInput, ctx) {
   const query = single(rawInput.query, "search query", 250, true), topicId = single(rawInput.topicId, "topic ID", 128, true);
@@ -2893,45 +2900,53 @@ async function queryTrendPapers(rawInput, ctx) {
   if (!Number.isInteger(year) || year < 1900 || year > 2100) throw new ServiceError(400, "Enter a valid publication year.");
   const source2 = rawInput.source ?? "openalex", sort = rawInput.sort ?? "representative";
   const limit = Math.min(25, Math.max(1, Math.floor(rawInput.limit ?? 15))), docs = ctx.docs ?? [], degraded = /* @__PURE__ */ new Set();
+  const finish = (tid, papers2, res2) => ({ query, topicId: tid, topicName, year, source: source2, sort, papers: papers2, degraded: [...degraded], fromCache: Boolean(res2?.fromCache), ...res2?.fetchedAt ? { cachedAt: res2.fetchedAt } : {} });
+  const isEpmc = source2 === "europepmc" || topicId.startsWith("epmc:");
   if (sort === "library") {
     const matched = new Set(matchLocalDocsForTopic(topicId, topicName, docs, loadPageSnippets(ctx)));
-    const papers2 = docs.filter((d) => matched.has(d.id)).map((d) => docToTrendPaper(d, topicId, topicName)).sort((a, b) => Number(b.year === year) - Number(a.year === year) || (b.year ?? 0) - (a.year ?? 0) || a.title.localeCompare(b.title)).slice(0, limit);
-    return { query, topicId, topicName, year, source: source2, sort, papers: papers2, degraded: [], fromCache: false };
+    const papers2 = docs.filter((d) => matched.has(d.id)).map((d) => docToTrendPaper(d, topicId, topicName, isEpmc ? "europepmc" : "openalex")).sort((a, b) => Number(b.year === year) - Number(a.year === year) || (b.year ?? 0) - (a.year ?? 0) || a.title.localeCompare(b.title)).slice(0, limit);
+    return finish(topicId, papers2);
   }
-  if (source2 === "europepmc" || topicId.startsWith("epmc:")) {
-    const meshName = rawInput.topicName ? topicName : topicId.slice("epmc:mesh:".length);
-    const epmcQ = topicId.startsWith("epmc:mesh:") ? `(${query}) AND MESH:"${meshName.replace(/"/g, "")}" AND PUB_YEAR:${year}` : `(${query}) AND PUB_YEAR:${year}`;
+  if (isEpmc) {
+    const isAll = topicId === "epmc:all", meshSlug = topicId.startsWith("epmc:mesh:") ? topicId.slice("epmc:mesh:".length).trim() : "";
+    const cleanMesh = meshSlug ? sanitizeEpmcMesh(rawInput.topicName ? topicName : meshSlug) : "";
+    if (!isAll && !cleanMesh) throw new ServiceError(400, "Invalid Europe PMC topic ID.");
+    const safeQ = sanitizeEpmcQuery(query);
+    if (!safeQ) throw new ServiceError(400, "Enter a valid search query.");
+    const epmcQ = isAll ? `(${safeQ}) AND PUB_YEAR:${year}` : `(${safeQ}) AND MESH:"${cleanMesh}" AND PUB_YEAR:${year}`;
     const res2 = await fetchJson("europepmc", `epmc:trends:papers:${normTitle(query)}:${topicId}:${year}:${sort}:${limit}`, epmcUrl(epmcQ, "core", limit, sort === "newest" ? "P_PDATE_D desc" : "CITED desc"), ctx, degraded, TTL_TRENDS);
-    const papers2 = arrOf(isObject(res2?.data) && isObject(res2.data.resultList) ? res2.data.resultList.result : void 0).map(parseEpmcItem).filter((p) => Boolean(p && p.year === year)).map((p) => withLibraryMatch(p, docs, topicId, topicName)).slice(0, limit);
-    return { query, topicId, topicName, year, source: source2, sort, papers: papers2, degraded: [...degraded], fromCache: Boolean(res2?.fromCache), ...res2?.fetchedAt ? { cachedAt: res2.fetchedAt } : {} };
+    const papers2 = epmcResults(res2?.data).map(parseEpmcItem).filter((p) => Boolean(p && p.year === year)).map((p) => withLibraryMatch(p, docs, topicId, topicName)).slice(0, limit);
+    return finish(topicId, papers2, res2);
   }
   const oaTopicId = shortTopicId(topicId);
   if (!oaTopicId) throw new ServiceError(400, "Invalid OpenAlex topic ID.");
   const url = oaUrl("/works", { search: query, filter: `primary_topic.id:${oaTopicId},publication_year:${year}`, sort: sort === "newest" ? "publication_date:desc" : "cited_by_count:desc", "per-page": String(limit) }, ctx.settings);
   const res = await fetchJson("openalex", `oa:trends:papers:${normTitle(query)}:${oaTopicId}:${year}:${sort}:${limit}`, url, ctx, degraded, TTL_TRENDS);
   const papers = arrOf(isObject(res?.data) ? res.data.results : void 0).map(parseOaWork).filter((w) => Boolean(w && w.paper.year === year && w.primaryTopicId === oaTopicId)).map((w) => withLibraryMatch(w.paper, docs, oaTopicId, w.primaryTopicName ?? topicName)).slice(0, limit);
-  return { query, topicId: oaTopicId, topicName, year, source: source2, sort, papers, degraded: [...degraded], fromCache: Boolean(res?.fromCache), ...res?.fetchedAt ? { cachedAt: res.fetchedAt } : {} };
+  return finish(oaTopicId, papers, res);
 }
 function readTrendQueryInput(input) {
-  const query = single(input.query, "search query", 250, true), source2 = readSource(input.source);
-  const windowYears = input.windowYears === void 0 ? 5 : input.windowYears;
-  if (windowYears !== 3 && windowYears !== 5 && windowYears !== 8) throw new ServiceError(400, "Choose a 3, 5, or 8 year window.");
-  const metric = input.metric === void 0 ? "volume" : input.metric;
-  if (metric !== "volume" && metric !== "growth" && metric !== "citations") throw new ServiceError(400, "Choose volume, growth, or citations.");
-  const sort = input.sort === void 0 ? "fastest_growing" : input.sort;
-  if (sort !== "fastest_growing" && sort !== "hottest" && sort !== "blind_spots_first") throw new ServiceError(400, "Choose fastest_growing, hottest, or blind_spots_first.");
   if (input.blindSpotsOnly !== void 0 && typeof input.blindSpotsOnly !== "boolean") throw new ServiceError(400, "Invalid blindSpotsOnly option.");
-  if (input.topicLimit !== void 0 && (typeof input.topicLimit !== "number" || !Number.isSafeInteger(input.topicLimit) || input.topicLimit < 1 || input.topicLimit > 10)) throw new ServiceError(400, "Invalid topic limit.");
-  return { query, source: source2, windowYears, metric, sort, blindSpotsOnly: input.blindSpotsOnly === true, topicLimit: input.topicLimit };
+  return {
+    query: single(input.query, "search query", 250, true),
+    source: readEnum(input.source, "openalex", ["openalex", "europepmc", "all"], "Choose openalex, europepmc, or all."),
+    windowYears: readEnum(input.windowYears, 5, [3, 5, 8], "Choose a 3, 5, or 8 year window."),
+    metric: readEnum(input.metric, "volume", ["volume", "growth", "citations"], "Choose volume, growth, or citations."),
+    sort: readEnum(input.sort, "fastest_growing", ["fastest_growing", "hottest", "blind_spots_first"], "Choose fastest_growing, hottest, or blind_spots_first."),
+    blindSpotsOnly: input.blindSpotsOnly === true,
+    topicLimit: input.topicLimit === void 0 ? void 0 : readInt(input.topicLimit, 1, 10, "Invalid topic limit.")
+  };
 }
 function readTrendPapersInput(input) {
-  const query = single(input.query, "search query", 250, true), topicId = single(input.topicId, "topic ID", 128, true), source2 = readSource(input.source);
-  const topicName = input.topicName === void 0 ? void 0 : single(input.topicName, "topic name", 200);
-  if (typeof input.year !== "number" || !Number.isSafeInteger(input.year) || input.year < 1900 || input.year > 2100) throw new ServiceError(400, "Enter a valid publication year.");
-  const sort = input.sort === void 0 ? "representative" : input.sort;
-  if (sort !== "representative" && sort !== "newest" && sort !== "library") throw new ServiceError(400, "Choose representative, newest, or library.");
-  if (input.limit !== void 0 && (typeof input.limit !== "number" || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 25)) throw new ServiceError(400, "Invalid paper limit.");
-  return { query, topicId, topicName, year: input.year, source: source2, sort, limit: input.limit };
+  return {
+    query: single(input.query, "search query", 250, true),
+    topicId: single(input.topicId, "topic ID", 128, true),
+    topicName: input.topicName === void 0 ? void 0 : single(input.topicName, "topic name", 200),
+    year: readInt(input.year, 1900, 2100, "Enter a valid publication year."),
+    source: readEnum(input.source, "openalex", ["openalex", "europepmc", "all"], "Choose openalex, europepmc, or all."),
+    sort: readEnum(input.sort, "representative", ["representative", "newest", "library"], "Choose representative, newest, or library."),
+    limit: input.limit === void 0 ? void 0 : readInt(input.limit, 1, 25, "Invalid paper limit.")
+  };
 }
 
 // src/server/notebook.ts
@@ -6048,6 +6063,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       return meta ? { ...doc, meta } : doc;
     });
   };
+  const graphCtx = (docs, signal) => ({ withDb: (w, run2) => database.withDb(w, run2), settings: database.settings(), fetchFn: fetchImpl, docs, signal });
   const handlers = {
     "library.list": async () => ({ docs: await listDocsWithMeta() }),
     "library.get": async (input) => {
@@ -6153,7 +6169,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       const doc = !single(input.query, "query", 500) && input.docId !== void 0 ? await documents.get(input.docId) : void 0;
       const query = single(input.query, "query", 500) || (doc ? doc.doi || doc.url || doc.paperTitle || doc.title : "");
       if (!query) throw new ServiceError(400, "Enter a DOI, arXiv ID, or paper title.");
-      return resolveAcademicPaper(query, { withDb: (w, run2) => database.withDb(w, run2), settings: database.settings(), fetchFn: fetchImpl, docs: await documents.list(), signal: options?.signal });
+      return resolveAcademicPaper(query, graphCtx(await documents.list(), options?.signal));
     },
     "graph.explore": async (input, options) => {
       if (!Array.isArray(input.seeds) || !input.seeds.length || input.seeds.length > 10) throw new ServiceError(400, "Provide 1 to 10 seed papers.");
@@ -6166,7 +6182,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
         direction,
         negativeSeeds: input.negativeSeeds?.map((s) => single(s, "negative seed", 500, true)),
         limit: input.limit
-      }, { withDb: (w, run2) => database.withDb(w, run2), settings: database.settings(), fetchFn: fetchImpl, docs: await documents.list(), signal: options?.signal });
+      }, graphCtx(await documents.list(), options?.signal));
     },
     "graph.savePaper": async (input) => {
       if (input.mode !== "abstract" && input.mode !== "oa-pdf") throw new ServiceError(400, "Choose abstract or oa-pdf.");
@@ -6174,20 +6190,8 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       const topicTag = input.topicTag === void 0 ? void 0 : single(input.topicTag, "topic tag", 40);
       return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode: input.mode, topicTag }, { library: documents, store: database, readResource, indexDoc });
     },
-    "trends.query": async (input, options) => queryFieldTrends(readTrendQueryInput(input), {
-      withDb: (w, run2) => database.withDb(w, run2),
-      settings: database.settings(),
-      fetchFn: fetchImpl,
-      docs: await listDocsWithMeta(),
-      signal: options?.signal
-    }),
-    "trends.papers": async (input, options) => queryTrendPapers(readTrendPapersInput(input), {
-      withDb: (w, run2) => database.withDb(w, run2),
-      settings: database.settings(),
-      fetchFn: fetchImpl,
-      docs: await listDocsWithMeta(),
-      signal: options?.signal
-    }),
+    "trends.query": async (input, options) => queryFieldTrends(readTrendQueryInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
+    "trends.papers": async (input, options) => queryTrendPapers(readTrendPapersInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
     "web.import": async (input) => {
       const opened = await documents.importWebDocument(input);
       await indexDoc(opened.doc, true).catch(() => 0);

@@ -53,6 +53,7 @@ function makePaper(p: Omit<GraphPaper, 'id' | 'firstAuthor' | 'lastAuthor'> & { 
 async function cachedFetch<T>(
   source: GraphSource, key: string, url: string, init: RequestInit, ttlMs: number, parse: (res: Response) => Promise<T>, ctx: GraphContext, degraded: Set<string>
 ): Promise<{ data: T; fromCache: boolean; fetchedAt: number } | undefined> {
+  if (ctx.signal?.aborted) throw new ServiceError(499, 'Request canceled.');
   const cached = ctx.withDb(false, db => getGraphCache<T>(db, key));
   if (cached && !cached.stale) return { data: cached.value, fromCache: true, fetchedAt: cached.fetchedAt };
   const fetcher = ctx.fetchFn ?? globalThis.fetch, sleep = ctx.sleepFn ?? defaultSleep, headers = new Headers(init.headers);
