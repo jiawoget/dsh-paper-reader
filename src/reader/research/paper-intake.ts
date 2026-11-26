@@ -9,6 +9,7 @@ export const formatDegradedSources = (sources: readonly string[]): string => !so
   `Partial data: ${[...new Set(sources)].map(s => SRC_NAME[s] ?? s).join(', ')} unavailable, using fallback sources.`,
   `数据源降级：${[...new Set(sources)].map(s => SRC_NAME[s] ?? s).join(', ')} 暂不可用，已切换备用源。`
 );
+export const formatCachedAt = (ts?: number): string => { const tm = ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; return tm ? t(`Cached · ${tm}`, `已缓存 · ${tm}`) : t('Cached', '已缓存'); };
 
 export function renderPaperActions(
   slot: HTMLElement, paper: GraphPaper,

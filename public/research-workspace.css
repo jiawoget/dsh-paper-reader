@@ -312,10 +312,11 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
   .ft-drill { max-height: 75vh; max-height: 75dvh; }
   .ft-search-row { padding: 4px 8px; } .ft-filters-toggle { display: inline-flex; padding-inline: 10px; }
   .ft-top:not([data-filters-open="true"]) .ft-filters { display: none; } .ft-filters { padding: 6px 8px 8px; border-top: 1px solid var(--line); }
-  .ft-meta-bar { flex-wrap: nowrap; overflow-x: auto; padding: 3px 8px; scrollbar-width: none; } .ft-meta-pills { flex-wrap: nowrap; } .ft-pill.is-warn { white-space: nowrap; }
+  .ft-meta-bar { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 3px 8px; scrollbar-width: none; }
+  .ft-meta-pills { flex: none; flex-wrap: nowrap; } .ft-footnote, .ft-pill.is-warn { white-space: nowrap; }
   .ft-split, .ft-split[data-drill-open="true"] { grid-template-columns: minmax(0, 1fr); }
   .ft-table .ft-col-topic, .ft-row-topic { width: 136px; min-width: 136px; max-width: 136px; padding: 6px 8px; }
-  .ft-table .ft-col-lib { width: 64px; min-width: 64px; } .ft-table .ft-col-year { min-width: 56px; } .ft-cell { min-width: 52px; min-height: 44px; }
+  .ft-table .ft-col-lib { width: 64px; min-width: 64px; } .ft-table .ft-col-year { min-width: 60px; } .ft-table .ft-cell { min-width: 52px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: no-preference) {
   :root:not([data-theme-switching]) :is(

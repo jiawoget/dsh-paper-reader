@@ -256,9 +256,10 @@ async function run(): Promise<void> {
       await ws.locator('.ft-drill-tab[data-sort="library"][aria-pressed="true"]').waitFor({ state: 'visible' });
       await page.setViewportSize({ width: 1024, height: 768 });
       assert.ok(await ws.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1 && document.querySelector('.ft-col-topic')!.getBoundingClientRect().width / document.querySelector('.ft-matrix-pane')!.getBoundingClientRect().width <= 0.31));
+      await ws.locator('.ft-seg-btn[data-metric="volume"]').click();
       await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
-      const ftMob = await ws.evaluate(() => ({ top: document.querySelector('.ft-matrix-scroll')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth }));
-      assert.ok(ftMob.top <= 150 && ftMob.ov <= 1, JSON.stringify(ftMob));
+      const ftMob = await ws.evaluate(() => ({ top: document.querySelector('.ft-matrix-scroll')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth, metaGap: document.querySelector('.ft-footnote')!.getBoundingClientRect().left - document.querySelector('.ft-meta-pills')!.getBoundingClientRect().right, minCellW: Math.min(...[...document.querySelectorAll('.ft-cell')].map(el => el.getBoundingClientRect().width)) }));
+      assert.ok(ftMob.top <= 150 && ftMob.ov <= 1 && ftMob.metaGap >= 0 && ftMob.minCellW >= 52, JSON.stringify(ftMob));
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.ft-deep-btn').click();
       assert.equal(await ws.locator('.rw-nav-btn[aria-current="page"]').getAttribute('data-view'), 'deep-search');

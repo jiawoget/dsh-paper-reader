@@ -4,7 +4,7 @@ import {
 } from '../../shared/research-types.js';
 import { api, el, message, readerLabel as t, toast } from '../ui.js';
 import { FieldTrendsDrilldown, type DrilldownSavedState } from './field-trends-drilldown.js';
-import { formatDegradedSources, isAbortError, mkBtn } from './paper-intake.js';
+import { formatCachedAt, formatDegradedSources, isAbortError, mkBtn } from './paper-intake.js';
 import type { ResearchShellContext, ResearchViewModule } from './state.js';
 
 interface SavedTrendsState {
@@ -16,21 +16,22 @@ const STARTERS = ['LLM inference', 'GLP-1'] as const;
 const METRICS: readonly [TrendMetric, () => string][] = [['volume', () => t('Volume', '发文量')], ['growth', () => t('Growth', '增速')], ['citations', () => t('Citations', '引文热度')]];
 const WINDOWS: readonly TrendWindow[] = [3, 5, 8];
 const fmtCompact = (n: number) => n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n));
-const fmtGrowthSub = (r: TrendTopicRow) => r.lowBase ? t('Low base (n < 10)', '低基数 (n < 10)') : `${r.growth >= 0 ? '+' : ''}${Math.round(r.growth * 100)}% · ${fmtCompact(r.totalVolume)}`;
+const fmtGrowthSub = (r: TrendTopicRow) => { const p = Math.round(r.growth * 100); return r.lowBase ? t('Low base (n < 10)', '低基数 (n < 10)') : `${p > 0 ? '+' : ''}${p === 0 ? 0 : p}% · ${fmtCompact(r.totalVolume)}`; };
 
 function formatCellValue(cell: TrendCell, metric: TrendMetric): string {
   if (metric === 'volume') return fmtCompact(cell.volume);
   if (metric === 'citations') return cell.citationHeat <= 0 ? '0' : cell.citationHeat >= 1000 ? `${(cell.citationHeat / 1000).toFixed(1)}k` : cell.citationHeat < 10 ? cell.citationHeat.toFixed(1) : String(Math.round(cell.citationHeat));
   if (cell.isYtd) return 'YTD*';
   if (cell.yoyGrowth === null) return '—';
-  const pct = Math.round(cell.yoyGrowth * 100), s = pct > 999 ? '>+999%' : pct >= 0 ? `+${pct}%` : `${pct}%`;
+  const pct = Math.round(cell.yoyGrowth * 100), s = pct > 999 ? '>+999%' : pct > 0 ? `+${pct}%` : pct === 0 ? '0%' : `${pct}%`;
   return cell.lowBase ? `${s}°` : s;
 }
 
 function cellHeatLevel(cell: TrendCell, metric: TrendMetric, maxVal: number): string {
   if (metric === 'growth') {
     if (cell.isYtd || cell.yoyGrowth === null || cell.lowBase) return '0';
-    return cell.yoyGrowth < 0 ? 'neg' : cell.yoyGrowth >= 1 ? '4' : cell.yoyGrowth >= 0.4 ? '3' : cell.yoyGrowth >= 0.15 ? '2' : cell.yoyGrowth > 0 ? '1' : '0';
+    const pct = Math.round(cell.yoyGrowth * 100);
+    return pct < 0 ? 'neg' : pct >= 100 ? '4' : pct >= 40 ? '3' : pct >= 15 ? '2' : pct > 0 ? '1' : '0';
   }
   const val = metric === 'volume' ? cell.volume : cell.citationHeat;
   if (val <= 0 || maxVal <= 0) return '0';
@@ -39,16 +40,16 @@ function cellHeatLevel(cell: TrendCell, metric: TrendMetric, maxVal: number): st
 }
 
 export function createFieldTrendsView(): ResearchViewModule {
-  let mounted = false, restored = false, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
+  let mounted = false, restored = false, reqSeq = 0, saveVer = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
   let query = '', source: TrendSource = 'openalex', windowYears: TrendWindow = 5, metric: TrendMetric = 'volume', sort: TrendSort = 'fastest_growing', blindSpotsOnly = false;
   let rawResult: TrendQueryResult | null = null, loading = false, errorText = '', filtersOpen = false;
   let topEl: HTMLElement | undefined, splitEl: HTMLElement | undefined, metaEl: HTMLElement | undefined, matrixScroll: HTMLElement | undefined;
   let queryInput: HTMLInputElement | undefined, submitBtn: HTMLButtonElement | undefined, filtersBtn: HTMLButtonElement | undefined;
   let sourceSelect: HTMLSelectElement | undefined, sortSelect: HTMLSelectElement | undefined, blindBtn: HTMLButtonElement | undefined;
   let drilldown: FieldTrendsDrilldown | undefined;
-  const metricBtns = new Map<TrendMetric, HTMLButtonElement>(), winBtns = new Map<TrendWindow, HTMLButtonElement>(), libCells = new Map<string, HTMLElement>();
+  const metricBtns = new Map<TrendMetric, HTMLButtonElement>(), winBtns = new Map<TrendWindow, HTMLButtonElement>(), libCells = new Map<string, HTMLElement>(), savingIds = new Set<string>();
 
-  const abortPending = () => { ++reqSeq; ctrl?.abort(); ctrl = null; };
+  const abortPending = () => { ++reqSeq; ctrl?.abort(); ctrl = null; loading = false; };
   const activeKey = () => { const cur = drilldown?.activeTarget(); return cur ? `${cur.topicId}:${cur.year}` : ''; };
   const syncControls = () => {
     if (topEl) topEl.dataset.filtersOpen = String(filtersOpen);
@@ -79,14 +80,11 @@ export function createFieldTrendsView(): ResearchViewModule {
   };
   const renderMetaBar = (count: number) => {
     if (!metaEl) return; metaEl.replaceChildren();
-    if (!rawResult) { metaEl.hidden = true; return; }
+    if (!rawResult || loading || errorText) { metaEl.hidden = true; return; }
     metaEl.hidden = false;
     const pills = el('div', 'ft-meta-pills'), span = rawResult.years.length ? `${rawResult.years[0]}–${rawResult.ytdYear}*` : '';
     pills.append(el('span', 'ft-pill', t(`${count} topics · ${span}`, `${count} 个子方向 · ${span}`)));
-    if (rawResult.fromCache) {
-      const when = rawResult.cachedAt ? new Date(rawResult.cachedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-      pills.append(el('span', 'ft-pill is-cache', when ? t(`Cached · ${when}`, `已缓存 · ${when}`) : t('Cached', '已缓存')));
-    }
+    if (rawResult.fromCache) pills.append(el('span', 'ft-pill is-cache', formatCachedAt(rawResult.cachedAt)));
     if (rawResult.degraded.length) pills.append(el('span', 'ft-pill is-warn', formatDegradedSources(rawResult.degraded)));
     metaEl.append(pills, el('span', 'ft-footnote', t('* YTD partial year · Low-base n < 10 dimmed', '* 当年为截至目前数据 (YTD) · 低基数 n < 10 增速淡显')));
   };
@@ -149,9 +147,9 @@ export function createFieldTrendsView(): ResearchViewModule {
     table.append(thead, tbody); matrixScroll.append(table); matrixScroll.scrollTop = prevTop; matrixScroll.scrollLeft = prevLeft;
   };
   const runQuery = async (nextQuery: string) => {
-    const q = nextQuery.trim(); query = q;
-    if (!q) { rawResult = null; errorText = ''; loading = false; drilldown?.close(); renderMatrix(); return; }
-    abortPending(); const seq = reqSeq; ctrl = new AbortController(); loading = true; errorText = '';
+    const q = nextQuery.trim(); query = q; abortPending();
+    if (!q) { rawResult = null; errorText = ''; if (submitBtn) submitBtn.disabled = false; drilldown?.close(); renderMatrix(); return; }
+    const seq = reqSeq; ctrl = new AbortController(); loading = true; errorText = '';
     if (filtersOpen) filtersOpen = false; if (submitBtn) submitBtn.disabled = true; drilldown?.close(); renderMatrix();
     try {
       const res = await api('trends.query', { query: q, source, windowYears, metric, sort, blindSpotsOnly: false }, false, ctrl.signal);
@@ -163,12 +161,31 @@ export function createFieldTrendsView(): ResearchViewModule {
     } finally { if (seq === reqSeq && submitBtn) submitBtn.disabled = false; }
   };
   const updateRowCoverage = (topicId: string, delta: number, confirmedDocId?: string) => {
+    ++saveVer;
     const row = rawResult?.topics.find(r => r.topicId === topicId); if (!row) return;
     if (confirmedDocId) {
       if (row.localDocIds.includes(confirmedDocId)) row.localCount = Math.max(row.localDocIds.length, row.localCount - 1);
       else row.localDocIds.push(confirmedDocId);
     } else row.localCount = Math.max(0, row.localCount + delta);
     const td = libCells.get(topicId); if (mounted && td) renderCoverageCell(td, row);
+  };
+  const dropMissingDocs = (isMissing: (docId: string) => boolean) => {
+    if (!rawResult) return;
+    for (const row of rawResult.topics) {
+      const kept = row.localDocIds.filter(id => !isMissing(id)), dropped = row.localDocIds.length - kept.length;
+      if (!dropped) continue;
+      row.localDocIds = kept; row.localCount = Math.max(0, row.localCount - dropped);
+      const td = libCells.get(row.topicId); if (mounted && td) renderCoverageCell(td, row);
+    }
+  };
+  const reconcileLibrary = () => {
+    const cur = rawResult, ver = saveVer; if (!cur) return;
+    void api('library.list', {}).then(({ docs }) => {
+      if (!mounted || rawResult !== cur || ver !== saveVer) return;
+      const live = new Set(docs.map(d => d.id));
+      dropMissingDocs(id => !live.has(id));
+      drilldown?.reconcileMissing((did, pid) => !live.has(did) && !savingIds.has(pid));
+    }).catch(() => undefined);
   };
 
   return {
@@ -199,15 +216,15 @@ export function createFieldTrendsView(): ResearchViewModule {
       filters.append(sourceSelect, metricGroup, sortSelect, winGroup, blindBtn);
       metaEl = el('div', 'ft-meta-bar'); metaEl.hidden = true; topEl.append(form, filters, metaEl);
       splitEl = el('div', 'ft-split'); const pane = el('div', 'ft-matrix-pane'); matrixScroll = el('div', 'ft-matrix-scroll'); pane.append(matrixScroll);
-      drilldown = new FieldTrendsDrilldown({ shell: () => shell, onClose: () => { syncControls(); syncSelectedCells(); }, onCoverageDelta: (id, d) => updateRowCoverage(id, d), onCoverageConfirmed: (id, docId) => updateRowCoverage(id, 0, docId) });
+      drilldown = new FieldTrendsDrilldown({ shell: () => shell, savingIds, onClose: () => { syncControls(); syncSelectedCells(); }, onCoverageDelta: (id, d) => updateRowCoverage(id, d), onCoverageConfirmed: (id, docId) => updateRowCoverage(id, 0, docId), onPaperSynced: (id, inLib, docId) => drilldown?.syncPaper(id, inLib, docId) });
       splitEl.append(pane, drilldown.backdrop, drilldown.root); view.append(topEl, splitEl); host.append(view); renderMatrix();
-      if (startQ) void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted && !restored) void runQuery(startQ); });
+      void Promise.resolve().then(() => Promise.resolve()).then(() => { if (!mounted) return; if (startQ && !restored) void runQuery(startQ); else if (rawResult) reconcileLibrary(); });
     },
     unmount() { mounted = false; abortPending(); drilldown?.unmount(); drilldown = undefined; libCells.clear(); metricBtns.clear(); winBtns.clear(); },
     saveState: (): SavedTrendsState => ({ query, source, windowYears, metric, sort, blindSpotsOnly, rawResult, drilldown: drilldown?.saveState() ?? null, scrollTop: matrixScroll?.scrollTop ?? 0, scrollLeft: matrixScroll?.scrollLeft ?? 0 }),
     restoreState(raw) {
       if (!raw || typeof raw !== 'object') return;
-      const s = raw as SavedTrendsState; restored = true; abortPending(); loading = false; errorText = '';
+      const s = raw as SavedTrendsState; restored = true; abortPending(); errorText = '';
       query = s.query ?? ''; source = s.source ?? 'openalex'; windowYears = s.windowYears ?? 5; metric = s.metric ?? 'volume'; sort = s.sort ?? 'fastest_growing'; blindSpotsOnly = Boolean(s.blindSpotsOnly); rawResult = s.rawResult ?? null;
       if (queryInput) queryInput.value = query; drilldown?.restoreState(s.drilldown); renderMatrix();
       if (matrixScroll) { matrixScroll.scrollTop = s.scrollTop ?? 0; matrixScroll.scrollLeft = s.scrollLeft ?? 0; } syncSelectedCells();
@@ -220,12 +237,7 @@ export function createFieldTrendsView(): ResearchViewModule {
     },
     onDocumentMutated(docId, deleted) {
       if (!deleted || !rawResult) return;
-      for (const row of rawResult.topics) {
-        const idx = row.localDocIds.indexOf(docId); if (idx === -1) continue;
-        row.localDocIds.splice(idx, 1); row.localCount = Math.max(0, row.localCount - 1);
-        const td = libCells.get(row.topicId); if (mounted && td) renderCoverageCell(td, row);
-      }
-      drilldown?.onDocumentDeleted(docId);
+      dropMissingDocs(id => id === docId); drilldown?.reconcileMissing(id => id === docId);
     }
   };
 }
