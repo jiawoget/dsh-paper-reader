@@ -175,6 +175,8 @@ async function run(): Promise<void> {
       await page.waitForTimeout(80);
       const m4 = await ws.evaluate(() => ({ ov: document.documentElement.scrollWidth - innerWidth, mOv: document.querySelector('.rw-main')!.scrollWidth - document.querySelector('.rw-main')!.clientWidth, sw: document.querySelector('.cm-split')!.getBoundingClientRect().width }));
       assert.ok(m4.ov <= 1 && m4.mOv <= 1 && m4.sw <= 391, JSON.stringify(m4));
+      const mCrumbs = await ws.locator('.cm-crumb').evaluateAll(els => els.map(el => ({ sw: el.scrollWidth, cw: el.clientWidth })));
+      assert.ok(mCrumbs.length === 4 && mCrumbs.every(c => c.sw <= c.cw + 1), JSON.stringify(mCrumbs));
       await page.setViewportSize({ width: 1440, height: 900 });
       await ws.locator('.cm-crumb[data-step="0"]').click();
       assert.equal(await ws.locator('.cm-crumb').count(), 1);

@@ -156,7 +156,7 @@ export function createCitationMapView(): ResearchViewModule {
       if (resolved.degraded.length) renderDegraded(resolved.degraded);
       if (!resolved.paper) {
         const fallbackTitle = query || docs.find(d => d.id === docId)?.paperTitle || docs.find(d => d.id === docId)?.title || '';
-        statusEl?.replaceChildren(el('span', '', t('No external graph record matched this local paper. ', '暂未匹配到该本地文献的外部图谱记录。')), mkBtn('text-btn', t('Match by title / DOI', '按标题 / DOI 匹配'), () => { if (seedInput) { seedInput.value = fallbackTitle; seedQuery = fallbackTitle; seedInput.focus(); seedInput.select(); } }));
+        statusEl?.replaceChildren(el('span', '', t('No external graph record matched this local paper. ', '暂未匹配到该本地文献的外部图谱记录。')), mkBtn('text-btn', t('Match by title / DOI', '按标题 / DOI 匹配'), () => { if (seedInput) { mobileSearchOpen = true; syncLayoutFlags(); seedInput.value = fallbackTitle; seedQuery = fallbackTitle; seedInput.focus(); seedInput.select(); } }));
         return;
       }
       await explorePaper(resolved.paper, direction, true);

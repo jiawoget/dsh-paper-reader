@@ -136,10 +136,10 @@
 .cm-dir-group { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .cm-cap { padding: 2px 8px; border-radius: 999px; background: var(--surface-sunken); border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cm-breadcrumbs { min-width: 0; display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--surface-sunken); overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
-.cm-crumb { padding: 3px 8px; border-radius: 5px; font-size: 12px; color: var(--purple); white-space: nowrap; }
+.cm-crumb { flex: none; padding: 3px 8px; border-radius: 5px; font-size: 12px; color: var(--purple); white-space: nowrap; }
 .cm-crumb:hover { background: var(--lavender); }
 .cm-crumb[aria-current="step"] { color: var(--desk-ink); font-weight: 650; background: var(--paper); border: 1px solid var(--line); }
-.cm-crumb-sep { color: var(--muted); font-size: 12px; }
+.cm-crumb-sep { flex: none; color: var(--muted); font-size: 12px; }
 .cm-crumb-empty { color: var(--muted); font-size: 12px; white-space: normal; }
 .cm-degraded { padding: 6px 12px; border-top: 1px solid var(--warn-border); background: var(--warn-bg); color: var(--warn); font-size: 12px; line-height: 1.4; }
 .cm-mobile-tabs, .cm-detail-backdrop { display: none; }
