@@ -32,6 +32,8 @@ const fixtureOrigin = process.env.PAPER_READER_E2E_PUBLISHER_FIXTURE;
 if (fixtureOrigin) {
   const fixture = new URL(fixtureOrigin);
   if (fixture.protocol !== 'http:' || fixture.hostname !== '127.0.0.1') throw new Error('The publisher fixture must stay on loopback.');
+  const bypass = [process.env.NO_PROXY || process.env.no_proxy, ...tracedHosts].filter(Boolean).join(',');
+  process.env.NO_PROXY = process.env.no_proxy = bypass;
   const get = http.get;
   const request = http.request;
   const fixtureTarget = (input: unknown) => {
