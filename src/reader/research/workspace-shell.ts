@@ -1,5 +1,5 @@
 import { byId, el, message, toast } from '../ui.js';
-import { researchIcon } from './icons.js';
+import { dismissInfoTip, researchIcon } from './icons.js';
 import { RESEARCH_VIEWS, researchText, researchViewMeta, researchViewName, type ResearchViewId } from './labels.js';
 import { createWorkspaceFloatCallbacks, PaperFloatBar } from './paper-float-bar.js';
 import { clearAbstractOnly } from './paper-intake.js';
@@ -123,6 +123,7 @@ export class ResearchWorkspace {
 
   handleEscape(): boolean {
     if (!this.opened) return false;
+    if (dismissInfoTip()) return true;
     if (this.overlayOpen) { this.floatBar.hide(); this.overlayOpen = false; this.syncRail(); this.railToggle.focus({ preventScroll: true }); return true; }
     const active = document.activeElement;
     if (active instanceof Element && active.closest('#researchWorkspace') && active.matches('input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return false;

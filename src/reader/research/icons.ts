@@ -43,6 +43,11 @@ const closeOpenTip = (): void => {
   openTip.classList.remove('is-open'); openTip.setAttribute('aria-expanded', 'false'); openTip = null;
 };
 
+export function dismissInfoTip(): boolean {
+  if (!openTip) return false;
+  const b = openTip; closeOpenTip(); b.focus({ preventScroll: true }); return true;
+}
+
 const syncTipShift = (btn: HTMLButtonElement): void => {
   const r = btn.getBoundingClientRect(), vw = typeof innerWidth === 'number' && innerWidth > 0 ? innerWidth : 1024;
   if (!r.width && !r.height) return;
@@ -54,7 +59,7 @@ export function infoTip(text: string, label?: string): HTMLButtonElement {
   if (typeof document !== 'undefined' && !boundTipDocs.has(document)) {
     boundTipDocs.add(document);
     document.addEventListener('pointerdown', e => { if (openTip && !(e.target instanceof Node && openTip.contains(e.target))) closeOpenTip(); });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && openTip) { const b = openTip; closeOpenTip(); b.focus({ preventScroll: true }); } });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && dismissInfoTip()) { e.preventDefault(); e.stopPropagation(); } });
   }
   const btn = el('button', 'icon-btn re-info-btn');
   btn.type = 'button'; btn.dataset.tip = text; btn.setAttribute('aria-expanded', 'false');
