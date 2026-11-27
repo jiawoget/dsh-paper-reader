@@ -61,7 +61,7 @@ export interface GraphPaper {
   oaPdfUrl?: string; url?: string; source: GraphSource; inLibrary?: boolean; docId?: string; score?: number;
 }
 export interface GraphNode extends GraphPaper { isSeed?: boolean; direction?: GraphDirection | 'seed'; coCitations?: number }
-export interface GraphEdge { source: string; target: string; kind: 'cites' | 'related' }
+export interface GraphEdge { source: string; target: string; kind: 'cites' | 'related'; weight?: number }
 export interface PositionedGraphNode extends GraphNode { x: number; y: number; radius: number }
 export interface GraphExploreResult { seeds: GraphPaper[]; nodes: GraphNode[]; edges: GraphEdge[]; degraded: string[]; fromCache: boolean }
 export interface DocumentInfo extends DocMetadata {

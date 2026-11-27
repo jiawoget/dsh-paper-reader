@@ -167,7 +167,7 @@ export class ResearchWorkspace {
       activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
       openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
       inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted),
-      refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar
+      refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar, openSettings: tab => this.host.openSettings?.(tab)
     };
     this.shellCtx = ctx;
     void Promise.resolve(mod.mount(this.main, ctx)).then(() => {

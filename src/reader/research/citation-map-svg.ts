@@ -1,4 +1,4 @@
-import { computeCitationMapLayout } from '../../shared/graph-layout.js';
+import { computeCitationMapLayout, timelineCitationScale } from '../../shared/graph-layout.js';
 import type { GraphEdge, GraphNode, PositionedGraphNode } from '../../shared/types.js';
 import { el, readerLabel as t } from '../ui.js';
 
@@ -6,6 +6,7 @@ export type AuthorLabelMode = 'first' | 'last';
 export type GraphViewMode = 'network' | 'timeline';
 
 interface NodeRef { node: PositionedGraphNode; group: SVGGElement; label: SVGTextElement; anchor: 'start' | 'middle' | 'end'; lx: number }
+interface EdgeRef { el: SVGLineElement; source: string; target: string; kind: GraphEdge['kind'] }
 const SVG_NS = 'http://www.w3.org/2000/svg', VIEW_W = 760, VIEW_H = 480;
 
 function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
@@ -18,6 +19,7 @@ function surname(author: string, fallbackTitle: string): string {
   const base = clean ? (clean.includes(',') ? clean.split(',')[0].trim() : (clean.split(/\s+/).at(-1) ?? clean)) : (fallbackTitle.split(/\s+/)[0] ?? '');
   return base.length > 12 ? base.slice(0, 11) + '…' : base;
 }
+const fmtTick = (n: number): string => n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1000 ? `${n / 1000}k` : String(n);
 const nodeCaption = (node: GraphNode, m: AuthorLabelMode) => { const n = surname(m === 'last' ? (node.lastAuthor || node.firstAuthor) : (node.firstAuthor || node.lastAuthor), node.title); return node.year ? `${n} ${node.year}` : n; };
 const nodeAriaLabel = (node: GraphNode, m: AuthorLabelMode) => `${node.title} (${nodeCaption(node, m)}) — ${node.inLibrary ? t('In library', '已在库') : t('New discovery', '外部新发现')}`;
 
@@ -25,14 +27,20 @@ export class CitationMapSvg {
   readonly root = el('div', 'cm-svg-wrap');
   private readonly svg = svgEl('svg', { class: 'cm-svg', viewBox: `0 0 ${VIEW_W} ${VIEW_H}`, preserveAspectRatio: 'xMidYMid meet', role: 'img' });
   private readonly axisLayer = svgEl('g', { class: 'cm-axis' }); private readonly edgeLayer = svgEl('g', { class: 'cm-edges' }); private readonly nodeLayer = svgEl('g', { class: 'cm-nodes' });
-  private readonly refs = new Map<string, NodeRef>(); private readonly edgeEls: { el: SVGLineElement; source: string; target: string }[] = [];
+  private readonly refs = new Map<string, NodeRef>(); private readonly edgeEls: EdgeRef[] = [];
   private authorMode: AuthorLabelMode = 'first'; private hoveredId: string | null = null;
 
   constructor(private readonly callbacks: { onHover: (id: string | null) => void; onSelect: (id: string) => void }) {
     this.svg.setAttribute('aria-label', t('Citation map graph', '引文脉络图谱'));
-    this.svg.append(this.axisLayer, this.edgeLayer, this.nodeLayer);
+    const defs = svgEl('defs');
+    for (const [id, cls] of [['cm-arrow', 'cm-arrow-path'], ['cm-arrow-hi', 'cm-arrow-path is-hi']] as const) {
+      const m = svgEl('marker', { id, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto' });
+      m.append(svgEl('path', { class: cls, d: 'M1 1.5L7 4L1 6.5z' }));
+      defs.append(m);
+    }
+    this.svg.append(defs, this.axisLayer, this.edgeLayer, this.nodeLayer);
     const legend = el('div', 'cm-legend'); legend.setAttribute('aria-hidden', 'true');
-    for (const [cls, text] of [['is-lib', t('In library', '已在库')], ['is-disc', t('Newer discovery', '越深越新')], ['is-gold', t('Highlighted', '联动高亮')]] as const) {
+    for (const [cls, text] of [['is-lib', t('In library', '已在库')], ['is-disc', t('Newer discovery', '越深越新')], ['is-accent', t('1-hop focus', '联动聚焦')]] as const) {
       const item = el('span', 'cm-legend-item'); item.append(el('i', `cm-dot ${cls}`), text); legend.append(item);
     }
     this.root.append(this.svg, legend);
@@ -40,29 +48,52 @@ export class CitationMapSvg {
 
   render(nodes: GraphNode[], edges: GraphEdge[], mode: GraphViewMode, authorMode: AuthorLabelMode, selectedId: string | null): void {
     this.authorMode = authorMode; this.hoveredId = null; this.refs.clear(); this.edgeEls.length = 0;
+    this.svg.classList.remove('has-hover');
     this.axisLayer.replaceChildren(); this.edgeLayer.replaceChildren(); this.nodeLayer.replaceChildren();
     const plotH = mode === 'timeline' ? VIEW_H - 34 : VIEW_H;
     const placed = computeCitationMapLayout(nodes, edges, mode, VIEW_W, plotH), byId = new Map(placed.map(n => [n.id, n]));
     const years = placed.map(n => n.year).filter((y): y is number => typeof y === 'number' && Number.isFinite(y)).sort((a, b) => a - b);
     const loY = years[0] ?? 2018, hiY = years.at(-1) ?? Math.max(loY, new Date().getFullYear());
 
-    if (mode === 'timeline' && years.length) {
-      const span = Math.max(1, hiY - loY), count = Math.min(6, span + 1);
-      const ticks = hiY === loY ? [loY] : [...new Set(Array.from({ length: count }, (_, i) => Math.round(loY + (i * span) / Math.max(1, count - 1))))];
-      const pad = Math.min(72, Math.max(48, VIEW_W * 0.09));
-      this.axisLayer.append(svgEl('line', { class: 'cm-axis-line', x1: pad, y1: plotH - 4, x2: VIEW_W - pad, y2: plotH - 4 }));
-      for (const yr of ticks) {
-        const x = (hiY === loY ? VIEW_W / 2 : pad + ((yr - loY) / span) * (VIEW_W - pad * 2)).toFixed(1);
-        this.axisLayer.append(svgEl('line', { class: 'cm-axis-tick', x1: x, y1: 18, x2: x, y2: plotH - 4 }));
-        const txt = svgEl('text', { class: 'cm-axis-label', x, y: VIEW_H - 12, 'text-anchor': 'middle' });
-        txt.textContent = String(yr); this.axisLayer.append(txt);
+    if (mode === 'timeline' && placed.length) {
+      const padX = Math.min(72, Math.max(48, VIEW_W * 0.09)), padY = Math.min(44, Math.max(24, plotH * 0.08));
+      const minY = padY, maxY = Math.max(minY + 1, plotH - padY), spanY = maxY - minY;
+      const { maxLog, ticks: yTicks } = timelineCitationScale(placed);
+      const yCap = svgEl('text', { class: 'cm-axis-title', x: (padX - 8).toFixed(1), y: 14, 'text-anchor': 'end' });
+      yCap.textContent = t('Citations', '被引数'); this.axisLayer.append(yCap);
+      for (const tick of yTicks) {
+        const y = (minY + (1 - Math.log10(tick + 1) / maxLog) * spanY).toFixed(1);
+        this.axisLayer.append(svgEl('line', { class: 'cm-axis-grid', x1: padX, y1: y, x2: VIEW_W - padX, y2: y }));
+        const yTxt = svgEl('text', { class: 'cm-axis-y-label', x: (padX - 8).toFixed(1), y: (Number(y) + 3.5).toFixed(1), 'text-anchor': 'end' });
+        yTxt.textContent = fmtTick(tick); this.axisLayer.append(yTxt);
+      }
+      this.axisLayer.append(svgEl('line', { class: 'cm-axis-line', x1: padX, y1: plotH - 4, x2: VIEW_W - padX, y2: plotH - 4 }));
+      if (years.length) {
+        const span = Math.max(1, hiY - loY), count = Math.min(6, span + 1);
+        const xTicks = hiY === loY ? [loY] : [...new Set(Array.from({ length: count }, (_, i) => Math.round(loY + (i * span) / Math.max(1, count - 1))))];
+        for (const yr of xTicks) {
+          const x = (hiY === loY ? VIEW_W / 2 : padX + ((yr - loY) / span) * (VIEW_W - padX * 2)).toFixed(1);
+          this.axisLayer.append(svgEl('line', { class: 'cm-axis-tick', x1: x, y1: minY, x2: x, y2: plotH - 4 }));
+          const txt = svgEl('text', { class: 'cm-axis-label', x, y: VIEW_H - 12, 'text-anchor': 'middle' });
+          txt.textContent = String(yr); this.axisLayer.append(txt);
+        }
       }
     }
     for (const edge of edges) {
       const a = byId.get(edge.source), b = byId.get(edge.target);
       if (!a || !b) continue;
-      const line = svgEl('line', { class: 'cm-edge', 'data-kind': edge.kind, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
-      this.edgeLayer.append(line); this.edgeEls.push({ el: line, source: edge.source, target: edge.target });
+      const dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy) || 1;
+      const trim = dist > a.radius + b.radius + 6;
+      const sOff = trim ? a.radius + 1 : 0, eOff = trim ? b.radius + (edge.kind === 'cites' ? 4 : 2) : 0;
+      const attrs: Record<string, string | number> = {
+        class: 'cm-edge', 'data-kind': edge.kind,
+        x1: (a.x + (dx / dist) * sOff).toFixed(1), y1: (a.y + (dy / dist) * sOff).toFixed(1),
+        x2: (b.x - (dx / dist) * eOff).toFixed(1), y2: (b.y - (dy / dist) * eOff).toFixed(1)
+      };
+      if (edge.kind === 'cites') attrs['marker-end'] = 'url(#cm-arrow)';
+      else if (typeof edge.weight === 'number') attrs['stroke-width'] = (0.9 + Math.min(1, Math.max(0, edge.weight)) * 1.1).toFixed(2);
+      const line = svgEl('line', attrs);
+      this.edgeLayer.append(line); this.edgeEls.push({ el: line, source: edge.source, target: edge.target, kind: edge.kind });
     }
     for (const item of placed) {
       const ratio = item.year !== undefined && hiY > loY ? Math.max(0, Math.min(1, (item.year - loY) / (hiY - loY))) : 0.5;
@@ -107,8 +138,26 @@ export class CitationMapSvg {
   }
   setHighlighted(nodeId: string | null): void {
     this.hoveredId = nodeId;
-    for (const [id, ref] of this.refs) ref.group.classList.toggle('is-highlighted', id === nodeId);
-    for (const edge of this.edgeEls) edge.el.classList.toggle('is-highlighted', Boolean(nodeId) && (edge.source === nodeId || edge.target === nodeId));
+    const active = Boolean(nodeId), neighbors = new Set<string>();
+    if (nodeId) {
+      for (const e of this.edgeEls) {
+        if (e.source === nodeId) neighbors.add(e.target);
+        else if (e.target === nodeId) neighbors.add(e.source);
+      }
+    }
+    this.svg.classList.toggle('has-hover', active);
+    for (const [id, ref] of this.refs) {
+      const isSelf = id === nodeId, isNbr = active && !isSelf && neighbors.has(id);
+      ref.group.classList.toggle('is-highlighted', isSelf);
+      ref.group.classList.toggle('is-neighbor', isNbr);
+      ref.group.classList.toggle('is-dimmed', active && !isSelf && !isNbr);
+    }
+    for (const edge of this.edgeEls) {
+      const hit = active && (edge.source === nodeId || edge.target === nodeId);
+      edge.el.classList.toggle('is-highlighted', hit);
+      edge.el.classList.toggle('is-dimmed', active && !hit);
+      if (edge.kind === 'cites') edge.el.setAttribute('marker-end', hit ? 'url(#cm-arrow-hi)' : 'url(#cm-arrow)');
+    }
   }
   setSelected(nodeId: string | null): void { for (const [id, ref] of this.refs) ref.group.classList.toggle('is-selected', id === nodeId); }
   updateNodeInLibrary(nodeId: string, docId?: string, inLibrary = true): void {

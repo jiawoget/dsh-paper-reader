@@ -29,7 +29,7 @@ const mkSelect = (cls: string, opts: readonly (readonly [string, string])[], onC
 
 export function createCitationsView(): ResearchViewModule {
   let mounted = false, restored = false, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
-  let docs: DocumentInfo[] = [], report: CitationReport | null = null, otherCount: number | null = null;
+  let docs: DocumentInfo[] = [], report: CitationReport | null = null, otherCount: number | null = null, preselectedStance: CitationStance | null = null;
   let direction: CitationDirection = 'cited_by', mobileFiltersOpen = false;
   let target: CitTarget = { docId: '', doi: '', arxivId: '', query: '' }, filters: CitFilters = defaultFilters();
   const stanceFilter = new Set<CitationStance>(), expandedKeys = new Set<string>(), savedMap = new Map<string, string>(), savingKeys = new Set<string>();
@@ -134,20 +134,16 @@ export function createCitationsView(): ResearchViewModule {
       }
     });
   };
-  const attachFloatCard = (card: HTMLElement, stmt: CitationStatement) => {
-    shell?.paperFloatBar?.attach(card, {
-      paper: toGraphPaper(stmt),
-      onSaved: doc => { savedMap.set(stmt.citingKey, doc.id); if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs]; if (mounted) { syncDocOptions(); syncExternalSlots(); } }
-    });
-  };
+  const attachFloatCard = (card: HTMLElement, stmt: CitationStatement) => shell?.paperFloatBar?.attach(card, {
+    paper: toGraphPaper(stmt),
+    onSaved: doc => { savedMap.set(stmt.citingKey, doc.id); if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs]; if (mounted) { syncDocOptions(); syncExternalSlots(); } }
+  });
   const syncExternalSlots = () => {
     if (!listEl || !report) return;
     for (const card of listEl.querySelectorAll<HTMLElement>('.cit-card')) {
       const s = report.statements.find(x => x.citingKey === card.dataset.citingKey);
       if (!s) continue;
-      attachFloatCard(card, s);
-      const slot = card.querySelector<HTMLElement>('.cit-save-slot');
-      if (slot) renderExternalActions(slot, s);
+      attachFloatCard(card, s); const slot = card.querySelector<HTMLElement>('.cit-save-slot'); if (slot) renderExternalActions(slot, s);
     }
   };
   const buildCard = (stmt: CitationStatement): HTMLElement => {
@@ -211,12 +207,17 @@ export function createCitationsView(): ResearchViewModule {
     if (!report) { matchCountEl.textContent = ''; return; }
     const filtered = sortStatements(report.statements.filter(matchesFilters));
     matchCountEl.textContent = t(`Showing ${filtered.length} / ${report.statements.length}`, `显示 ${filtered.length} / ${report.statements.length} 条`);
-    if (!filtered.length) { listEl.append(el('p', 'cit-empty', report.statements.length ? t('No citation statements match the active filters.', '没有符合当前筛选条件的引用语句。') : t('No citations found for this paper yet.', '暂未找到该文献的引用记录。'))); return; }
+    if (!filtered.length) {
+      const box = el('div', 'cit-empty');
+      box.append(el('p', '', report.statements.length ? t('No citation statements match the active filters.', '没有符合当前筛选条件的引用语句。') : t('No citations found for this paper yet.', '暂未找到该文献的引用记录。')), ...(report.statements.length && hasFilters() ? [mkBtn('btn cit-show-all-btn', t('Show all', '显示全部'), resetFilters)] : []));
+      listEl.append(box); return;
+    }
     for (const s of filtered) listEl.append(buildCard(s));
   };
   const renderAll = () => { syncHeader(); syncTallies(); syncFilterControls(); renderList(); };
-  const resetFilters = () => { stanceFilter.clear(); filters = { ...defaultFilters(), sort: filters.sort }; if (searchInput) searchInput.value = ''; syncFilterControls(); renderList(); };
-  const toggleStance = (s: CitationStance) => { if (stanceFilter.has(s)) stanceFilter.delete(s); else stanceFilter.add(s); syncFilterControls(); renderList(); };
+  const clearFiltersOnly = () => { stanceFilter.clear(); preselectedStance = null; filters = { ...defaultFilters(), sort: filters.sort }; if (searchInput) searchInput.value = ''; };
+  const resetFilters = () => { clearFiltersOnly(); if (statusEl) statusEl.textContent = ''; syncFilterControls(); renderList(); };
+  const toggleStance = (s: CitationStance) => { preselectedStance = null; if (stanceFilter.has(s)) stanceFilter.delete(s); else stanceFilter.add(s); syncFilterControls(); renderList(); };
   const syncDocOptions = () => {
     if (!docSelect) return;
     docSelect.replaceChildren(...docs.map(d => { const full = d.paperTitle || d.title, o = new Option(shortLabel(full), d.id); o.title = full; return o; }));
@@ -233,7 +234,12 @@ export function createCitationsView(): ResearchViewModule {
       const res = await api('citations.analyze', payload, false, signal);
       if (!mounted || seq !== reqSeq) return;
       report = res; if (res.target.docId && !target.docId) target.docId = res.target.docId;
-      if (statusEl) statusEl.textContent = ''; syncDocOptions(); renderAll();
+      let notice = '';
+      if (preselectedStance && res.statements.length > 0 && !res.statements.some(matchesFilters)) {
+        const st = stanceText(preselectedStance); stanceFilter.clear();
+        notice = t(`No ${st} citations found — showing all ${res.statements.length}.`, `未找到「${st}」类引用 — 已显示全部 ${res.statements.length} 条。`);
+      }
+      preselectedStance = null; if (statusEl) statusEl.textContent = notice; syncDocOptions(); renderAll();
     } catch (err) { if (mounted && seq === reqSeq && !isAbortError(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
     finally { if (mounted && seq === reqSeq && refreshBtn) refreshBtn.disabled = false; }
   };
@@ -245,24 +251,24 @@ export function createCitationsView(): ResearchViewModule {
       const startCtx = ctx.openContext();
       if (startCtx) {
         target = { docId: startCtx.docId ?? '', doi: startCtx.doi ?? '', arxivId: startCtx.arxivId ?? '', query: startCtx.query ?? '' };
-        direction = startCtx.direction === 'references' ? 'references' : 'cited_by'; stanceFilter.clear();
-        const initStance = startCtx.stance ?? startCtx.filter; if (isStance(initStance)) stanceFilter.add(initStance);
-        filters = { ...defaultFilters(), sort: filters.sort }; expandedKeys.clear();
-        otherCount = null; report = null;
+        direction = startCtx.direction === 'references' ? 'references' : 'cited_by'; clearFiltersOnly();
+        const initStance = startCtx.stance ?? startCtx.filter;
+        if (isStance(initStance)) { preselectedStance = initStance; stanceFilter.add(initStance); }
+        expandedKeys.clear(); otherCount = null; report = null;
       } else if (!target.docId && !target.doi && !target.arxivId && !target.query) target.docId = ctx.activeDocId();
 
       viewEl = el('section', 'cit-view'); viewEl.setAttribute('aria-label', researchViewName('citations'));
       const topEl = el('header', 'cit-top'), headRow = el('div', 'cit-head'), titleWrap = el('div', 'cit-title-wrap'), controls = el('div', 'cit-head-controls');
       titleEl = el('h1', 'cit-title', researchViewName('citations')); bylineEl = el('p', 'cit-byline'); bylineEl.hidden = true; titleWrap.append(titleEl, bylineEl);
       docSelect = el('select', 'cit-doc-select'); docSelect.ariaLabel = t('Select library paper', '选择库内文献');
-      docSelect.addEventListener('change', () => { if (!docSelect!.value) return; target = { docId: docSelect!.value, doi: '', arxivId: '', query: '' }; otherCount = null; report = null; expandedKeys.clear(); renderAll(); void loadReport(false); });
+      docSelect.addEventListener('change', () => { if (!docSelect!.value) return; target = { docId: docSelect!.value, doi: '', arxivId: '', query: '' }; clearFiltersOnly(); otherCount = null; report = null; expandedKeys.clear(); renderAll(); void loadReport(false); });
       refreshBtn = mkBtn('btn cit-refresh-btn', t('Refresh', '刷新'), () => { void loadReport(true); });
       sciteLink = el('a', 'btn cit-scite-link', 'Scite ↗'); sciteLink.target = '_blank'; sciteLink.rel = 'noopener noreferrer'; sciteLink.ariaLabel = t('Open Scite report', '打开 Scite 报告'); sciteLink.hidden = true;
       mobileFiltersBtn = mkBtn('btn cit-filters-toggle', t('Filters', '筛选'), () => { mobileFiltersOpen = !mobileFiltersOpen; syncMobileFilters(); });
       controls.append(docSelect, refreshBtn, sciteLink, mobileFiltersBtn); headRow.append(titleWrap, controls);
       const subRow = el('div', 'cit-subbar'), unitsEl = el('div', 'cit-units'), dirTabs = el('div', 'cit-dir-tabs');
       papersUnitEl = el('span', 'cit-unit'); papersUnitEl.dataset.unit = 'papers'; stmtsUnitEl = el('span', 'cit-unit'); stmtsUnitEl.dataset.unit = 'statements'; unitsEl.append(papersUnitEl, stmtsUnitEl);
-      const switchDir = (next: CitationDirection) => { if (direction === next) return; otherCount = report ? report.tallies.citationStatements : null; direction = next; report = null; expandedKeys.clear(); syncTallies(); renderList(); void loadReport(false); };
+      const switchDir = (next: CitationDirection) => { if (direction === next) return; otherCount = report ? report.tallies.citationStatements : null; direction = next; report = null; clearFiltersOnly(); expandedKeys.clear(); renderAll(); void loadReport(false); };
       citedByBtn = mkBtn('btn cit-dir-btn', t('Cited by', '被引'), () => switchDir('cited_by')); citedByBtn.dataset.dir = 'cited_by';
       refsBtn = mkBtn('btn cit-dir-btn', t('References', '参考文献'), () => switchDir('references')); refsBtn.dataset.dir = 'references';
       dirTabs.append(citedByBtn, refsBtn); subRow.append(unitsEl, dirTabs);
@@ -333,7 +339,7 @@ export function createCitationsView(): ResearchViewModule {
     onDocumentMutated(docId, deleted) {
       if (!deleted) return;
       docs = docs.filter(d => d.id !== docId); for (const [k, id] of savedMap) if (id === docId) savedMap.delete(k);
-      if (target.docId === docId) { target = { docId: docs[0]?.id ?? '', doi: '', arxivId: '', query: '' }; report = null; otherCount = null; }
+      if (target.docId === docId) { target = { docId: docs[0]?.id ?? '', doi: '', arxivId: '', query: '' }; clearFiltersOnly(); report = null; otherCount = null; }
       syncDocOptions(); if (mounted) renderAll();
     }
   };

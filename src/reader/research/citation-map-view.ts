@@ -19,19 +19,59 @@ const seedKey = (p: GraphPaper) => p.openAlexId || p.doi || (p.arxivId ? `arXiv:
 
 export function createCitationMapView(): ResearchViewModule {
   let mounted = false, restored = false, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
-  let docs: DocumentInfo[] = [], trail: TrailStep[] = [], selectedId: string | null = null, mobileSearchOpen = false;
+  let docs: DocumentInfo[] = [], trail: TrailStep[] = [], selectedId: string | null = null, mobileSearchOpen = false, seedPickerOpen = false;
   let mode: GraphViewMode = 'network', authorMode: AuthorLabelMode = 'first', graphCollapsed = false, mobilePane: 'list' | 'graph' = 'list', seedDocId = '', seedQuery = '';
   let svg: CitationMapSvg | undefined, topEl: HTMLElement | undefined, splitEl: HTMLElement | undefined, crumbsEl: HTMLElement | undefined, degradedEl: HTMLElement | undefined;
   let statusEl: HTMLElement | undefined, listEl: HTMLElement | undefined, detailEl: HTMLElement | undefined, detailBackdrop: HTMLElement | undefined, capEl: HTMLElement | undefined;
-  let seedSelect: HTMLSelectElement | undefined, seedInput: HTMLInputElement | undefined, restoreGraphBtn: HTMLButtonElement | undefined;
+  let seedWrap: HTMLElement | undefined, seedPillTitle: HTMLElement | undefined, seedChangeBtn: HTMLButtonElement | undefined, seedPickerEl: HTMLElement | undefined, seedSearchIn: HTMLInputElement | undefined, seedListEl: HTMLElement | undefined;
+  let seedInput: HTMLInputElement | undefined, restoreGraphBtn: HTMLButtonElement | undefined;
   let mobileListBtn: HTMLButtonElement | undefined, mobileGraphBtn: HTMLButtonElement | undefined, mobileSearchBtn: HTMLButtonElement | undefined, dirBtns: HTMLButtonElement[] = [], syncToolbar: (() => void) | undefined;
+  let outsideClickHandler: ((e: Event) => void) | undefined;
   const rowEls = new Map<string, HTMLElement>(), rowActions = new Map<string, HTMLElement>(), savingIds = new Set<string>();
 
   const currentStep = () => trail.at(-1), currentNodes = () => currentStep()?.result.nodes ?? [];
   const abortPending = () => { ++reqSeq; ctrl?.abort(); ctrl = null; };
   const beginRequest = () => { abortPending(); ctrl = new AbortController(); return { seq: reqSeq, signal: ctrl.signal }; };
   const syncHover = (id: string | null) => { for (const [nid, row] of rowEls) row.classList.toggle('is-highlighted', nid === id); svg?.setHighlighted(id); };
-  const syncSeedTitle = () => { if (!seedSelect) return; const d = docs.find(x => x.id === seedSelect!.value); seedSelect.title = d?.paperTitle || d?.title || ''; };
+  const closeSeedPicker = (refocus = false) => {
+    if (!seedPickerOpen) return;
+    seedPickerOpen = false;
+    if (seedPickerEl) seedPickerEl.hidden = true;
+    seedChangeBtn?.setAttribute('aria-expanded', 'false');
+    if (refocus && seedChangeBtn?.isConnected) seedChangeBtn.focus({ preventScroll: true });
+  };
+  const syncSeedPill = () => {
+    if (!seedPillTitle) return;
+    const activeSeed = currentStep()?.result.seeds[0], doc = docs.find(x => x.id === seedDocId);
+    const full = activeSeed?.title || doc?.paperTitle || doc?.title || seedQuery || t('Pick library paper', '选择本地文献');
+    seedPillTitle.textContent = shortTitle(full); seedPillTitle.title = full;
+    if (seedPickerEl) seedPickerEl.hidden = !seedPickerOpen;
+    seedChangeBtn?.setAttribute('aria-expanded', String(seedPickerOpen));
+  };
+  const renderSeedList = () => {
+    if (!seedListEl) return;
+    seedListEl.replaceChildren();
+    const q = (seedSearchIn?.value ?? '').trim().toLowerCase();
+    const filtered = docs.filter(d => !q || `${d.paperTitle || d.title} ${d.authors ?? ''} ${d.year ?? ''} ${d.doi ?? ''}`.toLowerCase().includes(q));
+    if (!filtered.length) { seedListEl.append(el('p', 'cm-seed-empty', t('No matching library papers.', '未找到匹配的本地文献。'))); return; }
+    for (const d of filtered) {
+      const full = d.paperTitle || d.title, meta = [d.authors ?? '', d.year ?? ''].filter(Boolean).join(' · ');
+      const opt = mkBtn(`cm-seed-opt${d.id === seedDocId ? ' is-active' : ''}`, '', () => {
+        seedDocId = d.id; seedQuery = ''; if (seedInput) seedInput.value = '';
+        closeSeedPicker(false); syncSeedPill();
+        void exploreSeed(currentStep()?.direction ?? 'later', d.id, '');
+      });
+      opt.setAttribute('role', 'option'); opt.setAttribute('aria-selected', String(d.id === seedDocId)); opt.dataset.docId = d.id;
+      opt.append(el('span', 'cm-seed-opt-title', full), ...(meta ? [el('span', 'cm-seed-opt-meta', meta)] : []));
+      seedListEl.append(opt);
+    }
+  };
+  const openSeedPicker = () => {
+    seedPickerOpen = true;
+    if (seedSearchIn) seedSearchIn.value = '';
+    renderSeedList(); syncSeedPill();
+    seedSearchIn?.focus({ preventScroll: true });
+  };
   const closeDetail = () => { selectedId = null; if (currentStep()) currentStep()!.selectedId = null; renderDetail(); };
   const reconcileMissing = (isMissing: (docId: string, id: string) => boolean) => {
     const ids = new Set<string>();
@@ -108,7 +148,7 @@ export function createCitationMapView(): ResearchViewModule {
     crumbsEl.scrollLeft = crumbsEl.scrollWidth;
   };
   const renderStep = () => {
-    const step = currentStep(); renderCrumbs(); rowEls.clear(); rowActions.clear();
+    const step = currentStep(); renderCrumbs(); syncSeedPill(); rowEls.clear(); rowActions.clear();
     if (!listEl || !capEl || !statusEl) return; listEl.replaceChildren();
     if (!step) { capEl.textContent = t(`Cap ${CAP}`, `上限 ${CAP}`); svg?.render([], [], mode, authorMode, null); renderDegraded([]); renderDetail(); return; }
     const { nodes, edges, degraded } = step.result;
@@ -139,7 +179,7 @@ export function createCitationMapView(): ResearchViewModule {
     } catch (err) { if (mounted && seq === reqSeq && !isAbortError(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
   };
   const exploreSeed = async (direction: GraphDirection, explicitDocId?: string, explicitQuery?: string) => {
-    const query = (explicitQuery ?? seedInput?.value ?? '').trim(), docId = explicitDocId ?? (query ? '' : (seedSelect?.value || seedDocId || shell?.activeDocId() || ''));
+    const query = (explicitQuery ?? seedInput?.value ?? '').trim(), docId = explicitDocId ?? (query ? '' : (seedDocId || shell?.activeDocId() || ''));
     if (!query && !docId) { toast(t('Pick a paper or enter a DOI / arXiv ID / title.', '请选择文献或输入 DOI / arXiv ID / 标题。')); return; }
     if (mobileSearchOpen) { mobileSearchOpen = false; syncLayoutFlags(); }
     const { seq, signal } = beginRequest();
@@ -160,19 +200,34 @@ export function createCitationMapView(): ResearchViewModule {
   return {
     id: 'citation-map',
     mount(host, ctx) {
-      mounted = true; restored = false; shell = ctx;
+      mounted = true; restored = false; seedPickerOpen = false; shell = ctx;
       const startCtx = ctx.openContext(); seedDocId = startCtx?.seedDocId || ctx.activeDocId(); seedQuery = startCtx?.query || '';
       const view = el('section', 'cm-view'), bar = el('form', 'cm-bar'), dirGroup = el('div', 'cm-dir-group');
       view.setAttribute('aria-label', t('Citation Map', '引文脉络'));
-      seedSelect = el('select', 'cm-seed-select'); seedSelect.ariaLabel = t('Library seed paper', '本地种子文献');
-      seedSelect.addEventListener('change', () => { seedDocId = seedSelect!.value; syncSeedTitle(); });
+      seedWrap = el('div', 'cm-seed-wrap');
+      const pill = el('div', 'cm-seed-pill');
+      seedPillTitle = el('span', 'cm-seed-title');
+      seedChangeBtn = mkBtn('btn cm-seed-change', t('Change', '切换'), () => { if (seedPickerOpen) closeSeedPicker(false); else openSeedPicker(); });
+      seedChangeBtn.ariaLabel = t('Change library seed paper', '切换本地种子文献');
+      seedChangeBtn.setAttribute('aria-haspopup', 'dialog'); seedChangeBtn.setAttribute('aria-expanded', 'false');
+      pill.append(seedPillTitle, seedChangeBtn);
+      seedPickerEl = el('div', 'cm-seed-picker'); seedPickerEl.setAttribute('role', 'dialog');
+      seedPickerEl.setAttribute('aria-label', t('Choose library seed paper', '选择本地种子文献')); seedPickerEl.hidden = true;
+      seedSearchIn = el('input', 'search cm-seed-search'); seedSearchIn.type = 'search';
+      seedSearchIn.ariaLabel = t('Filter library papers', '筛选本地文献'); seedSearchIn.placeholder = t('Filter library papers…', '筛选本地文献…');
+      seedSearchIn.addEventListener('input', () => renderSeedList());
+      seedSearchIn.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSeedPicker(true); } });
+      seedListEl = el('div', 'cm-seed-list'); seedListEl.setAttribute('role', 'listbox');
+      seedPickerEl.append(seedSearchIn, seedListEl); seedWrap.append(pill, seedPickerEl);
+      outsideClickHandler = e => { if (seedPickerOpen && seedWrap && !(e.target instanceof Node && seedWrap.contains(e.target))) closeSeedPicker(false); };
+      document.addEventListener('pointerdown', outsideClickHandler);
       seedInput = el('input', 'search cm-seed-input'); seedInput.type = 'search'; seedInput.value = seedQuery;
       seedInput.ariaLabel = t('Seed DOI, arXiv ID, or title', '输入种子 DOI、arXiv ID 或标题'); seedInput.placeholder = t('DOI, arXiv ID, or title…', '输入 DOI、arXiv ID 或标题…');
       seedInput.addEventListener('input', () => { seedQuery = seedInput!.value; });
       dirBtns = DIRS.map(dir => { const b = mkBtn('btn', DIR_TEXT[dir], () => { void exploreSeed(dir); }); b.dataset.dir = dir; dirGroup.append(b); return b; });
       capEl = el('span', 'cm-cap', t(`Cap ${CAP}`, `上限 ${CAP}`));
       restoreGraphBtn = mkBtn('btn cm-show-graph', t('Show Graph', '显示图谱'), () => { graphCollapsed = false; syncLayoutFlags(); });
-      bar.addEventListener('submit', e => { e.preventDefault(); void exploreSeed('later'); }); bar.append(seedSelect, seedInput, dirGroup, capEl, restoreGraphBtn);
+      bar.addEventListener('submit', e => { e.preventDefault(); void exploreSeed('later'); }); bar.append(seedWrap, seedInput, dirGroup, capEl, restoreGraphBtn);
       crumbsEl = el('nav', 'cm-breadcrumbs'); crumbsEl.setAttribute('aria-label', t('Citation trail', '探索轨迹'));
       degradedEl = el('div', 'cm-degraded'); degradedEl.setAttribute('role', 'status'); degradedEl.hidden = true;
       const mobileTabs = el('div', 'cm-mobile-tabs');
@@ -199,13 +254,21 @@ export function createCitationMapView(): ResearchViewModule {
       topEl = el('div', 'cm-top'); topEl.append(bar, crumbsEl, degradedEl, mobileTabs); view.append(topEl, splitEl); host.append(view); renderStep();
       void api('library.list', {}).then(({ docs: listed }) => {
         docs = listed; const liveIds = new Set(listed.map(d => d.id)); reconcileMissing((did, id) => !liveIds.has(did) && !savingIds.has(id));
-        if (!mounted || !seedSelect) return;
-        seedSelect.replaceChildren(...listed.map(d => { const full = d.paperTitle || d.title, o = new Option(shortTitle(full), d.id); o.title = full; return o; }));
-        if (listed.some(d => d.id === seedDocId)) seedSelect.value = seedDocId; syncSeedTitle();
+        if (!mounted) return;
+        if (!listed.some(d => d.id === seedDocId) && listed[0]) seedDocId = listed[0].id;
+        syncSeedPill(); if (seedPickerOpen) renderSeedList();
       }).catch(() => undefined);
-      if (startCtx?.seedDocId || startCtx?.query) void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted && !restored) void exploreSeed(isDir(startCtx.filter) ? startCtx.filter : 'later', startCtx.seedDocId, startCtx.query); });
+      const explicitSeed = Boolean(startCtx?.seedDocId || startCtx?.query);
+      if (explicitSeed || seedDocId) void Promise.resolve().then(() => Promise.resolve()).then(() => {
+        if (mounted && !restored && (explicitSeed || !trail.length)) {
+          void exploreSeed(isDir(startCtx?.filter) ? startCtx.filter : 'later', startCtx?.seedDocId || (!startCtx?.query ? seedDocId : undefined), startCtx?.query);
+        }
+      });
     },
-    unmount() { mounted = false; abortPending(); rowEls.clear(); rowActions.clear(); svg = undefined; },
+    unmount() {
+      mounted = false; seedPickerOpen = false; abortPending(); rowEls.clear(); rowActions.clear(); svg = undefined;
+      if (outsideClickHandler) { document.removeEventListener('pointerdown', outsideClickHandler); outsideClickHandler = undefined; }
+    },
     saveState: (): SavedState => ({ trail, selectedId, mode, authorMode, graphCollapsed, mobilePane, listScrollTop: listEl?.scrollTop ?? 0, seedDocId, seedQuery }),
     restoreState(raw) {
       if (!raw || typeof raw !== 'object') return;
@@ -214,14 +277,14 @@ export function createCitationMapView(): ResearchViewModule {
       mode = s.mode === 'timeline' ? 'timeline' : 'network'; authorMode = s.authorMode === 'last' ? 'last' : 'first';
       graphCollapsed = Boolean(s.graphCollapsed); mobilePane = s.mobilePane === 'graph' ? 'graph' : 'list';
       seedDocId = s.seedDocId ?? seedDocId; seedQuery = s.seedQuery ?? '';
-      if (seedInput) seedInput.value = seedQuery; if (seedSelect && seedDocId) { seedSelect.value = seedDocId; syncSeedTitle(); }
+      if (seedInput) seedInput.value = seedQuery; syncSeedPill();
       renderStep(); if (listEl) listEl.scrollTop = s.listScrollTop ?? 0;
     },
-    handleEscape() { if (!selectedId) return false; closeDetail(); return true; },
+    handleEscape() { if (seedPickerOpen) { closeSeedPicker(true); return true; } if (!selectedId) return false; closeDetail(); return true; },
     onDocumentMutated(docId, deleted) {
       if (!deleted) return;
       docs = docs.filter(d => d.id !== docId); if (seedDocId === docId) seedDocId = docs[0]?.id ?? '';
-      if (seedSelect) { for (const opt of [...seedSelect.options]) if (opt.value === docId) opt.remove(); syncSeedTitle(); }
+      syncSeedPill(); if (seedPickerOpen) renderSeedList();
       reconcileMissing(did => did === docId);
     }
   };

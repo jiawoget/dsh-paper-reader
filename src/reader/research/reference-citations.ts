@@ -59,9 +59,9 @@ export function mountReferenceCitations(app: ReaderPort, doc: DocumentInfo, pare
     for (const item of STANCE_ITEMS) {
       if (item.key === 'unclassified') continue;
       const count = tallies[item.key], label = `${item.icon} ${t(item.en, item.zh)} ${count}`;
-      const btn = mkBtn('ref-cit-pill', label, () => openCitations(item.key));
+      const btn = mkBtn(`ref-cit-pill${count === 0 ? ' is-zero' : ''}`, label, () => openCitations(count > 0 ? item.key : undefined));
       btn.dataset.stance = item.key;
-      btn.ariaLabel = btn.title = t(`${item.en}: ${count}`, `${item.zh}：${count}`);
+      btn.ariaLabel = btn.title = count === 0 ? t(`${item.en}: 0 — show all citations`, `${item.zh}：0 — 查看全部引用`) : t(`${item.en}: ${count}`, `${item.zh}：${count}`);
       row.append(btn);
     }
     body.replaceChildren(row);

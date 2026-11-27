@@ -126,7 +126,111 @@ async function run(): Promise<void> {
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.cit-filters-toggle').click(); await ws.locator('.cit-facets').waitFor({ state: 'visible' });
       await assertMobilePanelTargets(page, '.cit-facets');
-      await page.keyboard.press('Escape'); await ws.locator('.cit-facets').waitFor({ state: 'hidden' }); await ctx.close();
+      await page.keyboard.press('Escape'); await ws.locator('.cit-facets').waitFor({ state: 'hidden' });
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await ws.locator('.cit-search-input').fill('nomatch-xyz');
+      assert.equal(await ws.locator('.cit-card').count(), 0);
+      await ws.locator('.cit-empty .cit-show-all-btn').waitFor({ state: 'visible' });
+      await ws.locator('.cit-empty .cit-show-all-btn').click();
+      assert.equal(await ws.locator('.cit-card').count(), 2);
+
+      await page.unroute('**/api/paper-reader/action');
+      const paperBTarget = { targetKey: 'doi:10.1000/adaptive-kv', docId: localDocId, title: 'Adaptive Block Scheduling for Serving Pipelines', authors: ['Dana Park'], year: yr - 1, doi: '10.1000/adaptive-kv', sciteUrl: 'https://scite.ai/search?q=Adaptive' };
+      const paperBStmts: CitationStatement[] = [
+        mkStmt({ targetKey: paperBTarget.targetKey, docId: localDocId, citingKey: 'oa:b1', source: 'openalex', citingTitle: 'Paper B Support One', stance: 'supporting', section: 'Results' }),
+        mkStmt({ targetKey: paperBTarget.targetKey, docId: localDocId, citingKey: 'oa:b2', source: 'openalex', citingTitle: 'Paper B Mention Two', stance: 'mentioning', section: 'Discussion' })
+      ];
+      let resolveDocIds: string[] = [], summaryStale = false;
+      const mapSeed = { id: 'W1', openAlexId: 'W1', title: 'PagedAttention: Efficient Memory Management', authors: ['Woosuk Kwon'], firstAuthor: 'Woosuk Kwon', lastAuthor: 'Woosuk Kwon', year: 2023, citationCount: 900, source: 'openalex', inLibrary: true, docId: 'pagedattention' };
+      const mapAlt = { id: 'W9', openAlexId: 'W9', title: 'Adaptive Block Scheduling for Serving Pipelines', authors: ['Dana Park'], firstAuthor: 'Dana Park', lastAuthor: 'Dana Park', year: yr - 1, citationCount: 120, source: 'openalex', inLibrary: true, docId: localDocId };
+      const mapNbr = { id: 'W2', openAlexId: 'W2', title: 'FlashAttention', authors: ['Tri Dao'], firstAuthor: 'Tri Dao', lastAuthor: 'Tri Dao', year: 2022, citationCount: 2400, source: 'openalex', inLibrary: false };
+      const mapFar = { id: 'W3', openAlexId: 'W3', title: 'Unrelated Kernel Paper', authors: ['Sam Lee'], firstAuthor: 'Sam Lee', lastAuthor: 'Sam Lee', year: 2021, citationCount: 30, source: 'openalex', inLibrary: false };
+      await page.route('**/api/paper-reader/action', async route => {
+        const body = route.request().postDataJSON() as { op?: string; payload?: Record<string, unknown> };
+        if (body.op === 'citations.summary') {
+          const base = calcTallies(paperBStmts);
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ targetKey: paperBTarget.targetKey, tallies: summaryStale ? { ...base, contrasting: 1 } : base, sciteUrl: paperBTarget.sciteUrl, hasCachedExternal: true }) });
+          return;
+        }
+        if (body.op === 'citations.analyze') {
+          const isB = body.payload?.docId === localDocId;
+          const list = isB ? paperBStmts : citedStmts.filter(s => s.stance !== 'contrasting');
+          const tgt = isB ? paperBTarget : target;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ target: tgt, direction: 'cited_by', tallies: calcTallies(list), statements: list, sciteUrl: tgt.sciteUrl, degraded: [], fromCache: true, offline: false }) });
+          return;
+        }
+        if (body.op === 'graph.resolve') {
+          const id = String(body.payload?.docId ?? '');
+          if (id) resolveDocIds.push(id);
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ paper: id === localDocId ? mapAlt : mapSeed, degraded: [], fromCache: false }) });
+          return;
+        }
+        if (body.op === 'graph.explore') {
+          const seed = String((body.payload?.seeds as string[] | undefined)?.[0] ?? '');
+          const root = seed === 'W9' ? mapAlt : mapSeed;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seeds: [root], nodes: [{ ...root, isSeed: true }, mapNbr, mapFar], edges: [{ source: root.id, target: 'W2', kind: 'cites', weight: 1 }, { source: 'W2', target: 'W3', kind: 'related', weight: 0.6 }], degraded: [], fromCache: false }) });
+          return;
+        }
+        if (body.op === 'deepSearch.run') {
+          const cand = { ...mapNbr, matchScore: 91, rationale: 'Matches KV paging.', category: 'Serving', foundRound: 1 };
+          await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'result', result: { query: 'KV paging', overview: 'Overview [#1].', categories: ['Serving'], candidates: [cand], roundsCompleted: 2, totalEvaluated: 10, saturationCurve: [{ round: 1, evaluated: 10, matched: 1, newMatches: 1 }], degraded: ['s2'], aborted: false } }) + '\n' });
+          return;
+        }
+        await route.fallback();
+      });
+
+      await ws.locator('.cit-facets select[data-facet="section"]').selectOption('Methods');
+      await ws.locator('.cit-doc-select').selectOption(localDocId);
+      await ws.locator('.cit-card', { hasText: 'Paper B Support One' }).waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.cit-card').count(), 2);
+      assert.equal(await ws.locator('.cit-facets select[data-facet="section"]').inputValue(), '');
+
+      await ws.locator('.rw-collapse-btn').click(); await ws.waitFor({ state: 'hidden' });
+      await page.locator('#notesTab').click(); await page.locator('#refsTab').click();
+      const zeroPill = page.locator('.ref-cit-pill[data-stance="contrasting"].is-zero');
+      await zeroPill.waitFor({ state: 'visible' });
+      await zeroPill.click();
+      await ws.locator('.cit-card').first().waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.cit-card').count(), 5);
+
+      summaryStale = true;
+      await ws.locator('.rw-collapse-btn').click(); await ws.waitFor({ state: 'hidden' });
+      await page.locator('#notesTab').click(); await page.locator('#refsTab').click();
+      await page.locator('.ref-cit-pill[data-stance="contrasting"]:not(.is-zero)').click();
+      await ws.locator('.cit-card').first().waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.cit-card').count(), 5);
+      assert.match(await ws.locator('.cit-status').innerText(), /No Contrasting citations found — showing all 5/);
+
+      await ws.locator('.rw-nav-btn[data-view="citation-map"]').click();
+      await ws.locator('.cm-node[data-node-id="W2"]').waitFor({ state: 'visible' });
+      assert.ok(resolveDocIds.includes('pagedattention'));
+      assert.equal(await ws.locator('.cm-seed-select').count(), 0);
+      assert.match(await ws.locator('.cm-seed-title').innerText(), /PagedAttention/);
+      assert.match((await ws.locator('.cm-edge[data-kind="cites"]').first().getAttribute('marker-end')) ?? '', /^url\(#cm-arrow(?:-hi)?\)$/);
+      assert.equal(await ws.locator('.cm-edge[data-kind="related"]').count(), 1);
+      await ws.locator('.cm-row[data-node-id="W1"]').hover();
+      await page.waitForFunction(() => Boolean(document.querySelector('.cm-node[data-node-id="W1"].is-highlighted') && document.querySelector('.cm-node[data-node-id="W2"].is-neighbor') && document.querySelector('.cm-node[data-node-id="W3"].is-dimmed')));
+      assert.equal(await ws.locator('.cm-edge[data-kind="cites"]').first().getAttribute('marker-end'), 'url(#cm-arrow-hi)');
+      await ws.locator('.cm-seed-change').click();
+      await ws.locator('.cm-seed-picker').waitFor({ state: 'visible' });
+      await ws.locator('.cm-seed-search').fill('Adaptive');
+      await ws.locator(`.cm-seed-opt[data-doc-id="${localDocId}"]`).click();
+      await ws.locator('.cm-node[data-node-id="W9"]').waitFor({ state: 'visible' });
+      assert.ok(resolveDocIds.includes(localDocId));
+
+      await ws.locator('.rw-nav-btn[data-view="deep-search"]').click();
+      await ws.locator('.ds-query-input').fill('KV paging');
+      await ws.locator('.ds-skip-btn').click();
+      await ws.locator('.ds-card').first().waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.ds-degraded').count(), 0);
+      await ws.locator('.ds-degraded-info').click();
+      await ws.locator('.ds-degraded-pop').waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.ds-degraded-text').innerText(), /429/);
+      await ws.locator('.ds-degraded-settings').click();
+      await page.locator('#settings-panel-academic').waitFor({ state: 'visible' });
+      await page.locator('#closeDialog').click();
+      await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
       const zhPage = await openReaderPage(zhCtx, host, '?doc=pagedattention&page=5', { tag: 'cit-zh', scope: { allowZotero503: true }, pageErrors, consoleErrors });
