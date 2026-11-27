@@ -605,30 +605,33 @@
   #pageCount { min-width: 40px; }
   .reader-mode-switch :is(#originalMode, #parallel) { padding: 3px 6px; }
 }
-@container reading-area (max-width: 1060px) {
+@container reading-area (max-width: 1300px) {
   .topbar :is(#library, #contentsToggle, #captureRegion, #mobileRail) > span { display: none; }
   .topbar :is(#library, #contentsToggle, #captureRegion, #mobileRail) { min-width: 34px; padding-inline: 6px; }
 }
+@container reading-area (max-width: 960px) { .toolbar .zoom-step { display: none; } }
 @container reading-area (max-width: 860px) {
-  .toolbar .zoom-step, #retranslatePage .retranslate-label { display: none; }
+  .topbar { gap: 4px; padding-inline: 8px; }
+  #retranslatePage .retranslate-label, .reader-mode-switch svg { display: none; }
   #retranslatePage svg { display: inline; }
 }
 @container reading-area (max-width: 750px) {
   .topbar {
     display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
-    gap: 5px 8px;
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
+    gap: 4px 8px;
   }
   #library { grid-row: 1; grid-column: 1; }
   #contentsToggle { grid-row: 1; grid-column: 2; }
-  .doc-heading { grid-row: 1; grid-column: 3; }
-  .topbar #mobileRail { grid-row: 1; grid-column: 4; }
-  .topbar #more { grid-row: 1; grid-column: 5; }
+  #workspaceSwitch, #returnWorkspace { grid-row: 1; grid-column: 3; }
+  .doc-heading { grid-row: 1; grid-column: 4; }
+  .topbar #mobileRail { grid-row: 1; grid-column: 5; }
+  .topbar #more { grid-row: 1; grid-column: 6; }
   .topbar:has(#captureRegion:not([hidden])) {
-    grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
-    & #captureRegion { grid-row: 1; grid-column: 4; }
-    & #mobileRail { grid-column: 5; }
-    & #more { grid-column: 6; }
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto auto auto;
+    & #captureRegion { grid-row: 1; grid-column: 5; }
+    & #mobileRail { grid-column: 6; }
+    & #more { grid-column: 7; }
   }
   .toolbar {
     grid-column: 1 / -1;

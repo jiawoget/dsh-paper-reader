@@ -16,7 +16,11 @@ class FakeNode extends EventTarget {
 class FakeEl extends FakeNode {
   tagName: string; className = ''; hidden = false; disabled = false; type = ''; textContent = ''; ariaLabel = ''; title = '';
   offsetWidth = 240; offsetHeight = 36;
-  readonly dataset: Record<string, string> = {}; readonly style: Record<string, string> = {}; readonly attrs = new Map<string, string>();
+  readonly dataset: Record<string, string> = {}; readonly attrs = new Map<string, string>();
+  readonly style: Record<string, string> & { setProperty: (k: string, v: string) => void; getPropertyValue: (k: string) => string } = Object.assign({} as Record<string, string>, {
+    setProperty: (k: string, v: string) => { this.style[k] = v; },
+    getPropertyValue: (k: string) => this.style[k] ?? ''
+  });
   rect = { left: 100, right: 500, top: 120, bottom: 200, width: 400, height: 80 };
   readonly classList = {
     add: (...cls: string[]) => { const s = new Set(this.className.split(/\s+/).filter(Boolean)); cls.forEach(c => s.add(c)); this.className = [...s].join(' '); },
@@ -55,7 +59,19 @@ test('researchIcon uses 24x24 REicon 1.5px stroke frame and infoTip creates acce
     assert.deepEqual(['width', 'height', 'viewBox', 'stroke-width', 'aria-hidden'].map(k => svg.getAttribute(k)), ['24', '24', '0 0 24 24', '1.5', 'true']);
     assert.ok((svg.children[0]?.getAttribute('d') ?? '').length > 10);
     const tip = infoTip('Explains deep search', 'Deep Search');
-    assert.equal(tip.dataset.tip, 'Explains deep search'); assert.match(tip.ariaLabel ?? '', /Deep Search/); assert.equal(tip.children.length, 1);
+    Object.assign(tip, { rect: { left: 300, right: 344, top: 20, bottom: 64, width: 44, height: 44 } });
+    document.body.append(tip);
+    assert.equal(tip.dataset.tip, 'Explains deep search'); assert.match(tip.ariaLabel ?? '', /Deep Search/);
+    assert.equal(tip.children.length, 1); assert.equal(tip.getAttribute('aria-expanded'), 'false');
+    Object.assign(globalThis, { innerWidth: 390 });
+    tip.dispatchEvent(new Event('click'));
+    assert.equal(tip.classList.contains('is-open'), true); assert.equal(tip.getAttribute('aria-expanded'), 'true');
+    assert.equal(tip.style.getPropertyValue('--tip-shift'), '-246px');
+    document.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+    assert.equal(tip.classList.contains('is-open'), false); assert.equal(tip.getAttribute('aria-expanded'), 'false');
+    tip.dispatchEvent(new Event('click')); assert.equal(tip.classList.contains('is-open'), true);
+    document.dispatchEvent(new Event('pointerdown'));
+    assert.equal(tip.classList.contains('is-open'), false); tip.remove();
   } finally { restore(); }
 });
 
@@ -81,15 +97,19 @@ test('PaperFloatBar stays hidden at rest, reveals 5 actions for external and 4 f
 
     bar.showFor(extCard); assert.equal(bar.root.hidden, false);
     assert.deepEqual(barBtns.filter(b => !b.hidden).map(b => b.dataset.action), ['read', 'ask-ai', 'citations', 'citation-map', 'save']);
-    assert.ok(parseInt(bar.root.style.left, 10) >= 8 && parseInt(bar.root.style.left, 10) + bar.root.offsetWidth <= 1272 && parseInt(bar.root.style.top, 10) >= 8);
+    assert.equal(bar.root.style.left, '872px'); assert.equal(bar.root.style.top, '18px');
 
     const saveBtn = barBtns.find(b => b.dataset.action === 'save')!;
     saveBtn.dispatchEvent(new Event('click')); await Promise.resolve();
     assert.deepEqual(calls, ['save:W42']); assert.equal(saveBtn.hidden, true);
 
     const libRow = document.createElement('div'), doc: DocumentInfo = { id: 'doc-1', title: 'Attention', kind: 'pdf', defaultPage: 1 };
+    Object.assign(libRow, { rect: { left: 60, right: 440, top: 220, bottom: 330, width: 380, height: 110 } });
     host.append(libRow); bar.attach(libRow, { doc, inLibrary: true }); bar.showFor(libRow);
     assert.deepEqual(barBtns.filter(b => !b.hidden).map(b => b.dataset.action), ['read', 'ask-ai', 'citations', 'citation-map']);
+    assert.equal(bar.root.style.left, '448px'); assert.equal(bar.root.style.top, '228px');
+    Object.assign(globalThis, { innerWidth: 390 }); bar.showFor(libRow); assert.equal(bar.root.style.top, ''); assert.equal(bar.root.style.left, '');
+    Object.assign(globalThis, { innerWidth: 1280 }); bar.showFor(libRow);
 
     barBtns.find(b => b.dataset.action === 'ask-ai')!.dispatchEvent(new Event('click')); await Promise.resolve();
     assert.deepEqual(calls, ['save:W42', 'ask:doc-1']); assert.equal(bar.root.hidden, true);
@@ -98,6 +118,31 @@ test('PaperFloatBar stays hidden at rest, reveals 5 actions for external and 4 f
     bar.showFor(libRow); barBtns[0].focus(); host.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
     assert.equal(bar.root.hidden, true); assert.strictEqual(document.activeElement, libRow);
     bar.destroy(); assert.equal(bar.root.parentElement, null);
+  } finally { restore(); }
+});
+
+test('PaperFloatBar isolates busy target on mid-save hover and hides after busy when pointer leaves', async () => {
+  const restore = installFakeDom();
+  try {
+    const host = document.createElement('section'); document.body.append(host);
+    let resolveSave!: () => void;
+    const bar = new PaperFloatBar(host, {
+      onRead: () => undefined, onAskAi: () => undefined, onCitations: () => undefined, onCitationMap: () => undefined,
+      onSave: t => new Promise<void>(r => { resolveSave = () => { t.inLibrary = true; if (t.paper) t.paper.inLibrary = true; r(); }; })
+    });
+    const cardA = document.createElement('article'), cardB = document.createElement('article');
+    Object.assign(cardA, { rect: { left: 40, right: 640, top: 80, bottom: 200, width: 600, height: 120 } });
+    Object.assign(cardB, { rect: { left: 40, right: 640, top: 220, bottom: 340, width: 600, height: 120 } });
+    host.append(cardA, cardB); bar.attach(cardA, { paper: samplePaper(false) });
+    bar.attach(cardB, { doc: { id: 'doc-b', title: 'B', kind: 'pdf', defaultPage: 1 }, inLibrary: true });
+    bar.showFor(cardA); assert.equal(bar.root.style.top, '160px');
+    const saveBtn = ([...bar.root.children] as HTMLButtonElement[]).find(b => b.dataset.action === 'save')!;
+    saveBtn.dispatchEvent(new Event('click')); assert.equal(saveBtn.disabled, true);
+    bar.showFor(cardB); assert.equal(bar.root.style.top, '160px'); assert.equal(saveBtn.hidden, false);
+    host.dispatchEvent(Object.assign(new Event('pointerout'), { relatedTarget: cardB, pointerType: 'mouse' }));
+    await new Promise(r => setTimeout(r, 220)); assert.equal(bar.root.hidden, false);
+    resolveSave(); await new Promise(r => setTimeout(r, 10));
+    assert.equal(bar.root.hidden, true); bar.destroy();
   } finally { restore(); }
 });
 

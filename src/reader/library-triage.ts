@@ -30,7 +30,7 @@ function makeSelect(ariaLabel: string, options: [string, string][]): HTMLSelectE
   return select;
 }
 
-export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (doc: DocumentInfo) => Promise<void>, closeDialog: () => void): void {
+export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (doc: DocumentInfo) => Promise<void>, closeDialog: () => void): () => void {
   const search = el('input', 'search'); search.type = 'search';
   search.ariaLabel = search.placeholder = t('Search library, notes, and marks…', '搜索文档、笔记与标记…');
   const statusSelect = makeSelect(t('Filter by status', '按状态筛选'), [
@@ -46,14 +46,12 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
   const status = el('p', 'library-status', t('Loading documents…', '正在读取文档…')); status.setAttribute('role', 'status');
   const list = el('div', 'library-results'), matches = el('section', 'library-search-matches'); matches.hidden = true;
   panel.append(search, controls, status, list, matches);
-  const dialogEl = panel.closest<HTMLDialogElement>('dialog');
   const floatBar = new PaperFloatBar(panel, {
     onRead: async target => { if (target.doc) await read(target.doc); },
     onAskAi: async target => { if (target.doc) { await read(target.doc); app.openPaperChat?.(); } },
     onCitations: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citations', { docId: target.doc.id }); } },
     onCitationMap: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citation-map', { seedDocId: target.doc.id }); } }
   });
-  dialogEl?.addEventListener('close', () => floatBar.destroy(), { once: true });
 
   let searchTimer = 0, searchSeq = 0;
   function renderHits(hits: LibrarySearchHit[]): void {
@@ -192,11 +190,12 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           actions.append(renameBtn, delBtn); wrap.append(row, actions); list.append(wrap);
           if (focusDeleteId === doc.id) { focusDeleteId = ''; delBtn.focus({ preventScroll: true }); }
         } else { wrap.append(row, actions); list.append(wrap); }
-        floatBar?.attach(wrap, { doc, inLibrary: true });
+        floatBar.attach(wrap, { doc, inLibrary: true });
       }
     }
     search.addEventListener('input', () => { render(); scheduleSearch(); });
     for (const select of [statusSelect, typeSelect, sortSelect]) select.addEventListener('change', render);
     render();
   }).catch(error => { status.textContent = message(error); });
+  return () => floatBar.destroy();
 }

@@ -5,22 +5,15 @@ import { researchText, researchViewName } from './labels.js';
 import { saveGraphPaper } from './paper-intake.js';
 import type { ResearchShellContext } from './state.js';
 
-export interface PaperFloatTarget {
-  paper?: GraphPaper; doc?: DocumentInfo; inLibrary?: boolean; onSaved?: (doc: DocumentInfo) => void;
-}
+export interface PaperFloatTarget { paper?: GraphPaper; doc?: DocumentInfo; inLibrary?: boolean; onSaved?: (doc: DocumentInfo) => void; }
 export interface PaperFloatCallbacks {
-  onRead: (target: PaperFloatTarget) => void | Promise<void>;
-  onAskAi: (target: PaperFloatTarget) => void | Promise<void>;
-  onCitations: (target: PaperFloatTarget) => void | Promise<void>;
-  onCitationMap: (target: PaperFloatTarget) => void | Promise<void>;
+  onRead: (target: PaperFloatTarget) => void | Promise<void>; onAskAi: (target: PaperFloatTarget) => void | Promise<void>;
+  onCitations: (target: PaperFloatTarget) => void | Promise<void>; onCitationMap: (target: PaperFloatTarget) => void | Promise<void>;
   onSave?: (target: PaperFloatTarget) => void | Promise<void>;
 }
-
 type FloatActionKey = 'read' | 'ask-ai' | 'citations' | 'citation-map' | 'save';
-
 const ACTION_DEFS: readonly { key: FloatActionKey; icon: ResearchIconName; label: () => string }[] = [
-  { key: 'read', icon: 'read', label: () => researchText.readMode() },
-  { key: 'ask-ai', icon: 'ask-ai', label: () => researchText.askAi() },
+  { key: 'read', icon: 'read', label: () => researchText.readMode() }, { key: 'ask-ai', icon: 'ask-ai', label: () => researchText.askAi() },
   { key: 'citations', icon: 'citations', label: () => researchViewName('citations') },
   { key: 'citation-map', icon: 'citation-map', label: () => researchViewName('citation-map') },
   { key: 'save', icon: 'save', label: () => researchText.savePaper() }
@@ -34,9 +27,7 @@ export function createWorkspaceFloatCallbacks(getShell: () => ResearchShellConte
     const existing = target.doc?.id ?? (target.paper?.inLibrary ? target.paper.docId : undefined);
     if (existing || !target.paper) return existing;
     const doc = await saveGraphPaper(target.paper, preferOaPdf && target.paper.oaPdfUrl ? 'oa-pdf' : 'abstract', getShell());
-    target.paper.inLibrary = target.inLibrary = true;
-    target.paper.docId = doc.id;
-    target.onSaved?.(doc);
+    target.paper.inLibrary = target.inLibrary = true; target.paper.docId = doc.id; target.onSaved?.(doc);
     return doc.id;
   };
   return {
@@ -64,11 +55,10 @@ export class PaperFloatBar {
   private activeItem: HTMLElement | null = null;
   private hideTimer?: ReturnType<typeof setTimeout>;
   private busy = false;
+  private hideAfterBusy = false;
 
-  constructor(private readonly host: HTMLElement, private callbacks: PaperFloatCallbacks) {
-    this.root.hidden = true;
-    this.root.setAttribute('role', 'toolbar');
-    this.root.ariaLabel = researchText.paperActions();
+  constructor(private readonly host: HTMLElement, private readonly callbacks: PaperFloatCallbacks) {
+    this.root.hidden = true; this.root.setAttribute('role', 'toolbar'); this.root.ariaLabel = researchText.paperActions();
     for (const def of ACTION_DEFS) {
       const btn = el('button', 'pf-btn'), text = def.label();
       btn.type = 'button'; btn.dataset.action = def.key; btn.ariaLabel = btn.title = text;
@@ -76,80 +66,75 @@ export class PaperFloatBar {
       btn.addEventListener('click', e => { e.stopPropagation(); void this.invoke(def.key); });
       this.buttons.set(def.key, btn); this.root.append(btn);
     }
-    host.append(this.root);
-    this.bindEvents();
+    host.append(this.root); this.bindEvents();
   }
 
   attach(itemEl: HTMLElement, target: PaperFloatTarget): void {
-    itemEl.dataset.paperFloat = '1';
-    this.targets.set(itemEl, target);
+    itemEl.dataset.paperFloat = '1'; this.targets.set(itemEl, target);
     if (this.activeItem === itemEl && !this.root.hidden) this.syncButtons(target);
   }
-
-  setCallbacks(callbacks: PaperFloatCallbacks): void {
-    this.callbacks = callbacks;
-    const cur = this.activeItem && !this.root.hidden ? this.targets.get(this.activeItem) : undefined;
-    if (cur) this.syncButtons(cur);
-  }
-
   showFor(itemEl: HTMLElement): void {
+    if (this.busy) { if (this.activeItem === itemEl) this.cancelHide(); return; }
     const target = this.targets.get(itemEl);
     if (!target || !itemEl.isConnected) return;
     this.cancelHide(); this.activeItem = itemEl; this.syncButtons(target);
-    this.root.hidden = false; this.root.classList.add('is-visible');
-    this.position(itemEl);
+    this.root.hidden = false; this.root.classList.add('is-visible'); this.position(itemEl);
   }
-
-  hide(): void {
-    this.cancelHide(); this.activeItem = null;
-    this.root.classList.remove('is-visible'); this.root.hidden = true;
-  }
-
+  hide(): void { this.cancelHide(); this.activeItem = null; this.root.classList.remove('is-visible'); this.root.hidden = true; }
   destroy(): void { this.hide(); this.ac.abort(); this.root.remove(); }
 
-  private cancelHide(): void { if (this.hideTimer !== undefined) { clearTimeout(this.hideTimer); this.hideTimer = undefined; } }
-  private scheduleHide(delay = 180): void { this.cancelHide(); this.hideTimer = setTimeout(() => { this.hideTimer = undefined; if (!this.busy) this.hide(); }, delay); }
-
+  private cancelHide(): void { this.hideAfterBusy = false; if (this.hideTimer !== undefined) { clearTimeout(this.hideTimer); this.hideTimer = undefined; } }
+  private scheduleHide(delay = 180): void {
+    this.cancelHide();
+    this.hideTimer = setTimeout(() => { this.hideTimer = undefined; if (this.busy) this.hideAfterBusy = true; else this.hide(); }, delay);
+  }
   private itemFromNode(node: EventTarget | null): HTMLElement | null {
-    if (!(node instanceof Element)) return null;
-    const item = node.closest<HTMLElement>('[data-paper-float="1"]');
+    const item = node instanceof Element ? node.closest<HTMLElement>('[data-paper-float="1"]') : null;
     return item && this.host.contains(item) && this.targets.has(item) ? item : null;
   }
-
   private syncButtons(target: PaperFloatTarget): void {
     const saved = isTargetInLibrary(target);
     for (const [key, btn] of this.buttons) { btn.hidden = key === 'save' && (saved || !this.callbacks.onSave); btn.disabled = this.busy; }
   }
-
   private position(itemEl: HTMLElement): void {
     const r = itemEl.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) { this.hide(); return; }
+    this.root.classList.remove('is-compact');
     const vw = typeof innerWidth === 'number' && innerWidth > 0 ? innerWidth : 1024;
     const vh = typeof innerHeight === 'number' && innerHeight > 0 ? innerHeight : 768;
-    const bw = this.root.offsetWidth || 260, bh = this.root.offsetHeight || 36;
-    const belowTop = r.bottom + 2;
-    const top = belowTop + bh <= vh - 8 ? Math.max(8, belowTop) : Math.max(8, r.top - bh - 4);
-    const left = Math.max(8, Math.min(r.right - bw - 8, vw - bw - 8));
+    if (vw <= 700 || (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)) { this.root.style.top = this.root.style.left = ''; return; }
+    let bw = this.root.offsetWidth || 260, bh = this.root.offsetHeight || 36;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
+    const sideTop = () => r.height < bh + 28 ? clamp(r.top + (r.height - bh) / 2, 8, vh - bh - 8) : clamp(r.top + 8, 8, vh - bh - 8);
+    let left: number, top: number;
+    if (r.width < bw + 180 && r.right + bw + 16 <= vw) { left = r.right + 8; top = sideTop(); }
+    else if (r.width < bw + 180 && r.left - bw - 16 >= 8) { left = r.left - bw - 8; top = sideTop(); }
+    else {
+      if (r.width < bw + 180) { this.root.classList.add('is-compact'); bw = this.root.offsetWidth || 168; bh = this.root.offsetHeight || 36; }
+      left = clamp(r.right - bw - 8, 8, vw - bw - 8);
+      top = r.height < bh + 28 ? clamp(r.top + (r.height - bh) / 2, 8, vh - bh - 8) : clamp(r.bottom - bh - 4, Math.max(8, r.top + 4), vh - bh - 8);
+    }
     this.root.style.top = `${Math.round(top)}px`;
     this.root.style.left = `${Math.round(left)}px`;
   }
-
   private async invoke(key: FloatActionKey): Promise<void> {
     if (this.busy || !this.activeItem) return;
-    const target = this.targets.get(this.activeItem);
+    const invokedItem = this.activeItem, target = this.targets.get(invokedItem);
     const fn = key === 'read' ? this.callbacks.onRead : key === 'ask-ai' ? this.callbacks.onAskAi
       : key === 'citations' ? this.callbacks.onCitations : key === 'citation-map' ? this.callbacks.onCitationMap : this.callbacks.onSave;
     if (!target || !fn) return;
     this.busy = true; this.syncButtons(target);
     try {
       await fn(target);
-      if (key === 'save') { if (this.activeItem && !this.root.hidden) this.syncButtons(target); }
-      else this.hide();
+      if (this.activeItem === invokedItem) {
+        if (key === 'save') { if (!this.root.hidden) this.syncButtons(this.targets.get(invokedItem) ?? target); }
+        else this.hide();
+      }
     } catch (err) { toast(message(err)); }
     finally {
       this.busy = false;
-      const cur = this.activeItem && !this.root.hidden ? this.targets.get(this.activeItem) : undefined;
-      if (cur) this.syncButtons(cur);
+      if (this.hideAfterBusy) this.hide();
+      else if (this.activeItem === invokedItem && !this.root.hidden) { const cur = this.targets.get(invokedItem); if (cur) this.syncButtons(cur); }
     }
   }
 
@@ -163,7 +148,7 @@ export class PaperFloatBar {
     }, { signal });
     this.host.addEventListener('pointerout', e => {
       const next = (e as PointerEvent).relatedTarget;
-      if ((e as PointerEvent).pointerType === 'touch' || this.root.hidden || staysInside(next) || this.itemFromNode(next)) return;
+      if ((e as PointerEvent).pointerType === 'touch' || this.root.hidden || staysInside(next) || (!this.busy && this.itemFromNode(next))) return;
       this.scheduleHide();
     }, { signal });
     this.root.addEventListener('pointerenter', () => this.cancelHide(), { signal });

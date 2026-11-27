@@ -51,7 +51,8 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   }
   file.addEventListener('change', () => { void handlePdfFiles(Array.from(file.files ?? [])); });
   const dropController = new AbortController();
-  dialog.addEventListener('close', () => dropController.abort(), { once: true });
+  let cleanupPanel: (() => void) | undefined;
+  dialog.addEventListener('close', () => { dropController.abort(); cleanupPanel?.(); cleanupPanel = undefined; }, { once: true });
   bindPdfDropTarget(root, files => { void handlePdfFiles(files); }, { signal: dropController.signal });
   const imports = el('div', 'library-imports');
   const form = el('form', 'library-url');
@@ -149,8 +150,10 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
     panel.id = 'library-source';
     panel.setAttribute('role', 'tabpanel');
     panel.setAttribute('aria-labelledby', 'library-tab-' + source);
+    cleanupPanel?.();
+    cleanupPanel = undefined;
     holder.replaceChildren(panel);
-    if (source === 'device') renderDeviceLibrary(app, panel, doc => read({ doc }), () => { if (active()) dialog.close(); });
+    if (source === 'device') cleanupPanel = renderDeviceLibrary(app, panel, doc => read({ doc }), () => { if (active()) dialog.close(); });
     else browseZotero(
       panel,
       position,
