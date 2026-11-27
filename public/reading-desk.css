@@ -615,11 +615,12 @@
   #retranslatePage .retranslate-label, .reader-mode-switch svg { display: none; }
   #retranslatePage svg { display: inline; }
 }
-@container reading-area (max-width: 750px) {
-  .topbar {
-    display: grid;
-    grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
-    gap: 4px 8px;
+@container reading-area (max-width: 960px) {
+  .topbar:where(:has(#returnWorkspace:not([hidden]))) {
+    display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; gap: 4px 8px;
+    & .toolbar { grid-column: 1 / -1; grid-row: 2; margin: 0; justify-content: flex-start; flex-wrap: wrap; gap: 3px 2px; padding-inline: 0; }
+    & #zoomControl { margin-inline: 2px; }
+    & .reader-mode-switch { margin-inline-start: auto; }
   }
   #library { grid-row: 1; grid-column: 1; }
   #contentsToggle { grid-row: 1; grid-column: 2; }
@@ -633,15 +634,10 @@
     & #mobileRail { grid-column: 6; }
     & #more { grid-column: 7; }
   }
-  .toolbar {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    margin: 0;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    gap: 3px 2px;
-    padding-inline: 0;
-  }
+}
+@container reading-area (max-width: 750px) {
+  .topbar { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto auto; gap: 4px 8px; }
+  .toolbar { grid-column: 1 / -1; grid-row: 2; margin: 0; justify-content: flex-start; flex-wrap: wrap; gap: 3px 2px; padding-inline: 0; }
   #zoomControl { margin-inline: 2px; }
   .reader-mode-switch { margin-inline-start: auto; }
 }
