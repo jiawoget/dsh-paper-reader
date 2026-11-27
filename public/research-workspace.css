@@ -354,18 +354,19 @@
 .ft-point.is-focused .ft-point-dot { fill: var(--purple); stroke-width: 2; }
 :is(.ft-legend-item, .ft-tip-row).is-focused .ft-legend-dot { background: var(--purple); }
 .ft-point:is(:hover, :focus-visible, .is-hover-col) .ft-point-dot { r: 5; }
+.ft-point:focus-visible .ft-point-dot { stroke: var(--focus-ring); stroke-width: 2; }
 .ft-point.is-selected .ft-point-dot { r: 5.5; stroke: var(--focus-ring); stroke-width: 2.5; }
 .ft-tooltip {
-  position: fixed; z-index: 32; min-width: 200px; max-width: min(300px, calc(100vw - 16px)); padding: 12px;
+  position: fixed; z-index: 32; min-width: 200px; max-width: min(300px, calc(100vw - 16px)); padding: 12px; box-sizing: border-box;
   border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-popover); box-shadow: var(--shadow-popover);
-  display: grid; gap: 8px; pointer-events: none;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; pointer-events: none;
 }
 .ft-tip-head { font-size: 12px; font-weight: 600; color: var(--desk-ink); font-variant-numeric: tabular-nums; }
 .ft-tip-note { font-size: 12px; color: var(--muted); }
-.ft-tip-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.ft-tip-row { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--muted); }
 .ft-tip-row.is-focused { color: var(--desk-ink); font-weight: 600; }
 .ft-tip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ft-tip-val { flex: none; font-variant-numeric: tabular-nums; }
+.ft-tip-val { flex-shrink: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ft-rank-strip { display: grid; gap: 0; border-top: 1px solid var(--line); }
 .ft-rank-row { display: flex; align-items: center; gap: 12px; padding: 12px 8px; border-bottom: 1px solid var(--line); border-radius: var(--radius-sm); }
 .ft-rank-row:hover { background: var(--surface-sunken); }

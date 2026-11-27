@@ -43,7 +43,8 @@ export function formatChartValue(value: number | null, metric: TrendMetric, isYt
   if (metric === 'growth') {
     if (isYtd) return 'YTD*';
     if (value === null || !Number.isFinite(value)) return '—';
-    const pct = Math.round(value * 100), s = pct > 999 ? '>+999%' : pct > 0 ? `+${pct}%` : pct === 0 ? '0%' : `${pct}%`;
+    const pct = Math.round(value * 100), abs = Math.abs(pct), sign = pct > 0 ? '+' : pct < 0 ? '-' : '';
+    const s = pct === 0 ? '0%' : abs >= 1000 ? `${sign}${(abs / 1000).toFixed(1).replace(/\.0$/, '')}k%` : `${sign}${abs}%`;
     return lowBase ? `${s}°` : s;
   }
   const n = value !== null && Number.isFinite(value) ? value : 0;
@@ -57,7 +58,7 @@ export function computeYScale(minVal: number, maxVal: number, metric: TrendMetri
   if (metric !== 'growth') {
     const hi = Math.max(0, safeMax);
     if (hi <= 0) return { min: 0, max: 1, ticks: [0, 1], zeroLine: false };
-    const step = niceStep(hi / 4), max = round6(Math.ceil(hi / step) * step), ticks: number[] = [];
+    const step = metric === 'volume' ? Math.max(1, niceStep(hi / 4)) : niceStep(hi / 4), max = round6(Math.ceil(hi / step) * step), ticks: number[] = [];
     for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(round6(v));
     return { min: 0, max, ticks, zeroLine: false };
   }
@@ -82,7 +83,7 @@ export function buildTrendChartModel(
   opts?: { width?: number; height?: number; maxSeries?: number; hiddenIds?: ReadonlySet<string> }
 ): TrendChartModel {
   const width = Math.max(320, Math.round(opts?.width ?? 760)), height = Math.max(200, Math.round(opts?.height ?? 300));
-  const pad = { top: 20, right: width < 480 ? 20 : 28, bottom: 36, left: width < 480 ? 48 : 56 };
+  const pad = { top: 20, right: width < 480 ? 20 : 36, bottom: 36, left: width < 480 ? 48 : 56 };
   const plotW = Math.max(40, width - pad.left - pad.right), plotH = Math.max(40, height - pad.top - pad.bottom);
   const yearList = [...years], yearXs = yearList.map((_, i) => round1(yearList.length <= 1 ? pad.left + plotW / 2 : pad.left + (i / (yearList.length - 1)) * plotW));
   const rawPerRow = rows.slice(0, opts?.maxSeries ?? DEFAULT_MAX_SERIES).map(row => {
@@ -142,7 +143,10 @@ export class FieldTrendsChart {
     window.addEventListener('scroll', () => this.hideTooltip(), { ...sig, capture: true, passive: true });
     document.addEventListener('keydown', e => { if (e.key === 'Escape') this.hideTooltip(); }, sig);
     if (typeof ResizeObserver === 'function') {
-      this.ro = new ResizeObserver(() => { const w = this.measureWidth(); if (this.state && Math.abs(w - this.lastWidth) >= 16) this.render(); });
+      this.ro = new ResizeObserver(() => {
+        if (!this.canvasEl.isConnected || this.canvasEl.clientWidth <= 0) return;
+        const w = this.measureWidth(); if (this.state && Math.abs(w - this.lastWidth) >= 16) this.render();
+      });
       this.ro.observe(this.canvasEl);
     }
   }
@@ -250,9 +254,9 @@ export class FieldTrendsChart {
           'data-topic-id': s.row.topicId, 'data-year': String(pt.year), 'data-year-index': String(pt.yearIndex), 'data-series': String(s.styleIndex)
         });
         pg.append(svgEl('circle', 'ft-point-hit', { cx: pt.x, cy: pt.y, r: hitRadius }), svgEl('circle', 'ft-point-dot', { cx: pt.x, cy: pt.y, r: focused ? 4 : 3 }));
-        pg.addEventListener('click', e => { e.stopPropagation(); this.cb.onSelectPoint(s.row, pt.cell); });
+        pg.addEventListener('click', e => { e.stopPropagation(); this.hideTooltip(); this.cb.onSelectPoint(s.row, pt.cell); });
         pg.addEventListener('keydown', e => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.cb.onSelectPoint(s.row, pt.cell); }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.hideTooltip(); this.cb.onSelectPoint(s.row, pt.cell); }
           else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
             const sibs = [...g.querySelectorAll<SVGGElement>('.ft-point')], next = sibs[sibs.indexOf(pg) + (e.key === 'ArrowRight' ? 1 : -1)];
             if (next) { e.preventDefault(); next.focus(); }

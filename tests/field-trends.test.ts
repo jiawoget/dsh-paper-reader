@@ -228,4 +228,16 @@ test('Field Trends chart model: top-6 slicing, YTD dashed split, growth null-YTD
   assert.equal(oneYr.yearXs.length, 1);
   assert.ok(Number.isFinite(oneYr.yearXs[0]) && Number.isFinite(oneYr.series[0].points[0].y));
   assert.deepEqual(computeYScale(Number.NaN, Number.NaN, 'growth'), { min: 0, max: 1, ticks: [0, 0.5, 1], zeroLine: false });
+
+  const highGrowth = buildTrendChartModel([mkRow('SURGE', [10, 210, 8610], [null, 20, 40], [5, 10, 20])], [2023, 2024, 2025], 2026, 'growth');
+  const growthLabels = highGrowth.yScale.ticks.map(tk => tk.label);
+  assert.equal(new Set(growthLabels).size, growthLabels.length);
+  assert.ok(growthLabels.includes('+2k%') && growthLabels.includes('+4k%') && !growthLabels.includes('>+999%'));
+  assert.equal(formatChartValue(15, 'growth'), '+1.5k%');
+  assert.equal(formatChartValue(-20, 'growth'), '-2k%');
+
+  const smallVol1 = buildTrendChartModel([mkRow('V1', [1, 1], [null, 0], [1, 1])], [2023, 2024], 2026, 'volume');
+  assert.deepEqual(smallVol1.yScale.ticks.map(tk => tk.label), ['0', '1']);
+  const smallVol2 = buildTrendChartModel([mkRow('V2', [1, 2], [null, 1], [1, 2])], [2023, 2024], 2026, 'volume');
+  assert.deepEqual(smallVol2.yScale.ticks.map(tk => tk.label), ['0', '1', '2']);
 });

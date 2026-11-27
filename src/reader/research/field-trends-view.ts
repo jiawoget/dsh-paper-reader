@@ -38,7 +38,7 @@ function cellHeatLevel(cell: TrendCell, metric: TrendMetric, maxVal: number): st
   const val = metric === 'volume' ? cell.volume : cell.citationHeat;
   if (val <= 0 || maxVal <= 0) return '0';
   const ratio = val / maxVal;
-  return ratio >= 0.75 ? '4' : ratio >= 0.45 ? '3' : ratio >= 2 / 10 ? '2' : '1';
+  return ratio >= 0.75 ? '4' : ratio >= 0.45 ? '3' : ratio >= 0.2 ? '2' : '1';
 }
 
 export function createFieldTrendsView(): ResearchViewModule {
