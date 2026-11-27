@@ -87,8 +87,8 @@
   --ink-subtle: #9aa1b2;
   --purple: #58a6ff;
   --purple-hover: #79b8ff;
-  --accent-solid: #0a66d6;
-  --accent-solid-hover: #1976e0;
+  --accent-solid: #0757b8;
+  --accent-solid-hover: #0a66d6;
   --accent-on-solid: #ffffff;
   --lavender: #19283f;
   --lavender-strong: #223654;
@@ -228,8 +228,8 @@ dialog summary { min-height: 24px; padding-block: 4px; }
 @media (pointer: coarse), (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
   .check-row { min-height: 44px; align-items: center; gap: 8px; }
   .check-row input { width: 24px; height: 24px; flex: none; margin: 0; }
-  .tabs [role="tab"], dialog :is(.btn, .text-btn, .subtle, input:not([type="checkbox"]), select) { min-height: 44px; }
-  dialog :is(.btn, .text-btn, .subtle) { min-width: 44px; }
+  .tabs [role="tab"], dialog :is([role="tab"], .btn, .text-btn, .subtle, input:not([type="checkbox"]), select) { min-height: 44px; }
+  dialog :is([role="tab"], .btn, .text-btn, .subtle) { min-width: 44px; }
   dialog summary { min-height: 44px; padding-block: 11px; }
   dialog a.external { display: inline-flex; align-items: center; min-height: 44px; }
   .arxiv-fmt-btn { min-width: 44px; min-height: 44px; padding: 8px 12px; }

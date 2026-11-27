@@ -47,6 +47,8 @@ export function createWorkspaceFloatCallbacks(getShell: () => ResearchShellConte
   };
 }
 
+interface PaperFloatOptions { placement?: 'auto' | 'outside'; }
+
 export class PaperFloatBar {
   readonly root = el('div', 'pf-bar');
   private readonly targets = new WeakMap<HTMLElement, PaperFloatTarget>();
@@ -57,7 +59,7 @@ export class PaperFloatBar {
   private busy = false;
   private hideAfterBusy = false;
 
-  constructor(private readonly host: HTMLElement, private readonly callbacks: PaperFloatCallbacks) {
+  constructor(private readonly host: HTMLElement, private readonly callbacks: PaperFloatCallbacks, private readonly options?: PaperFloatOptions) {
     this.root.hidden = true; this.root.setAttribute('role', 'toolbar'); this.root.ariaLabel = researchText.paperActions();
     for (const def of ACTION_DEFS) {
       const btn = el('button', 'pf-btn'), text = def.label();
@@ -105,14 +107,23 @@ export class PaperFloatBar {
     if (vw <= 700 || (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)) { this.root.style.top = this.root.style.left = ''; return; }
     let bw = this.root.offsetWidth || 260, bh = this.root.offsetHeight || 36;
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
-    const sideTop = () => r.height < bh + 28 ? clamp(r.top + (r.height - bh) / 2, 8, vh - bh - 8) : clamp(r.top + 8, 8, vh - bh - 8);
+    const centerTop = () => clamp(r.top + (r.height - bh) / 2, 8, vh - bh - 8);
+    const sideTop = () => r.height < bh + 28 ? centerTop() : clamp(r.top + 8, 8, vh - bh - 8);
     let left: number, top: number;
-    if (r.width < bw + 180 && r.right + bw + 16 <= vw) { left = r.right + 8; top = sideTop(); }
+    if (this.options?.placement === 'outside') {
+      if (r.right + bw + 12 <= vw) { left = r.right + 8; top = centerTop(); }
+      else {
+        this.root.classList.add('is-compact'); bw = this.root.offsetWidth || 168; bh = this.root.offsetHeight || 36;
+        if (r.right + bw + 12 <= vw) { left = r.right + 8; top = centerTop(); }
+        else if (r.left - bw - 12 >= 8) { left = r.left - bw - 8; top = centerTop(); }
+        else { left = clamp(r.right - bw, 8, vw - bw - 8); top = r.top - bh - 4 >= 8 ? r.top - bh - 4 : Math.min(vh - bh - 8, r.bottom + 4); }
+      }
+    } else if (r.width < bw + 180 && r.right + bw + 16 <= vw) { left = r.right + 8; top = sideTop(); }
     else if (r.width < bw + 180 && r.left - bw - 16 >= 8) { left = r.left - bw - 8; top = sideTop(); }
     else {
       if (r.width < bw + 180) { this.root.classList.add('is-compact'); bw = this.root.offsetWidth || 168; bh = this.root.offsetHeight || 36; }
       left = clamp(r.right - bw - 8, 8, vw - bw - 8);
-      top = r.height < bh + 28 ? clamp(r.top + (r.height - bh) / 2, 8, vh - bh - 8) : clamp(r.bottom - bh - 4, Math.max(8, r.top + 4), vh - bh - 8);
+      top = r.height < bh + 28 ? centerTop() : clamp(r.bottom - bh - 4, Math.max(8, r.top + 4), vh - bh - 8);
     }
     this.root.style.top = `${Math.round(top)}px`;
     this.root.style.left = `${Math.round(left)}px`;
