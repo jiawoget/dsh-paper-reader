@@ -389,9 +389,17 @@ function formatRIS(meta) {
 }
 
 // src/shared/academic-intake.ts
-var ARXIV_URL_RE = /^\/(?:abs|pdf)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
+var ARXIV_URL_RE = /^\/(abs|pdf|html)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
 var DOI_RE = /^10\.\d{4,9}\/[^\s<>"]+$/i;
-var arxiv = (id, versionedId) => ({ kind: "arxiv", id, versionedId, absUrl: "https://arxiv.org/abs/" + versionedId, pdfUrl: "https://arxiv.org/pdf/" + versionedId + ".pdf" });
+var arxiv = (id, versionedId, explicitFormat) => ({
+  kind: "arxiv",
+  id,
+  versionedId,
+  htmlUrl: "https://arxiv.org/html/" + versionedId,
+  absUrl: "https://arxiv.org/abs/" + versionedId,
+  pdfUrl: "https://arxiv.org/pdf/" + versionedId + ".pdf",
+  ...explicitFormat ? { explicitFormat } : {}
+});
 function doiTarget(raw) {
   let decoded = raw;
   try {
@@ -413,7 +421,10 @@ function parseAcademicInput(raw) {
     if (!url || url.username || url.password) return null;
     if (/(?:^|\.)arxiv\.org$/i.test(url.hostname)) {
       const m = ARXIV_URL_RE.exec(url.pathname);
-      return m ? arxiv(extractArxivId(url.href) ?? m[1].toLowerCase().replace(/v\d+$/, ""), m[1].toLowerCase()) : { kind: "url", url: url.href };
+      if (!m) return { kind: "url", url: url.href };
+      const seg = m[1].toLowerCase(), versionedId = m[2].toLowerCase();
+      const fmt = seg === "pdf" ? "pdf" : seg === "html" ? "html" : void 0;
+      return arxiv(extractArxivId(url.href) ?? versionedId.replace(/v\d+$/, ""), versionedId, fmt);
     }
     if (/^(?:dx\.)?doi\.org$/i.test(url.hostname)) {
       const id2 = extractArxivId(url.href);
@@ -824,11 +835,8 @@ function extractArticle(root, tree, address2, fallbackTitle, picked) {
   };
 }
 
-// src/server/abstract-library.ts
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import path2 from "node:path";
+// src/server/research-store.ts
+import { randomUUID } from "node:crypto";
 
 // src/server/service-types.ts
 import path from "node:path";
@@ -924,6 +932,10 @@ function pageNumber(value) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new ServiceError(400, "The page number must be a positive integer.");
   return value;
 }
+function readArxivFormat(value) {
+  if (value === "html" || value === "pdf") return value;
+  throw new ServiceError(400, "Choose html or pdf for arXiv import format.");
+}
 function readTargetLanguage(value) {
   const parsed = parseTargetLanguage(value);
   if (!parsed.ok) throw new ServiceError(400, parsed.error);
@@ -948,7 +960,8 @@ var initialSettings = {
   openAlexEmail: "",
   openAlexApiKey: "",
   semanticScholarApiKey: "",
-  ncbiApiKey: ""
+  ncbiApiKey: "",
+  arxivFormat: "html"
 };
 function zoteroModeFor(settings) {
   return !settings.zoteroLibraryId || settings.zoteroMode === "desktop" ? "desktop" : "web";
@@ -980,6 +993,7 @@ function mergeSettings(current, input) {
   const customPrompts = input.customPrompts === void 0 ? current.customPrompts : readMultilinePref(input.customPrompts, "custom prompts", "Custom prompts contain invalid control characters.");
   const openAlexEmail = single(input.openAlexEmail ?? current.openAlexEmail ?? "", "OpenAlex email", 254);
   if (openAlexEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(openAlexEmail)) throw new ServiceError(400, "Enter a valid email address for OpenAlex polite pool.");
+  const arxivFormat = input.arxivFormat === void 0 ? current.arxivFormat ?? "html" : readArxivFormat(input.arxivFormat);
   return {
     questionModel: input.questionModel === void 0 ? current.questionModel : readQuestionModel(input.questionModel),
     model,
@@ -996,7 +1010,8 @@ function mergeSettings(current, input) {
     openAlexEmail,
     openAlexApiKey: updatedSecret(current.openAlexApiKey ?? "", input.openAlexApiKey, input.clearOpenAlexApiKey),
     semanticScholarApiKey: updatedSecret(current.semanticScholarApiKey ?? "", input.semanticScholarApiKey, input.clearSemanticScholarApiKey),
-    ncbiApiKey: updatedSecret(current.ncbiApiKey ?? "", input.ncbiApiKey, input.clearNcbiApiKey)
+    ncbiApiKey: updatedSecret(current.ncbiApiKey ?? "", input.ncbiApiKey, input.clearNcbiApiKey),
+    arxivFormat
   };
 }
 function readQuestionModel(value) {
@@ -1009,1178 +1024,7 @@ function readQuestionModel(value) {
   } };
 }
 
-// src/server/library-meta.ts
-var YEAR_RE2 = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
-var STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/;
-var DOI_RE2 = /^10\.\d{4,9}\/[^\s<>"]+$/i;
-var META_KEYS = ["paperTitle", "authors", "venue", "year", "doi", "publisher", "abstract"];
-function bad(msg) {
-  throw new ServiceError(400, msg);
-}
-function optionalText(value, max, multiline = false) {
-  if (typeof value !== "string") return void 0;
-  const cleaned = multiline ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\r\n?/g, "\n").trim() : value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-  return cleaned ? cleaned.slice(0, max) : void 0;
-}
-function optionalDoi(value) {
-  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
-  if (!raw) return void 0;
-  let decoded = raw;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-  }
-  return DOI_RE2.test(decoded) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? decoded : void 0;
-}
-function sanitizeDocMeta(input) {
-  const out = {};
-  const entries = [
-    ["paperTitle", optionalText(input.paperTitle, 500)],
-    ["authors", optionalText(input.authors, 2e3)],
-    ["venue", optionalText(input.venue, 500)],
-    ["year", optionalText(input.year, 32)?.match(YEAR_RE2)?.[1]],
-    ["doi", optionalDoi(input.doi)],
-    ["publisher", optionalText(input.publisher, 500)],
-    ["abstract", optionalText(input.abstract, 8e3, true)]
-  ];
-  for (const [k, v] of entries) if (v) out[k] = v;
-  return out;
-}
-function missingDocMeta(existing, incoming) {
-  const patch = {};
-  if (incoming) {
-    for (const k of META_KEYS) if (!existing[k] && incoming[k]) patch[k] = incoming[k];
-  }
-  return patch;
-}
-function applyMetaPatch(saved, input) {
-  const assign = (key2, val) => {
-    if (val) saved[key2] = val;
-    else delete saved[key2];
-  };
-  for (const key2 of ["paperTitle", "venue"]) if (input[key2] !== void 0) {
-    if (typeof input[key2] !== "string") bad("Invalid " + key2 + " value.");
-    assign(key2, optionalText(input[key2], 500));
-  }
-  if (input.authors !== void 0) {
-    if (Array.isArray(input.authors)) {
-      if (input.authors.length > 200 || !input.authors.every((a) => typeof a === "string")) bad("Invalid authors format.");
-      assign("authors", input.authors.map((a) => optionalText(a, 250)).filter(Boolean).join("; ").slice(0, 2e3) || void 0);
-    } else if (typeof input.authors === "string") assign("authors", optionalText(input.authors, 2e3));
-    else bad("Invalid authors format.");
-  }
-  if (input.year !== void 0) {
-    if (typeof input.year !== "string") bad("Enter a valid 4-digit year.");
-    const trimmed = input.year.trim();
-    if (trimmed && !STRICT_YEAR_RE.test(trimmed)) bad("Enter a valid 4-digit year.");
-    assign("year", trimmed || void 0);
-  }
-  if (input.doi !== void 0) {
-    if (typeof input.doi !== "string") bad("Enter a valid DOI.");
-    const trimmed = input.doi.trim(), doi = trimmed ? optionalDoi(trimmed) : void 0;
-    if (trimmed && !doi) bad("Enter a valid DOI.");
-    assign("doi", doi);
-  }
-}
-
-// src/server/pdf-text.ts
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
-function normalizePdfText(items) {
-  return items.map((item) => typeof item === "object" && item !== null && "str" in item && typeof item.str === "string" ? item.str + ("hasEOL" in item && item.hasEOL ? "\n" : " ") : "").join("").replace(new RegExp("(\\p{L})-\\n(?=\\p{Ll})", "gu"), "$1").replace(/[^\S\n]+/gu, " ").trim();
-}
-async function extractPdfPages(bytes) {
-  const data = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice();
-  const task = pdfjs.getDocument({ data, useSystemFonts: true, disableFontFace: true, verbosity: 0 });
-  let doc;
-  try {
-    doc = await task.promise;
-    const pages = [];
-    for (let page = 1; page <= doc.numPages; page++) {
-      const pdfPage = await doc.getPage(page);
-      try {
-        pages.push({ page, text: normalizePdfText((await pdfPage.getTextContent()).items) });
-      } finally {
-        pdfPage.cleanup();
-      }
-    }
-    return pages;
-  } finally {
-    try {
-      await doc?.cleanup();
-    } catch {
-    }
-    try {
-      await task.destroy();
-    } catch {
-    }
-  }
-}
-async function extractDocumentPages(doc, pdfBytes) {
-  if (doc.kind === "pdf") return pdfBytes ? extractPdfPages(pdfBytes) : [];
-  if (doc.kind === "abstract") {
-    const text2 = [doc.paperTitle || doc.title, doc.authors, doc.venue, doc.year, doc.doi, doc.abstract].filter((v) => typeof v === "string" && Boolean(v.trim())).join("\n\n").trim();
-    return text2 ? [{ page: 1, text: text2 }] : [];
-  }
-  if (doc.paragraphs?.length) {
-    const text2 = doc.paragraphs.map((p) => p.trim()).filter(Boolean).join("\n\n");
-    return text2 ? [{ page: doc.sectionPage ?? 1, text: text2 }] : [];
-  }
-  if (doc.book?.sections.length) {
-    const text2 = [doc.title, ...doc.book.sections.map((s) => s.title)].filter(Boolean).join("\n");
-    return text2 ? [{ page: 1, text: text2 }] : [];
-  }
-  return [];
-}
-
-// src/server/abstract-library.ts
-function bad2(message, status = 400) {
-  throw new ServiceError(status, message);
-}
-async function writeAtomic(file, content) {
-  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(tmp, content, { flag: "wx" });
-  try {
-    await rename(tmp, file);
-  } finally {
-    await rm(tmp, { force: true });
-  }
-}
-function abstractDocId(input) {
-  const meta = sanitizeDocMeta({ ...input });
-  const doi = meta.doi?.toLowerCase();
-  const arxiv2 = extractArxivId(input.url, meta.doi)?.toLowerCase();
-  const normTitle2 = (meta.paperTitle || input.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  const key2 = doi ? "doi:" + doi : arxiv2 ? "arxiv:" + arxiv2 : "title:" + normTitle2 + "|" + (meta.year ?? "");
-  return "abs-" + createHash("sha256").update(key2).digest("hex");
-}
-async function createAbstractRecord(dir, input, withLock) {
-  if (!isObject(input)) bad2("Invalid abstract record payload.");
-  const rawTitle = typeof input.title === "string" && input.title.trim() ? input.title.trim() : typeof input.paperTitle === "string" ? input.paperTitle.trim() : "";
-  const title = rawTitle.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250);
-  if (!title) bad2("A document title is required.");
-  const cleanMeta = sanitizeDocMeta(input);
-  const safeUrl3 = typeof input.url === "string" ? articleUrl(input.url)?.href : void 0;
-  const id = abstractDocId({ title, ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta });
-  const file = path2.join(dir, id + ".json");
-  return withLock(id, async () => {
-    await mkdir(dir, { recursive: true });
-    if (existsSync(file)) {
-      const saved = JSON.parse(await readFile(file, "utf8"));
-      let changed = false;
-      if (!saved.url && safeUrl3) {
-        saved.url = safeUrl3;
-        changed = true;
-      }
-      for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
-        saved[k] = v;
-        changed = true;
-      }
-      if (changed) await writeAtomic(file, JSON.stringify(saved));
-      return { id };
-    }
-    const doc = {
-      id,
-      kind: "abstract",
-      title,
-      ...safeUrl3 ? { url: safeUrl3 } : {},
-      ...cleanMeta,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-      defaultPage: 1
-    };
-    await writeAtomic(file, JSON.stringify(doc));
-    return { id };
-  });
-}
-async function attachPdfToRecord(dir, doc, bytes, limit, withLock) {
-  if (doc.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
-  if (!bytes.length || bytes.length > limit || !bytes.subarray(0, 1024).includes("%PDF-")) bad2("Choose a valid PDF of up to 80 MB.");
-  let pages;
-  try {
-    pages = await extractPdfPages(bytes);
-  } catch {
-    bad2("The uploaded PDF is damaged or unreadable.");
-  }
-  if (!pages.length) bad2("The uploaded PDF has no readable pages.");
-  const jsonFile = path2.join(dir, doc.id + ".json"), pdfFile = path2.join(dir, doc.id + ".pdf");
-  await withLock(doc.id, async () => {
-    if (!existsSync(jsonFile)) bad2("This document has not been imported.", 404);
-    const saved = JSON.parse(await readFile(jsonFile, "utf8"));
-    if (saved.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
-    await writeAtomic(pdfFile, bytes);
-    if (!existsSync(jsonFile)) {
-      await rm(pdfFile, { force: true });
-      bad2("This document has not been imported.", 404);
-    }
-    saved.kind = "pdf";
-    await writeAtomic(jsonFile, JSON.stringify(saved));
-  });
-  return { pages };
-}
-
-// src/server/library.ts
-import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir as mkdir2, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
-import { existsSync as existsSync2, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import path3 from "node:path";
-
-// src/shared/translation-quality.ts
-var englishWords = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
-var sentenceWords = /\b(?:a|an|the|is|are|was|were|will|can|must|has|have|had|we|this|these|that|they|from|with|without|into|on|in|of|at|than|which|when|each|every|across|between)\b/i;
-function isUntranslatedEnglish(source2, result) {
-  const content = result.replace(new RegExp("^\\s*\\p{Script=Han}{1,4}\\s*[:\uFF1A]\\s*", "u"), "");
-  if (new RegExp("\\p{Script=Han}", "u").test(content) || /^\s*\[\d+(?:[,\s–-]+\d+)*\]/.test(source2) || /\bet al\.\s*(?:\(?\d{4}\)?)?[.,]?\s*$/i.test(source2) || /\b(?:19|20)\d{2}\b/.test(source2) && /\b(?:doi|isbn|arxiv|journal|proceedings|vol\.|pp\.)\b/i.test(source2)) return false;
-  const original = source2.normalize("NFKC").match(englishWords) ?? [];
-  const lowercase = original.filter((word) => /^[a-z]{2}/.test(word)).length;
-  const sentence = original.length >= 3 && lowercase >= 2 && /[.!?]["'’”)]*\s*$/.test(source2);
-  const passage = original.length >= 5 && lowercase >= 3 && sentenceWords.test(source2);
-  if (!sentence && !passage) return false;
-  const translated = content.normalize("NFKC").match(englishWords) ?? [];
-  const phrase = (words) => " " + words.join(" ").toLowerCase() + " ";
-  return phrase(translated).includes(phrase(original));
-}
-function hasDecoderRepetition(result, source2 = "") {
-  const compact = result.replace(/\s+/gu, "");
-  const original = source2.replace(/\s+/gu, "");
-  const stutter = /\u6df1[\u5c42\u5c64\u5ea6]\u7559{3,}[\u5b66\u5b78][\u4e60\u7fd2]/u.exec(compact);
-  if (stutter && !original.includes(stutter[0]) && (source2 ? /\bresidual[\s-]+learning\b/i.test(source2) : stutter.index === 0 && compact.length <= 80)) return true;
-  for (const match of compact.matchAll(/[.,:;!?，。；：、！？]{7,}|([\p{Script=Han}][\p{Script=Han},.:;!?，。；：、！？]{0,39}?)\1{3,}/gu)) {
-    const run = match[0], unit = match[1];
-    if (/^\.+$/.test(run) && (run.length < 32 || /\d/.test(compact[match.index + run.length] ?? ""))) continue;
-    if ((!unit || run.length >= (unit.length === 1 ? 6 : 10)) && !original.includes(run)) return true;
-  }
-  return false;
-}
-function translationQualityError(source2, result) {
-  if (hasDecoderRepetition(result, source2)) return "The model returned repeated text. Retry the page translation.";
-  if (isUntranslatedEnglish(source2, result)) return "The model returned the original English passage. Retry the page translation.";
-}
-
-// src/server/article-layout.ts
-function readArticleLayout(raw, paragraphs) {
-  if (!isRecord(raw)) fail("Invalid article layout.");
-  const result = {};
-  for (const [id, value] of Object.entries(raw)) {
-    if (!/^p-[1-9]\d{0,3}$/.test(id) || !isRecord(value)) fail("Invalid article block.");
-    const text2 = paragraphs[Number(id.slice(2)) - 1];
-    if (!text2 || typeof value.kind !== "string" || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline)$/.test(value.kind)) fail("Invalid article block.");
-    const block = { kind: value.kind };
-    if (value.ids !== void 0) {
-      if (!Array.isArray(value.ids) || value.ids.length > 80 || !value.ids.every((id2) => typeof id2 === "string" && id2.length <= 256)) fail("Invalid article anchors.");
-      block.ids = value.ids;
-    }
-    if (value.spans !== void 0) {
-      if (!Array.isArray(value.spans) || value.spans.length > 4e3) fail("Invalid article formatting.");
-      let previous = 0;
-      block.spans = value.spans.map((span) => {
-        if (!isRecord(span) || typeof span.kind !== "string" || !["link", "code", "math", "em", "strong"].includes(span.kind) || typeof span.start !== "number" || !Number.isSafeInteger(span.start) || span.start < previous || typeof span.end !== "number" || !Number.isSafeInteger(span.end) || span.end <= span.start || span.end > text2.length) fail("Invalid article text range.");
-        previous = span.end;
-        const result2 = { start: span.start, end: span.end, kind: span.kind };
-        if (span.kind === "math") {
-          if (typeof span.value !== "string" || span.value.length > 4096) fail("Invalid article formula.");
-          result2.value = span.value;
-        }
-        if (span.kind === "link") {
-          const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
-          if (!link2) fail("Invalid article link.");
-          result2.value = link2.href;
-        }
-        return result2;
-      });
-    }
-    if (block.kind === "image") {
-      const image = value.image;
-      if (!isRecord(image) || typeof image.url !== "string" || !articleUrl(image.url) || typeof image.alt !== "string" || image.alt.length > 1024) fail("Invalid article illustration.");
-      block.image = { url: image.url, alt: image.alt };
-    }
-    if (block.kind === "table") {
-      const cells = value.cells;
-      if (!Array.isArray(cells) || !cells.length || !cells.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string")) || cells.map((row) => row.join("	")).join("\n").trim() !== text2.trim()) fail("Invalid article table.");
-      block.cells = cells;
-    }
-    result[id] = block;
-  }
-  return result;
-}
-
-// src/server/openstax.ts
-import { parse, parseFragment } from "parse5";
-
-// src/server/article-dom.ts
-var htmlTree = {
-  tag: (node) => node.nodeName,
-  attr: (node, key2) => "attrs" in node ? node.attrs.find((attribute) => attribute.name === key2)?.value ?? null : null,
-  children: (node) => "childNodes" in node ? node.childNodes : [],
-  text: (node) => "value" in node ? node.value : "childNodes" in node ? node.childNodes.map((child) => htmlTree.text(child)).join("") : ""
-};
-
-// src/server/openstax.ts
-async function publishedEntry(book, read) {
-  const { bytes } = await read("https://openstax.org/apps/cms/api/books/" + encodeURIComponent(book) + "/", "json");
-  const data = JSON.parse(bytes.toString("utf8"));
-  const target = isRecord(data) && openStaxLocation(data.webview_rex_link);
-  if (!target || target.book !== book || !target.section) fail("OpenStax has no online reading entry for this book.", 502);
-  return target.section;
-}
-function find(node, test) {
-  if (test(node)) return node;
-  for (const child of htmlTree.children(node)) {
-    const found = find(child, test);
-    if (found) return found;
-  }
-}
-function titleText(value) {
-  if (typeof value !== "string") return "";
-  return htmlTree.text(parseFragment(value)).replace(/\s+/g, " ").trim();
-}
-function contentsOf(tree, book) {
-  if (!isRecord(tree) || !Array.isArray(tree.contents)) fail("OpenStax did not publish a table of contents for this book.", 502);
-  const sections = [], seen = /* @__PURE__ */ new Set();
-  function visit(item, chapter) {
-    if (!isRecord(item)) return;
-    const slug = item.slug, title = titleText(item.title);
-    if (Array.isArray(item.contents)) {
-      if (title && (!chapter || item.toc_type === "chapter")) {
-        const id = bookSlug(slug) ? slug : typeof item.id === "string" ? item.id.split("@")[0] : "";
-        if (id) chapter = { chapterId: id, chapterTitle: title };
-      }
-      for (const child of item.contents) visit(child, chapter);
-    } else if (bookSlug(slug) && title && !seen.has(slug)) {
-      seen.add(slug);
-      sections.push({ slug, title, ...chapter ?? { chapterId: slug, chapterTitle: title }, url: openStaxUrl(book, slug) });
-    }
-  }
-  for (const node of tree.contents) visit(node);
-  if (!sections.length) fail("The OpenStax table of contents is empty.", 502);
-  return sections;
-}
-function addAttribution(article, book, title, entry) {
-  let text2 = "OpenStax \xB7 " + title + ". Access for free at ";
-  const spans = [{ kind: "link", start: text2.length, end: text2.length + entry.length, value: entry }];
-  text2 += entry;
-  if (isRecord(book.license) && typeof book.license.url === "string" && typeof book.license.name === "string") {
-    const license = articleUrl(book.license.url);
-    if (license) {
-      text2 += " \xB7 ";
-      spans.push({ kind: "link", start: text2.length, end: text2.length + book.license.name.length, value: license.href });
-      text2 += book.license.name;
-    }
-  }
-  article.paragraphs.push(text2);
-  (article.articleLayout ??= {})["p-" + article.paragraphs.length] = { kind: "byline", spans };
-}
-function parseOpenStaxPage(html, slug, section, withCatalog, defaultSection) {
-  const dom = parse(html, { scriptingEnabled: false });
-  const stateScript = find(dom, (node) => node.nodeName === "script" && /^\s*window\.__PRELOADED_STATE__\s*=/.test(htmlTree.text(node)));
-  if (!stateScript) fail("This page did not contain the OpenStax reader data.", 502);
-  const json2 = htmlTree.text(stateScript).replace(/^\s*window\.__PRELOADED_STATE__\s*=\s*/, "").trim().replace(/;$/, "");
-  const state = JSON.parse(json2);
-  const content = isRecord(state) && state.content;
-  if (!isRecord(content) || !isRecord(content.book) || content.book.slug !== slug || !isRecord(content.params) || !isRecord(content.params.page) || content.params.page.slug !== section || !find(dom, (node) => htmlTree.attr(node, "data-book-content") === "true")) fail("OpenStax did not return the requested book section.", 502);
-  const book = content.book, url = openStaxUrl(slug, section), title = titleText(book.title);
-  if (!title) fail("The OpenStax book title is missing.", 502);
-  const { article } = extractArticle(dom, htmlTree, url, title);
-  const attribution = find(dom, (node) => htmlTree.attr(node, "data-analytics-region") === "attribution" || htmlTree.attr(node, "data-testid") === "attribution-details");
-  const source2 = attribution && find(attribution, (node) => {
-    const target = node.nodeName === "a" && openStaxLocation(htmlTree.attr(node, "href"));
-    return Boolean(target && target.book === slug && target.section);
-  });
-  const entry = source2 ? htmlTree.attr(source2, "href") : openStaxUrl(slug, defaultSection ?? section);
-  addAttribution(article, book, title, entry);
-  if (!withCatalog) return { article };
-  const sections = contentsOf(book.tree, slug);
-  const firstSlug = defaultSection ?? openStaxLocation(entry)?.section;
-  const first = sections.findIndex((item) => item.slug === firstSlug);
-  const names = Array.isArray(book.authors) ? book.authors.filter(isRecord).map((author) => author.value).filter(isRecord) : [];
-  const primary = names.filter((author) => author.senior_author === true);
-  const authors = (primary.length ? primary : names).map((author) => author.name).filter((name2) => typeof name2 === "string").join(", ");
-  return { article, catalog: { book: { slug, sections }, title, authors: authors || void 0, defaultPage: first < 0 ? 1 : first + 1 } };
-}
-
-// src/server/public-resource.ts
-import { lookup } from "node:dns/promises";
-import { get as getHttp, request as requestHttp } from "node:http";
-import { get as getHttps, request as requestHttps } from "node:https";
-import { BlockList, isIP } from "node:net";
-import { connect as tlsConnect } from "node:tls";
-import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
-var special = new BlockList();
-for (const [address2, prefix2] of [
-  ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.0.2.0", 24],
-  ["192.88.99.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["198.51.100.0", 24],
-  ["203.0.113.0", 24],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4]
-]) special.addSubnet(address2, prefix2, "ipv4");
-for (const [address2, prefix2] of [["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20]])
-  special.addSubnet(address2, prefix2, "ipv6");
-function publicAddress(address2) {
-  const family = isIP(address2);
-  if (family === 4) return !special.check(address2, "ipv4");
-  return family === 6 && /^[23]/i.test(address2) && !special.check(address2, "ipv6");
-}
-function checkedUrl(raw) {
-  const url = typeof raw === "string" ? articleUrl(raw) : void 0;
-  if (!url) fail("Enter a public HTTP or HTTPS webpage address.");
-  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (!host.includes(".") && !isIP(host) || /(?:^|\.)(localhost|local|internal|home\.arpa)$/.test(host) || isIP(host) && !publicAddress(host)) fail("Use a public webpage address. For a private page, open it in your browser and use the reader extension.");
-  url.hash = "";
-  return url;
-}
-var publicLookup = (hostname, options, callback) => {
-  void lookup(hostname, { all: true, verbatim: true }).then((addresses) => {
-    if (!addresses.length || addresses.some(({ address: address2 }) => !publicAddress(address2))) throw new Error("This address does not resolve to a public website.");
-    const preferred = addresses.find((item) => item.family === (options.family || 4)) || addresses[0];
-    if (options.all) callback(null, [preferred, ...addresses.filter((item) => item !== preferred)]);
-    else callback(null, preferred.address, preferred.family);
-  }).catch((error) => callback(error, "", 0));
-};
-var REACH_ERROR = "The website could not be reached. Open the original webpage and try the browser extension.";
-var pickEnv = (env, upper, lower) => env[upper]?.trim() || env[lower]?.trim() || "";
-var decodeCredential = (value) => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
-function matchesNoProxy(url, noProxy) {
-  if (!noProxy) return false;
-  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
-  for (const raw of noProxy.split(",")) {
-    const token = raw.trim().toLowerCase();
-    if (!token) continue;
-    if (token === "*") return true;
-    const bracket = token.startsWith("[") ? /^\[([^\]]+)\](?::(\d+))?$/.exec(token) : null;
-    if (token.startsWith("[") && !bracket) continue;
-    const colon = !bracket && token.indexOf(":") === token.lastIndexOf(":") ? token.indexOf(":") : -1;
-    const entryHost = bracket ? bracket[1] : colon !== -1 ? token.slice(0, colon) : token;
-    const entryPort = bracket ? bracket[2] ?? "" : colon !== -1 ? token.slice(colon + 1) : "";
-    if (entryPort && entryPort !== port) continue;
-    if (entryHost === "*") return true;
-    const pattern = entryHost.replace(/^\.+/, "").replace(/\.$/, "");
-    if (pattern && (host === pattern || host.endsWith("." + pattern))) return true;
-  }
-  return false;
-}
-function resolveProxy(url, env = process.env) {
-  const raw = url.protocol === "https:" ? pickEnv(env, "HTTPS_PROXY", "https_proxy") : pickEnv(env, "HTTP_PROXY", "http_proxy");
-  if (!raw || matchesNoProxy(url, pickEnv(env, "NO_PROXY", "no_proxy"))) return void 0;
-  const parsed = URL.parse(/^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : "http://" + raw);
-  if (!parsed || parsed.protocol !== "http:" && parsed.protocol !== "https:") return void 0;
-  const port = parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-  const auth = parsed.username || parsed.password ? "Basic " + Buffer.from(`${decodeCredential(parsed.username)}:${decodeCredential(parsed.password)}`).toString("base64") : void 0;
-  return { protocol: parsed.protocol, host: parsed.hostname.replace(/^\[|\]$/g, ""), port, ...auth ? { auth } : {} };
-}
-function requestViaTunnel(url, proxy, headers, signal, ca) {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new Error(REACH_ERROR));
-      return;
-    }
-    const targetPort = url.port || "443", authority = `${url.hostname}:${targetPort}`, servername = url.hostname.replace(/^\[|\]$/g, "");
-    let settled = false, rawSocket, tlsSocket, innerReq;
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const destroySockets = () => {
-      tlsSocket?.destroy();
-      rawSocket?.destroy();
-    };
-    const failReach = () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      destroySockets();
-      reject(new Error(REACH_ERROR));
-    };
-    const onAbort = () => {
-      connectReq.destroy();
-      innerReq?.destroy();
-      destroySockets();
-      failReach();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    const connectReq = (proxy.protocol === "https:" ? requestHttps : requestHttp)({
-      host: proxy.host,
-      port: proxy.port,
-      method: "CONNECT",
-      path: authority,
-      agent: false,
-      signal,
-      ...proxy.protocol === "https:" && ca ? { ca } : {},
-      headers: { host: authority, ...proxy.auth ? { "proxy-authorization": proxy.auth } : {} }
-    });
-    connectReq.once("error", failReach);
-    connectReq.once("connect", (connectRes, socket, head) => {
-      rawSocket = socket;
-      socket.on("error", () => {
-        socket.destroy();
-      });
-      if (settled || signal.aborted || !connectRes.statusCode || connectRes.statusCode < 200 || connectRes.statusCode >= 300) {
-        failReach();
-        return;
-      }
-      if (head.length) socket.unshift(head);
-      innerReq = getHttps({
-        host: servername,
-        port: Number(targetPort),
-        path: url.pathname + url.search,
-        signal,
-        headers: { ...headers, host: url.host, connection: "close" },
-        createConnection: () => {
-          tlsSocket = tlsConnect({ socket, host: servername, ...isIP(servername) ? {} : { servername }, ...ca ? { ca } : {} });
-          tlsSocket.once("close", () => {
-            socket.destroy();
-            cleanup();
-          });
-          return tlsSocket;
-        }
-      }, (res) => {
-        res.once("close", () => {
-          destroySockets();
-          cleanup();
-        });
-        if (settled) {
-          res.destroy();
-          return;
-        }
-        settled = true;
-        resolve(res);
-      });
-      innerReq.once("error", failReach);
-    });
-    connectReq.end();
-  });
-}
-function openResponse(url, headers, signal, options) {
-  const proxy = resolveProxy(url);
-  if (proxy && url.protocol === "https:") return requestViaTunnel(url, proxy, headers, signal, options?.ca);
-  return new Promise((resolve, reject) => {
-    const request = proxy ? (proxy.protocol === "https:" ? getHttps : getHttp)({
-      host: proxy.host,
-      port: proxy.port,
-      path: url.href,
-      agent: false,
-      signal,
-      ...proxy.protocol === "https:" && options?.ca ? { ca: options.ca } : {},
-      headers: { ...headers, host: url.host, ...proxy.auth ? { "proxy-authorization": proxy.auth } : {} }
-    }, resolve) : (url.protocol === "https:" ? getHttps : getHttp)(url, {
-      agent: false,
-      lookup: options?.lookup ?? publicLookup,
-      signal,
-      headers,
-      ...url.protocol === "https:" && options?.ca ? { ca: options.ca } : {}
-    }, resolve);
-    request.once("error", () => reject(new Error(REACH_ERROR)));
-  });
-}
-async function publicResource(raw, kind, options) {
-  let url = checkedUrl(raw);
-  const signal = options?.signal ?? AbortSignal.timeout(35e3);
-  const headers = {
-    Accept: kind === "image" ? "image/*" : kind === "json" ? "application/json" : "text/html,application/xhtml+xml,application/pdf",
-    "Accept-Encoding": "identity",
-    "User-Agent": "DSH-Paper-Reader/0.1 (article reader)"
-  };
-  for (let hops = 0; hops < 6; hops++) {
-    const response = await openResponse(url, headers, signal, options);
-    const status = response.statusCode || 500;
-    if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
-      response.destroy();
-      url = checkedUrl(articleUrl(response.headers.location, url.href)?.href);
-      continue;
-    }
-    if (status < 200 || status >= 300) {
-      response.destroy();
-      fail("The website returned HTTP " + status + ". Open the original webpage to sign in or use the reader extension.", 502);
-    }
-    const mime = response.headers["content-type"] || "";
-    const type = mime.split(";")[0].trim().toLowerCase();
-    const imageType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
-    if (kind === "json" && type !== "application/json") {
-      response.destroy();
-      fail("OpenStax did not return book metadata.", 415);
-    }
-    if (kind === "image" && !imageType.test(type) || kind === "document" && !["application/pdf", "application/octet-stream", "text/html", "application/xhtml+xml", ""].includes(type)) {
-      response.destroy();
-      fail(kind === "image" ? "The website did not return an illustration." : "This link does not return an HTML article or PDF.", 415);
-    }
-    const html = ["text/html", "application/xhtml+xml"].includes(type);
-    const limit = kind === "json" ? 1024 * 1024 : kind === "image" ? 12 * 1024 * 1024 : html ? 5 * 1024 * 1024 : PDF_LIMIT;
-    if (Number(response.headers["content-length"]) > limit) {
-      response.destroy();
-      fail("This resource is too large to open.", 413);
-    }
-    const encoding = response.headers["content-encoding"];
-    const decoder = encoding === "gzip" ? createGunzip() : encoding === "br" ? createBrotliDecompress() : encoding === "deflate" ? createInflate() : void 0;
-    if (encoding && encoding !== "identity" && !decoder) {
-      response.destroy();
-      fail("The website returned an unsupported transfer encoding.", 415);
-    }
-    const source2 = decoder ? response.pipe(decoder) : response;
-    if (decoder) response.on("error", (error) => decoder.destroy(error));
-    const chunks = [];
-    let length = 0;
-    try {
-      for await (const chunk of source2) {
-        length += chunk.length;
-        if (length > limit) fail("This resource is too large to open.", 413);
-        chunks.push(chunk);
-      }
-    } finally {
-      response.destroy();
-      decoder?.destroy();
-    }
-    return { url, type, charset: /charset\s*=\s*["']?([\w-]+)/i.exec(mime)?.[1], bytes: Buffer.concat(chunks, length) };
-  }
-  fail("This website redirects too many times.", 502);
-}
-
-// src/server/library.ts
-var PDF_LIMIT = 80 * 1024 * 1024;
-var sampleDigest = "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e";
-var sample = {
-  id: "pagedattention",
-  kind: "pdf",
-  title: "PagedAttention.pdf",
-  authors: "Kwon et al.",
-  venue: "SOSP 2023",
-  paperTitle: "Efficient Memory Management for Large Language Model Serving with PagedAttention",
-  url: "https://arxiv.org/abs/2309.06180",
-  doi: "10.1145/3600006.3613165",
-  defaultPage: 6
-};
-var hash = (bytes) => createHash2("sha256").update(bytes).digest("hex");
-function translationCacheSlug(targetLanguage = DEFAULT_TARGET_LANGUAGE) {
-  const parsed = parseTargetLanguage(targetLanguage);
-  if (!parsed.ok) fail(parsed.error, 400);
-  const preset = findTargetLanguagePreset(parsed.value);
-  if (preset) return preset.slug;
-  const normalized = parsed.value.normalize("NFC").toLowerCase();
-  const ascii = normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
-  return "custom-" + (ascii ? ascii + "-" : "") + hash(normalized).slice(0, 16);
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function fail(message, status = 400) {
-  throw Object.assign(new Error(message), { status });
-}
-function isFsError(error, code) {
-  return isRecord(error) && error.code === code;
-}
-var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
-async function writeOnce(file, bytes) {
-  const temporary = file + "." + randomUUID2() + ".tmp";
-  await writeFile2(temporary, bytes, { flag: "wx" });
-  try {
-    try {
-      await link(temporary, file);
-    } catch (error) {
-      if (!isFsError(error, "EEXIST")) throw error;
-    }
-  } finally {
-    await rm2(temporary, { force: true });
-  }
-}
-var pictureType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
-var Library = class {
-  constructor(root, readBook = publicResource, onDelete) {
-    this.readBook = readBook;
-    this.onDelete = onDelete;
-    this.directory = path3.join(root, "documents");
-    this.translationDir = path3.join(root, "translations");
-    this.imageDir = path3.join(root, "article-images");
-  }
-  readBook;
-  onDelete;
-  directory;
-  translationDir;
-  imageDir;
-  imageJobs = /* @__PURE__ */ new Map();
-  jobs = /* @__PURE__ */ new Map();
-  bookJobs = /* @__PURE__ */ new Map();
-  metaJobs = /* @__PURE__ */ new Map();
-  async store(doc) {
-    await mkdir2(this.directory, { recursive: true });
-    await writeOnce(path3.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
-    return this.get(doc.id);
-  }
-  hasSync(id) {
-    return id === sample.id || validDocId(id) && existsSync2(path3.join(this.directory, id + ".json"));
-  }
-  async get(id) {
-    if (!validDocId(id)) fail("Invalid document ID.", 404);
-    if (id === sample.id) return sample;
-    try {
-      const value = JSON.parse(await readFile2(path3.join(this.directory, id + ".json"), "utf8"));
-      if (!isRecord(value) || value.id !== id || typeof value.title !== "string" || !["pdf", "web", "abstract"].includes(String(value.kind))) fail("The document index is damaged.", 500);
-      if (id.startsWith("book-")) {
-        if (value.kind !== "web" || !isRecord(value.book) || !bookSlug(value.book.slug) || !Array.isArray(value.book.sections) || !value.book.sections.length || !value.book.sections.every((section) => isRecord(section) && bookSlug(section.slug) && typeof section.title === "string" && typeof section.chapterId === "string" && typeof section.chapterTitle === "string" && typeof section.url === "string")) fail("The saved book contents are damaged.", 500);
-        return value;
-      }
-      if (value.kind === "web" && (!Array.isArray(value.paragraphs) || !value.paragraphs.every((p) => typeof p === "string"))) fail("The saved article is damaged.", 500);
-      const doc = value;
-      if (doc.kind === "pdf" && !doc.url) {
-        try {
-          doc.url = await readFile2(path3.join(this.directory, id + ".source-url"), "utf8");
-        } catch (error) {
-          if (!isFsError(error, "ENOENT")) throw error;
-        }
-      }
-      if (doc.kind === "web") {
-        try {
-          doc.articleLayout = JSON.parse(await readFile2(path3.join(this.directory, id + ".layout.json"), "utf8"));
-        } catch (error) {
-          if (!isFsError(error, "ENOENT")) throw error;
-        }
-      }
-      return doc;
-    } catch (error) {
-      if (isFsError(error, "ENOENT")) fail("This document has not been imported.", 404);
-      throw error;
-    }
-  }
-  async list() {
-    await mkdir2(this.directory, { recursive: true });
-    const names = (await readdir(this.directory)).filter((file) => /^(pdf|web|book|abs)-[a-f0-9]{64}\.json$/.test(file));
-    const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
-    return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
-  }
-  async withMetaLock(id, run) {
-    const prev = this.metaJobs.get(id);
-    const job = (async () => {
-      if (prev) await prev.catch(() => void 0);
-      return run();
-    })();
-    this.metaJobs.set(id, job);
-    try {
-      return await job;
-    } finally {
-      if (this.metaJobs.get(id) === job) this.metaJobs.delete(id);
-    }
-  }
-  async mutateMeta(id, mutate) {
-    return this.withMetaLock(id, async () => {
-      await this.get(id);
-      const file = path3.join(this.directory, id + ".json");
-      const saved = JSON.parse(await readFile2(file, "utf8"));
-      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
-      return this.get(id);
-    });
-  }
-  async rename(id, title) {
-    if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
-    const nextTitle = typeof title === "string" ? title.trim().slice(0, 250) : "";
-    if (!nextTitle) fail("A document title is required.");
-    const doc = await this.get(id);
-    return this.mutateMeta(doc.id, (saved) => {
-      saved.title = nextTitle;
-    });
-  }
-  async updateMeta(input) {
-    if (!isRecord(input)) fail("Invalid metadata payload.");
-    if (input.id === sample.id) fail("The bundled sample paper metadata cannot be edited.");
-    const doc = await this.get(input.id);
-    return this.mutateMeta(doc.id, (saved) => {
-      applyMetaPatch(saved, input);
-    });
-  }
-  async delete(id) {
-    if (id === sample.id) fail("The bundled sample paper cannot be deleted.");
-    if (!validDocId(id)) fail("Invalid document ID.", 404);
-    return this.withMetaLock(id, async () => {
-      const file = path3.join(this.directory, id + ".json");
-      const existed = existsSync2(file);
-      await Promise.all([
-        rm2(file, { force: true }),
-        rm2(path3.join(this.directory, id + ".pdf"), { force: true }),
-        rm2(path3.join(this.directory, id + ".source-url"), { force: true }),
-        rm2(path3.join(this.directory, id + ".layout.json"), { force: true }),
-        rm2(path3.join(this.directory, "book-sections", id), { recursive: true, force: true }),
-        rm2(path3.join(this.translationDir, id), { recursive: true, force: true }),
-        rm2(path3.join(this.imageDir, id), { recursive: true, force: true })
-      ]);
-      this.onDelete?.(id);
-      return { id, deleted: existed };
-    });
-  }
-  bookJob(key2, start) {
-    const pending = this.bookJobs.get(key2);
-    if (pending) return pending;
-    const job = start().finally(() => this.bookJobs.delete(key2));
-    this.bookJobs.set(key2, job);
-    return job;
-  }
-  sectionFile(id, slug) {
-    return path3.join(this.directory, "book-sections", id, hash(slug) + ".json");
-  }
-  /** Export uses only already-imported material, even when the publisher is offline. */
-  cachedSection(doc, page) {
-    const section = doc.book?.sections[page - 1];
-    if (!section) return;
-    try {
-      return JSON.parse(readFileSync(this.sectionFile(doc.id, section.slug), "utf8"));
-    } catch (error) {
-      if (!isFsError(error, "ENOENT")) throw error;
-    }
-  }
-  pdfFile(doc) {
-    if (doc.kind !== "pdf" || !validDocId(doc.id)) fail("This document has no saved PDF.");
-    if (doc.id !== sample.id) return path3.join(this.directory, doc.id + ".pdf");
-    const bundled = fileURLToPath(new URL("../web/assets/pagedattention.pdf", import.meta.url));
-    return existsSync2(bundled) ? bundled : fileURLToPath(new URL("../../public/assets/pagedattention.pdf", import.meta.url));
-  }
-  async saveSection(file, article) {
-    await mkdir2(path3.dirname(file), { recursive: true });
-    await writeOnce(file, JSON.stringify({ paragraphs: article.paragraphs, articleLayout: article.articleLayout }));
-  }
-  async openBook(location) {
-    const url = openStaxUrl(location.book), id = "book-" + hash(url);
-    const doc = await this.bookJob(id, async () => {
-      try {
-        return await this.get(id);
-      } catch (error) {
-        if (!isRecord(error) || error.status !== 404) throw error;
-      }
-      const section = location.section ?? await publishedEntry(location.book, this.readBook);
-      const source2 = await this.readBook(openStaxUrl(location.book, section), "document");
-      const { article, catalog } = parseOpenStaxPage(source2.bytes.toString("utf8"), location.book, section, true, location.section ? void 0 : section);
-      if (!catalog || !catalog.book.sections.some((item) => item.slug === section)) fail("This section is missing from the OpenStax table of contents.", 502);
-      await this.saveSection(this.sectionFile(id, section), article);
-      return this.store({ ...catalog, kind: "web", id, url, venue: "OpenStax", createdAt: (/* @__PURE__ */ new Date()).toISOString() });
-    });
-    if (!location.section) return { doc };
-    const page = (doc.book?.sections.findIndex((item) => item.slug === location.section) ?? -1) + 1;
-    if (!page) fail("This section is not in the saved OpenStax table of contents.", 404);
-    const loaded = await this.readSection(doc, page);
-    const fragment = location.fragment;
-    const anchor = fragment && Object.entries(loaded.articleLayout ?? {}).find(([, block]) => block.ids?.includes(fragment))?.[0];
-    return { doc: loaded, page, ...anchor ? { anchor } : {} };
-  }
-  async bookSection(id, page) {
-    return this.readSection(await this.get(id), page);
-  }
-  async readSection(doc, page, cachedOnly = false) {
-    const book = doc.book;
-    if (!book || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > book.sections.length) fail("Unknown book section.", 404);
-    const section = book.sections[page - 1], file = this.sectionFile(doc.id, section.slug);
-    const read = async () => {
-      const saved = JSON.parse(await readFile2(file, "utf8"));
-      if (!isRecord(saved) || !Array.isArray(saved.paragraphs) || !saved.paragraphs.every((p) => typeof p === "string") || !isRecord(saved.articleLayout)) fail("The saved book section is damaged.", 500);
-      return { ...doc, sectionPage: page, url: section.url, paragraphs: saved.paragraphs, articleLayout: saved.articleLayout };
-    };
-    if (cachedOnly) {
-      try {
-        return await read();
-      } catch (error) {
-        if (isFsError(error, "ENOENT")) fail("This section has not been opened yet.", 404);
-        throw error;
-      }
-    }
-    return this.bookJob(file, async () => {
-      try {
-        return await read();
-      } catch (error) {
-        if (!isFsError(error, "ENOENT")) throw error;
-      }
-      const source2 = await this.readBook(openStaxUrl(book.slug, section.slug), "document");
-      const { article } = parseOpenStaxPage(source2.bytes.toString("utf8"), book.slug, section.slug, false);
-      await this.saveSection(file, article);
-      return read();
-    });
-  }
-  async importWeb(input) {
-    return (await this.importWebDocument(input)).doc;
-  }
-  async importWebDocument(input) {
-    if (!isRecord(input) || typeof input.url !== "string" || !URL.canParse(input.url)) fail("A valid article URL is required.");
-    const book = openStaxLocation(input.url);
-    if (book) return this.openBook(book);
-    const url = new URL(input.url);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) fail("Only HTTP and HTTPS articles are supported.");
-    url.hash = "";
-    const raw = input.paragraphs;
-    if (!Array.isArray(raw) || raw.length > 4e3 || !raw.every((p) => typeof p === "string")) fail("Invalid article paragraphs.");
-    const structured = input.articleLayout !== void 0;
-    const paragraphs = structured ? raw : raw.map((p) => p.trim()).filter(Boolean);
-    if (structured && paragraphs.some((p) => !p.trim())) fail("Invalid article paragraphs.");
-    if (!paragraphs.length || paragraphs.join("").length > 1e6) fail("The article is empty or too long.");
-    const id = "web-" + hash(JSON.stringify([url.href, paragraphs]));
-    if (structured) {
-      const layout = readArticleLayout(input.articleLayout, paragraphs);
-      await mkdir2(this.directory, { recursive: true });
-      await writeOnce(path3.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
-    }
-    return { doc: await this.store({
-      kind: "web",
-      id,
-      url: url.href,
-      title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname,
-      ...sanitizeDocMeta(input),
-      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-      defaultPage: 1,
-      paragraphs
-    }) };
-  }
-  async importPdf(title, bytes, url, meta) {
-    if (bytes.length > PDF_LIMIT || !bytes.subarray(0, 1024).includes("%PDF-")) fail("Choose a valid PDF of up to 80 MB.");
-    const digest = hash(bytes);
-    if (digest === sampleDigest) return sample;
-    const id = "pdf-" + digest;
-    const safeUrl3 = articleUrl(url)?.href;
-    const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
-    await mkdir2(this.directory, { recursive: true });
-    await writeOnce(path3.join(this.directory, id + ".pdf"), bytes);
-    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
-    const missing = missingDocMeta({ ...doc }, cleanMeta);
-    const needUrl = !doc.url && Boolean(safeUrl3);
-    if (needUrl || Object.keys(missing).length) {
-      return this.mutateMeta(id, (saved) => {
-        let changed = false;
-        if (!saved.url && safeUrl3) {
-          saved.url = safeUrl3;
-          changed = true;
-        }
-        for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
-          saved[k] = v;
-          changed = true;
-        }
-        return changed;
-      });
-    }
-    return doc;
-  }
-  async createAbstract(input) {
-    const { id } = await createAbstractRecord(this.directory, input, (key2, run) => this.withMetaLock(key2, run));
-    return this.get(id);
-  }
-  async attachPdf(id, bytes) {
-    const doc = await this.get(id);
-    const { pages } = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT, (key2, run) => this.withMetaLock(key2, run));
-    return { doc: await this.get(doc.id), pages };
-  }
-  async bytes(id) {
-    const doc = await this.get(id);
-    if (doc.kind !== "pdf") fail("This document has no saved PDF.");
-    return readFile2(this.pdfFile(doc));
-  }
-  async articleImage(id, anchor, download, page) {
-    if (!validDocId(id) || !/^(?:web|book)-/.test(id) || typeof anchor !== "string" || !/^p-[1-9]\d{0,3}$/.test(anchor)) fail("Unknown article illustration.", 404);
-    const book = id.startsWith("book-");
-    if (book && (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1)) fail("A book illustration needs its section number.", 404);
-    const directory = book ? path3.join(this.imageDir, id, String(page)) : path3.join(this.imageDir, id);
-    const file = path3.join(directory, anchor);
-    const read = async () => {
-      const saved = await readFile2(file);
-      const end = saved.indexOf(10), type = end > 0 && end < 40 ? saved.toString("ascii", 0, end) : "";
-      if (!pictureType.test(type)) fail("The saved illustration is damaged.", 500);
-      return { type, bytes: saved.subarray(end + 1) };
-    };
-    try {
-      return await read();
-    } catch (error) {
-      if (!isFsError(error, "ENOENT")) throw error;
-    }
-    const pending = this.imageJobs.get(file);
-    if (pending) return pending;
-    const job = (async () => {
-      const metadata = await this.get(id);
-      const doc = book ? await this.readSection(metadata, page, true) : metadata;
-      const url = doc.articleLayout?.[anchor]?.image?.url;
-      if (!url) fail("This illustration is not part of the saved article.", 404);
-      const picture = await download(url);
-      if (!pictureType.test(picture.type) || !picture.bytes.length) fail("The website did not return an illustration.", 415);
-      await mkdir2(directory, { recursive: true });
-      await writeOnce(file, Buffer.concat([Buffer.from(picture.type + "\n", "ascii"), picture.bytes]));
-      return read();
-    })();
-    this.imageJobs.set(file, job);
-    try {
-      return await job;
-    } finally {
-      this.imageJobs.delete(file);
-    }
-  }
-  pageFile(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
-    if (!validDocId(id) || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 1e5) fail("Invalid document or page number.");
-    const slug = translationCacheSlug(targetLanguage);
-    return slug ? path3.join(this.translationDir, id, slug, page + ".json") : path3.join(this.translationDir, id, page + ".json");
-  }
-  async translations(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
-    const file = this.pageFile(id, page, targetLanguage);
-    const chinese = typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
-    try {
-      const data = JSON.parse(await readFile2(file, "utf8"));
-      if (!isRecord(data) || !Object.values(data).every((v) => typeof v === "string")) fail("The translation cache is damaged.", 500);
-      const translations = data;
-      if (typeof id === "string" && /^(?:web|book)-/.test(id) || !chinese) return translations;
-      return Object.fromEntries(Object.entries(translations).filter(([, text2]) => !hasDecoderRepetition(text2)));
-    } catch (error) {
-      if (isFsError(error, "ENOENT")) return {};
-      throw error;
-    }
-  }
-  async translate(id, page, input, translate, targetLanguage = DEFAULT_TARGET_LANGUAGE, force = false) {
-    const doc = await this.get(id);
-    const file = this.pageFile(id, page, targetLanguage);
-    const checkChineseQuality = doc.kind === "pdf" && typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
-    if (!Array.isArray(input) || !input.length || input.length > 4e3) fail("No translatable paragraphs or page too long.");
-    const seen = /* @__PURE__ */ new Set();
-    const blocks3 = input.map((b) => {
-      if (!isRecord(b) || typeof b.id !== "string" || !/^[\w.:-]{1,120}$/.test(b.id) || ["__proto__", "prototype", "constructor"].includes(b.id) || seen.has(b.id) || typeof b.text !== "string" || !b.text.trim() || b.text.length > 24e3) fail("Invalid paragraph format.");
-      seen.add(b.id);
-      return { id: b.id, text: b.text };
-    });
-    const previous = this.jobs.get(file);
-    const job = (async () => {
-      if (previous) await previous.catch(() => void 0);
-      const result = await this.translations(id, page, targetLanguage);
-      const pending = force ? blocks3 : blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
-      await mkdir2(path3.dirname(file), { recursive: true });
-      for (let i = 0; i < pending.length; i += 8) {
-        const batch = pending.slice(i, i + 8);
-        const translated = await translate(batch, doc.kind);
-        for (const { id: key2, text: text2 } of batch) {
-          if (!Object.hasOwn(translated, key2) || !translated[key2]?.trim()) fail("The model omitted a paragraph. Retry to resume the translation.", 502);
-          const problem = checkChineseQuality && translationQualityError(text2, translated[key2]);
-          if (problem) fail(problem, 502);
-          result[key2] = translated[key2];
-        }
-        await writeAtomic(file, JSON.stringify(result));
-      }
-      return result;
-    })();
-    this.jobs.set(file, job);
-    try {
-      return await job;
-    } finally {
-      if (this.jobs.get(file) === job) this.jobs.delete(file);
-    }
-  }
-};
-
-// src/server/academic-intake.ts
-var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
-function pdfFilename(url) {
-  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
-  try {
-    name2 = decodeURIComponent(name2);
-  } catch {
-  }
-  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
-}
-function decodeHtml(bytes, type, charset) {
-  if (type === "application/pdf" || bytes.length > 5 * 1024 * 1024) fail("This link did not return a readable HTML article or PDF.", 415);
-  const sniff = bytes.subarray(0, 4096).toString("latin1");
-  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
-  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
-  try {
-    return new TextDecoder(encoding).decode(bytes);
-  } catch {
-    return new TextDecoder().decode(bytes);
-  }
-}
-var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
-var mergeMeta = (p, f, doi) => ({
-  paperTitle: p.paperTitle ?? f.paperTitle,
-  authors: p.authors ?? f.authors,
-  venue: p.venue ?? f.venue,
-  year: p.year ?? f.year,
-  doi: p.doi ?? f.doi ?? doi,
-  publisher: p.publisher ?? f.publisher,
-  abstract: p.abstract ?? f.abstract
-});
-function parseCrossref(bytes) {
-  try {
-    const body = JSON.parse(bytes.toString("utf8"));
-    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
-    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
-    const authors = Array.isArray(m.author) ? m.author.map(
-      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
-    ).filter(Boolean).join("; ") : void 0;
-    let year;
-    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
-      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
-      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
-        year = String(part);
-        break;
-      }
-    }
-    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
-    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
-    return {
-      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
-      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
-    };
-  } catch {
-    return { meta: {} };
-  }
-}
-function safeHtmlMeta(parseArticle, res) {
-  let html;
-  try {
-    html = decodeHtml(res.bytes, res.type, res.charset);
-  } catch {
-    return { meta: {} };
-  }
-  try {
-    const parsed = parseArticle(html, res.url.href);
-    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
-  } catch {
-    try {
-      const stub = parseArticle(html + "<p>.</p>", res.url.href);
-      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
-    } catch {
-      return { meta: {} };
-    }
-  }
-}
-async function resolveAcademicIntake(library, target, readResource, parseArticle) {
-  if (target.kind === "arxiv") {
-    const [absRes, pdfRes] = await Promise.allSettled([readResource(target.absUrl, "document"), readResource(target.pdfUrl, "document")]);
-    const absInfo = absRes.status === "fulfilled" && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
-    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
-      const meta = absInfo?.meta ?? {};
-      return { doc: await library.importPdf(meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf", pdfRes.value.bytes, target.absUrl, meta) };
-    }
-    if (absInfo?.parsed) return library.importWebDocument(absInfo.parsed);
-    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
-  }
-  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
-  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
-  const tryPdf = async (candidate, sourceUrl2, meta) => {
-    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
-    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
-  };
-  if (landRes.status === "fulfilled") {
-    const land = landRes.value;
-    if (isPdfBytes(land.bytes)) {
-      const meta = mergeMeta({}, cr.meta, target.doi);
-      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
-    }
-    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
-    const primary = redirected?.kind === "arxiv" ? redirected.pdfUrl : landInfo.pdfUrl, sourceUrl2 = redirected?.kind === "arxiv" ? redirected.absUrl : land.url.href;
-    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
-    if (pdfDoc) return pdfDoc;
-    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
-    fail("This link did not return a readable HTML article or PDF.", 415);
-  }
-  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
-}
-
 // src/server/research-store.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
 function hasResearchSchema(db) {
   const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist','citation_stances')").get();
   return Number(row?.n ?? 0) === 9;
@@ -2298,7 +1142,7 @@ function listTopics(db) {
 }
 function saveTopic(db, input) {
   const name2 = single(input.name, "topic name", 120, true);
-  const id = input.id === void 0 ? randomUUID3() : single(input.id, "topic ID", 128, true);
+  const id = input.id === void 0 ? randomUUID() : single(input.id, "topic ID", 128, true);
   const tag = single(input.tag, "topic tag", 40) || name2.slice(0, 40).trim();
   const zoteroCollection = single(input.zoteroCollection, "Zotero collection", 120);
   const description = stringValue(input.description, "topic description", 1e3, false, true).trim();
@@ -2772,36 +1616,1076 @@ function readGraphPaperInput(raw) {
   const title = single(raw.title, "paper title", 250, true), authors = arrOf(raw.authors).map((a) => str(a) ?? "").filter(Boolean).slice(0, 100);
   return makePaper({ id: str(raw.id), title, authors, year: num(raw.year), venue: str(raw.venue), doi: cleanDoi2(raw.doi), arxivId: extractArxivId(str(raw.arxivId)), pmid: cleanPmid(raw.pmid), openAlexId: shortOaId(raw.openAlexId), s2Id: str(raw.s2Id), abstract: str(raw.abstract), citationCount: num(raw.citationCount), oaPdfUrl: str(raw.oaPdfUrl), url: str(raw.url), source: raw.source === "s2" || raw.source === "europepmc" || raw.source === "arxiv" ? raw.source : "openalex" });
 }
-async function saveGraphPaper(input, deps) {
-  const { paper, mode } = input, title = single(paper.title, "paper title", 250, true), topicTag = input.topicTag ? single(input.topicTag, "topic tag", 40) : "";
-  const meta = { paperTitle: title, authors: paper.authors.filter(Boolean).join("; ") || void 0, venue: paper.venue, year: paper.year ? String(paper.year) : void 0, doi: cleanDoi2(paper.doi), abstract: paper.abstract };
-  const applyTag = (doc2) => {
-    const prev = deps.store.listDocMeta(doc2.id).get(doc2.id);
-    return !topicTag ? prev ? { ...doc2, meta: prev } : doc2 : { ...doc2, meta: deps.store.updateDocTriage({ docId: doc2.id, tags: [.../* @__PURE__ */ new Set([...prev?.tags ?? [], topicTag])].slice(0, 50) }) };
-  };
-  if (mode === "abstract") {
-    const doc2 = await deps.library.createAbstract({ title, url: paper.url, ...meta });
-    await deps.indexDoc(doc2, doc2.kind === "abstract").catch(() => 0);
-    return { doc: applyTag(doc2), mode };
-  }
-  const pdfUrl = paper.oaPdfUrl ?? (paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}.pdf` : void 0);
-  if (!pdfUrl) throw new ServiceError(400, "No open-access PDF URL is available for this paper.");
-  const res = await deps.readResource(pdfUrl, "document");
-  if (!isPdfBytes(res.bytes)) throw new ServiceError(415, "The open-access link did not return a valid PDF.");
-  const docs = await deps.library.list(), absId = abstractDocId({ title, url: paper.url, ...meta }), matchedId = attachLibraryMatch(paper, docs).docId;
-  const existing = docs.find((d) => d.id === absId) ?? (matchedId ? docs.find((d) => d.id === matchedId) : void 0);
-  if (existing?.kind === "abstract") {
-    const { doc: doc2, pages } = await deps.library.attachPdf(existing.id, res.bytes);
-    if (pages.length && deps.library.hasSync(doc2.id)) deps.store.withDb(true, (db) => replaceDocPages(db, doc2.id, pages));
-    return { doc: applyTag(doc2), upgraded: true, mode };
-  }
-  const doc = await deps.library.importPdf(title, res.bytes, paper.url ?? pdfUrl, meta);
-  await deps.indexDoc(doc, true).catch(() => 0);
-  return { doc: applyTag(doc), upgraded: false, mode };
-}
 
 // src/server/library-chat.ts
 import { createHash as createHash4 } from "node:crypto";
+
+// src/server/library.ts
+import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdir as mkdir2, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { existsSync as existsSync2, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path3 from "node:path";
+
+// src/shared/translation-quality.ts
+var englishWords = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
+var sentenceWords = /\b(?:a|an|the|is|are|was|were|will|can|must|has|have|had|we|this|these|that|they|from|with|without|into|on|in|of|at|than|which|when|each|every|across|between)\b/i;
+function isUntranslatedEnglish(source2, result) {
+  const content = result.replace(new RegExp("^\\s*\\p{Script=Han}{1,4}\\s*[:\uFF1A]\\s*", "u"), "");
+  if (new RegExp("\\p{Script=Han}", "u").test(content) || /^\s*\[\d+(?:[,\s–-]+\d+)*\]/.test(source2) || /\bet al\.\s*(?:\(?\d{4}\)?)?[.,]?\s*$/i.test(source2) || /\b(?:19|20)\d{2}\b/.test(source2) && /\b(?:doi|isbn|arxiv|journal|proceedings|vol\.|pp\.)\b/i.test(source2)) return false;
+  const original = source2.normalize("NFKC").match(englishWords) ?? [];
+  const lowercase = original.filter((word) => /^[a-z]{2}/.test(word)).length;
+  const sentence = original.length >= 3 && lowercase >= 2 && /[.!?]["'’”)]*\s*$/.test(source2);
+  const passage = original.length >= 5 && lowercase >= 3 && sentenceWords.test(source2);
+  if (!sentence && !passage) return false;
+  const translated = content.normalize("NFKC").match(englishWords) ?? [];
+  const phrase = (words) => " " + words.join(" ").toLowerCase() + " ";
+  return phrase(translated).includes(phrase(original));
+}
+function hasDecoderRepetition(result, source2 = "") {
+  const compact = result.replace(/\s+/gu, "");
+  const original = source2.replace(/\s+/gu, "");
+  const stutter = /\u6df1[\u5c42\u5c64\u5ea6]\u7559{3,}[\u5b66\u5b78][\u4e60\u7fd2]/u.exec(compact);
+  if (stutter && !original.includes(stutter[0]) && (source2 ? /\bresidual[\s-]+learning\b/i.test(source2) : stutter.index === 0 && compact.length <= 80)) return true;
+  for (const match of compact.matchAll(/[.,:;!?，。；：、！？]{7,}|([\p{Script=Han}][\p{Script=Han},.:;!?，。；：、！？]{0,39}?)\1{3,}/gu)) {
+    const run = match[0], unit = match[1];
+    if (/^\.+$/.test(run) && (run.length < 32 || /\d/.test(compact[match.index + run.length] ?? ""))) continue;
+    if ((!unit || run.length >= (unit.length === 1 ? 6 : 10)) && !original.includes(run)) return true;
+  }
+  return false;
+}
+function translationQualityError(source2, result) {
+  if (hasDecoderRepetition(result, source2)) return "The model returned repeated text. Retry the page translation.";
+  if (isUntranslatedEnglish(source2, result)) return "The model returned the original English passage. Retry the page translation.";
+}
+
+// src/server/abstract-library.ts
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import path2 from "node:path";
+
+// src/server/library-meta.ts
+var YEAR_RE2 = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/;
+var STRICT_YEAR_RE = /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/;
+var DOI_RE2 = /^10\.\d{4,9}\/[^\s<>"]+$/i;
+var META_KEYS = ["paperTitle", "authors", "venue", "year", "doi", "publisher", "abstract"];
+function bad(msg) {
+  throw new ServiceError(400, msg);
+}
+function optionalText(value, max, multiline = false) {
+  if (typeof value !== "string") return void 0;
+  const cleaned = multiline ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\r\n?/g, "\n").trim() : value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned ? cleaned.slice(0, max) : void 0;
+}
+function optionalDoi(value) {
+  const raw = optionalText(value, 256)?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+  if (!raw) return void 0;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+  }
+  return DOI_RE2.test(decoded) && !/\\/.test(decoded) && !/(?:^|\/)\.\.(?:\/|$)/.test(decoded) ? decoded : void 0;
+}
+function sanitizeDocMeta(input) {
+  const out = {};
+  const entries = [
+    ["paperTitle", optionalText(input.paperTitle, 500)],
+    ["authors", optionalText(input.authors, 2e3)],
+    ["venue", optionalText(input.venue, 500)],
+    ["year", optionalText(input.year, 32)?.match(YEAR_RE2)?.[1]],
+    ["doi", optionalDoi(input.doi)],
+    ["publisher", optionalText(input.publisher, 500)],
+    ["abstract", optionalText(input.abstract, 8e3, true)]
+  ];
+  for (const [k, v] of entries) if (v) out[k] = v;
+  return out;
+}
+function missingDocMeta(existing, incoming) {
+  const patch = {};
+  if (incoming) {
+    for (const k of META_KEYS) if (!existing[k] && incoming[k]) patch[k] = incoming[k];
+  }
+  return patch;
+}
+function applyMetaPatch(saved, input) {
+  const assign = (key2, val) => {
+    if (val) saved[key2] = val;
+    else delete saved[key2];
+  };
+  for (const key2 of ["paperTitle", "venue"]) if (input[key2] !== void 0) {
+    if (typeof input[key2] !== "string") bad("Invalid " + key2 + " value.");
+    assign(key2, optionalText(input[key2], 500));
+  }
+  if (input.authors !== void 0) {
+    if (Array.isArray(input.authors)) {
+      if (input.authors.length > 200 || !input.authors.every((a) => typeof a === "string")) bad("Invalid authors format.");
+      assign("authors", input.authors.map((a) => optionalText(a, 250)).filter(Boolean).join("; ").slice(0, 2e3) || void 0);
+    } else if (typeof input.authors === "string") assign("authors", optionalText(input.authors, 2e3));
+    else bad("Invalid authors format.");
+  }
+  if (input.year !== void 0) {
+    if (typeof input.year !== "string") bad("Enter a valid 4-digit year.");
+    const trimmed = input.year.trim();
+    if (trimmed && !STRICT_YEAR_RE.test(trimmed)) bad("Enter a valid 4-digit year.");
+    assign("year", trimmed || void 0);
+  }
+  if (input.doi !== void 0) {
+    if (typeof input.doi !== "string") bad("Enter a valid DOI.");
+    const trimmed = input.doi.trim(), doi = trimmed ? optionalDoi(trimmed) : void 0;
+    if (trimmed && !doi) bad("Enter a valid DOI.");
+    assign("doi", doi);
+  }
+}
+
+// src/server/pdf-text.ts
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
+function normalizePdfText(items) {
+  return items.map((item) => typeof item === "object" && item !== null && "str" in item && typeof item.str === "string" ? item.str + ("hasEOL" in item && item.hasEOL ? "\n" : " ") : "").join("").replace(new RegExp("(\\p{L})-\\n(?=\\p{Ll})", "gu"), "$1").replace(/[^\S\n]+/gu, " ").trim();
+}
+async function extractPdfPages(bytes) {
+  const data = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice();
+  const task = pdfjs.getDocument({ data, useSystemFonts: true, disableFontFace: true, verbosity: 0 });
+  let doc;
+  try {
+    doc = await task.promise;
+    const pages = [];
+    for (let page = 1; page <= doc.numPages; page++) {
+      const pdfPage = await doc.getPage(page);
+      try {
+        pages.push({ page, text: normalizePdfText((await pdfPage.getTextContent()).items) });
+      } finally {
+        pdfPage.cleanup();
+      }
+    }
+    return pages;
+  } finally {
+    try {
+      await doc?.cleanup();
+    } catch {
+    }
+    try {
+      await task.destroy();
+    } catch {
+    }
+  }
+}
+async function extractDocumentPages(doc, pdfBytes) {
+  if (doc.kind === "pdf") return pdfBytes ? extractPdfPages(pdfBytes) : [];
+  if (doc.kind === "abstract") {
+    const text2 = [doc.paperTitle || doc.title, doc.authors, doc.venue, doc.year, doc.doi, doc.abstract].filter((v) => typeof v === "string" && Boolean(v.trim())).join("\n\n").trim();
+    return text2 ? [{ page: 1, text: text2 }] : [];
+  }
+  if (doc.paragraphs?.length) {
+    const text2 = doc.paragraphs.map((p) => p.trim()).filter(Boolean).join("\n\n");
+    return text2 ? [{ page: doc.sectionPage ?? 1, text: text2 }] : [];
+  }
+  if (doc.book?.sections.length) {
+    const text2 = [doc.title, ...doc.book.sections.map((s) => s.title)].filter(Boolean).join("\n");
+    return text2 ? [{ page: 1, text: text2 }] : [];
+  }
+  return [];
+}
+
+// src/server/abstract-library.ts
+function bad2(message, status = 400) {
+  throw new ServiceError(status, message);
+}
+async function writeAtomic(file, content) {
+  const tmp = `${file}.${process.pid}.${randomUUID2()}.tmp`;
+  await writeFile(tmp, content, { flag: "wx" });
+  try {
+    await rename(tmp, file);
+  } finally {
+    await rm(tmp, { force: true });
+  }
+}
+function abstractDocId(input) {
+  const meta = sanitizeDocMeta({ ...input });
+  const doi = meta.doi?.toLowerCase();
+  const arxiv2 = extractArxivId(input.url, meta.doi)?.toLowerCase();
+  const normTitle2 = (meta.paperTitle || input.title).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const key2 = doi ? "doi:" + doi : arxiv2 ? "arxiv:" + arxiv2 : "title:" + normTitle2 + "|" + (meta.year ?? "");
+  return "abs-" + createHash("sha256").update(key2).digest("hex");
+}
+async function createAbstractRecord(dir, input, withLock) {
+  if (!isObject(input)) bad2("Invalid abstract record payload.");
+  const rawTitle = typeof input.title === "string" && input.title.trim() ? input.title.trim() : typeof input.paperTitle === "string" ? input.paperTitle.trim() : "";
+  const title = rawTitle.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250);
+  if (!title) bad2("A document title is required.");
+  const cleanMeta = sanitizeDocMeta(input);
+  const safeUrl3 = typeof input.url === "string" ? articleUrl(input.url)?.href : void 0;
+  const id = abstractDocId({ title, ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta });
+  const file = path2.join(dir, id + ".json");
+  return withLock(id, async () => {
+    await mkdir(dir, { recursive: true });
+    if (existsSync(file)) {
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      let changed = false;
+      if (!saved.url && safeUrl3) {
+        saved.url = safeUrl3;
+        changed = true;
+      }
+      for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
+        saved[k] = v;
+        changed = true;
+      }
+      if (changed) await writeAtomic(file, JSON.stringify(saved));
+      return { id };
+    }
+    const doc = {
+      id,
+      kind: "abstract",
+      title,
+      ...safeUrl3 ? { url: safeUrl3 } : {},
+      ...cleanMeta,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      defaultPage: 1
+    };
+    await writeAtomic(file, JSON.stringify(doc));
+    return { id };
+  });
+}
+async function attachPdfToRecord(dir, doc, bytes, limit, withLock) {
+  if (doc.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
+  if (!bytes.length || bytes.length > limit || !bytes.subarray(0, 1024).includes("%PDF-")) bad2("Choose a valid PDF of up to 80 MB.");
+  let pages;
+  try {
+    pages = await extractPdfPages(bytes);
+  } catch {
+    bad2("The uploaded PDF is damaged or unreadable.");
+  }
+  if (!pages.length) bad2("The uploaded PDF has no readable pages.");
+  const jsonFile = path2.join(dir, doc.id + ".json"), pdfFile = path2.join(dir, doc.id + ".pdf");
+  await withLock(doc.id, async () => {
+    if (!existsSync(jsonFile)) bad2("This document has not been imported.", 404);
+    const saved = JSON.parse(await readFile(jsonFile, "utf8"));
+    if (saved.kind !== "abstract") bad2("Only abstract-only records can attach a PDF.");
+    await writeAtomic(pdfFile, bytes);
+    if (!existsSync(jsonFile)) {
+      await rm(pdfFile, { force: true });
+      bad2("This document has not been imported.", 404);
+    }
+    saved.kind = "pdf";
+    await writeAtomic(jsonFile, JSON.stringify(saved));
+  });
+  return { pages };
+}
+
+// src/server/article-layout.ts
+function readArticleLayout(raw, paragraphs) {
+  if (!isRecord(raw)) fail("Invalid article layout.");
+  const result = {};
+  for (const [id, value] of Object.entries(raw)) {
+    if (!/^p-[1-9]\d{0,3}$/.test(id) || !isRecord(value)) fail("Invalid article block.");
+    const text2 = paragraphs[Number(id.slice(2)) - 1];
+    if (!text2 || typeof value.kind !== "string" || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline)$/.test(value.kind)) fail("Invalid article block.");
+    const block = { kind: value.kind };
+    if (value.ids !== void 0) {
+      if (!Array.isArray(value.ids) || value.ids.length > 80 || !value.ids.every((id2) => typeof id2 === "string" && id2.length <= 256)) fail("Invalid article anchors.");
+      block.ids = value.ids;
+    }
+    if (value.spans !== void 0) {
+      if (!Array.isArray(value.spans) || value.spans.length > 4e3) fail("Invalid article formatting.");
+      let previous = 0;
+      block.spans = value.spans.map((span) => {
+        if (!isRecord(span) || typeof span.kind !== "string" || !["link", "code", "math", "em", "strong"].includes(span.kind) || typeof span.start !== "number" || !Number.isSafeInteger(span.start) || span.start < previous || typeof span.end !== "number" || !Number.isSafeInteger(span.end) || span.end <= span.start || span.end > text2.length) fail("Invalid article text range.");
+        previous = span.end;
+        const result2 = { start: span.start, end: span.end, kind: span.kind };
+        if (span.kind === "math") {
+          if (typeof span.value !== "string" || span.value.length > 4096) fail("Invalid article formula.");
+          result2.value = span.value;
+        }
+        if (span.kind === "link") {
+          const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
+          if (!link2) fail("Invalid article link.");
+          result2.value = link2.href;
+        }
+        return result2;
+      });
+    }
+    if (block.kind === "image") {
+      const image = value.image;
+      if (!isRecord(image) || typeof image.url !== "string" || !articleUrl(image.url) || typeof image.alt !== "string" || image.alt.length > 1024) fail("Invalid article illustration.");
+      block.image = { url: image.url, alt: image.alt };
+    }
+    if (block.kind === "table") {
+      const cells = value.cells;
+      if (!Array.isArray(cells) || !cells.length || !cells.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === "string")) || cells.map((row) => row.join("	")).join("\n").trim() !== text2.trim()) fail("Invalid article table.");
+      block.cells = cells;
+    }
+    result[id] = block;
+  }
+  return result;
+}
+
+// src/server/openstax.ts
+import { parse, parseFragment } from "parse5";
+
+// src/server/article-dom.ts
+var htmlTree = {
+  tag: (node) => node.nodeName,
+  attr: (node, key2) => "attrs" in node ? node.attrs.find((attribute) => attribute.name === key2)?.value ?? null : null,
+  children: (node) => "childNodes" in node ? node.childNodes : [],
+  text: (node) => "value" in node ? node.value : "childNodes" in node ? node.childNodes.map((child) => htmlTree.text(child)).join("") : ""
+};
+
+// src/server/openstax.ts
+async function publishedEntry(book, read) {
+  const { bytes } = await read("https://openstax.org/apps/cms/api/books/" + encodeURIComponent(book) + "/", "json");
+  const data = JSON.parse(bytes.toString("utf8"));
+  const target = isRecord(data) && openStaxLocation(data.webview_rex_link);
+  if (!target || target.book !== book || !target.section) fail("OpenStax has no online reading entry for this book.", 502);
+  return target.section;
+}
+function find(node, test) {
+  if (test(node)) return node;
+  for (const child of htmlTree.children(node)) {
+    const found = find(child, test);
+    if (found) return found;
+  }
+}
+function titleText(value) {
+  if (typeof value !== "string") return "";
+  return htmlTree.text(parseFragment(value)).replace(/\s+/g, " ").trim();
+}
+function contentsOf(tree, book) {
+  if (!isRecord(tree) || !Array.isArray(tree.contents)) fail("OpenStax did not publish a table of contents for this book.", 502);
+  const sections = [], seen = /* @__PURE__ */ new Set();
+  function visit(item, chapter) {
+    if (!isRecord(item)) return;
+    const slug = item.slug, title = titleText(item.title);
+    if (Array.isArray(item.contents)) {
+      if (title && (!chapter || item.toc_type === "chapter")) {
+        const id = bookSlug(slug) ? slug : typeof item.id === "string" ? item.id.split("@")[0] : "";
+        if (id) chapter = { chapterId: id, chapterTitle: title };
+      }
+      for (const child of item.contents) visit(child, chapter);
+    } else if (bookSlug(slug) && title && !seen.has(slug)) {
+      seen.add(slug);
+      sections.push({ slug, title, ...chapter ?? { chapterId: slug, chapterTitle: title }, url: openStaxUrl(book, slug) });
+    }
+  }
+  for (const node of tree.contents) visit(node);
+  if (!sections.length) fail("The OpenStax table of contents is empty.", 502);
+  return sections;
+}
+function addAttribution(article, book, title, entry) {
+  let text2 = "OpenStax \xB7 " + title + ". Access for free at ";
+  const spans = [{ kind: "link", start: text2.length, end: text2.length + entry.length, value: entry }];
+  text2 += entry;
+  if (isRecord(book.license) && typeof book.license.url === "string" && typeof book.license.name === "string") {
+    const license = articleUrl(book.license.url);
+    if (license) {
+      text2 += " \xB7 ";
+      spans.push({ kind: "link", start: text2.length, end: text2.length + book.license.name.length, value: license.href });
+      text2 += book.license.name;
+    }
+  }
+  article.paragraphs.push(text2);
+  (article.articleLayout ??= {})["p-" + article.paragraphs.length] = { kind: "byline", spans };
+}
+function parseOpenStaxPage(html, slug, section, withCatalog, defaultSection) {
+  const dom = parse(html, { scriptingEnabled: false });
+  const stateScript = find(dom, (node) => node.nodeName === "script" && /^\s*window\.__PRELOADED_STATE__\s*=/.test(htmlTree.text(node)));
+  if (!stateScript) fail("This page did not contain the OpenStax reader data.", 502);
+  const json2 = htmlTree.text(stateScript).replace(/^\s*window\.__PRELOADED_STATE__\s*=\s*/, "").trim().replace(/;$/, "");
+  const state = JSON.parse(json2);
+  const content = isRecord(state) && state.content;
+  if (!isRecord(content) || !isRecord(content.book) || content.book.slug !== slug || !isRecord(content.params) || !isRecord(content.params.page) || content.params.page.slug !== section || !find(dom, (node) => htmlTree.attr(node, "data-book-content") === "true")) fail("OpenStax did not return the requested book section.", 502);
+  const book = content.book, url = openStaxUrl(slug, section), title = titleText(book.title);
+  if (!title) fail("The OpenStax book title is missing.", 502);
+  const { article } = extractArticle(dom, htmlTree, url, title);
+  const attribution = find(dom, (node) => htmlTree.attr(node, "data-analytics-region") === "attribution" || htmlTree.attr(node, "data-testid") === "attribution-details");
+  const source2 = attribution && find(attribution, (node) => {
+    const target = node.nodeName === "a" && openStaxLocation(htmlTree.attr(node, "href"));
+    return Boolean(target && target.book === slug && target.section);
+  });
+  const entry = source2 ? htmlTree.attr(source2, "href") : openStaxUrl(slug, defaultSection ?? section);
+  addAttribution(article, book, title, entry);
+  if (!withCatalog) return { article };
+  const sections = contentsOf(book.tree, slug);
+  const firstSlug = defaultSection ?? openStaxLocation(entry)?.section;
+  const first = sections.findIndex((item) => item.slug === firstSlug);
+  const names = Array.isArray(book.authors) ? book.authors.filter(isRecord).map((author) => author.value).filter(isRecord) : [];
+  const primary = names.filter((author) => author.senior_author === true);
+  const authors = (primary.length ? primary : names).map((author) => author.name).filter((name2) => typeof name2 === "string").join(", ");
+  return { article, catalog: { book: { slug, sections }, title, authors: authors || void 0, defaultPage: first < 0 ? 1 : first + 1 } };
+}
+
+// src/server/public-resource.ts
+import { lookup } from "node:dns/promises";
+import { get as getHttp, request as requestHttp } from "node:http";
+import { get as getHttps, request as requestHttps } from "node:https";
+import { BlockList, isIP } from "node:net";
+import { connect as tlsConnect } from "node:tls";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+var special = new BlockList();
+for (const [address2, prefix2] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4]
+]) special.addSubnet(address2, prefix2, "ipv4");
+for (const [address2, prefix2] of [["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20]])
+  special.addSubnet(address2, prefix2, "ipv6");
+function publicAddress(address2) {
+  const family = isIP(address2);
+  if (family === 4) return !special.check(address2, "ipv4");
+  return family === 6 && /^[23]/i.test(address2) && !special.check(address2, "ipv6");
+}
+function checkedUrl(raw) {
+  const url = typeof raw === "string" ? articleUrl(raw) : void 0;
+  if (!url) fail("Enter a public HTTP or HTTPS webpage address.");
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (!host.includes(".") && !isIP(host) || /(?:^|\.)(localhost|local|internal|home\.arpa)$/.test(host) || isIP(host) && !publicAddress(host)) fail("Use a public webpage address. For a private page, open it in your browser and use the reader extension.");
+  url.hash = "";
+  return url;
+}
+var publicLookup = (hostname, options, callback) => {
+  void lookup(hostname, { all: true, verbatim: true }).then((addresses) => {
+    if (!addresses.length || addresses.some(({ address: address2 }) => !publicAddress(address2))) throw new Error("This address does not resolve to a public website.");
+    const preferred = addresses.find((item) => item.family === (options.family || 4)) || addresses[0];
+    if (options.all) callback(null, [preferred, ...addresses.filter((item) => item !== preferred)]);
+    else callback(null, preferred.address, preferred.family);
+  }).catch((error) => callback(error, "", 0));
+};
+var REACH_ERROR = "The website could not be reached. Open the original webpage and try the browser extension.";
+var pickEnv = (env, upper, lower) => env[upper]?.trim() || env[lower]?.trim() || "";
+var decodeCredential = (value) => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+function matchesNoProxy(url, noProxy) {
+  if (!noProxy) return false;
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  const port = url.port || (url.protocol === "https:" ? "443" : "80");
+  for (const raw of noProxy.split(",")) {
+    const token = raw.trim().toLowerCase();
+    if (!token) continue;
+    if (token === "*") return true;
+    const bracket = token.startsWith("[") ? /^\[([^\]]+)\](?::(\d+))?$/.exec(token) : null;
+    if (token.startsWith("[") && !bracket) continue;
+    const colon = !bracket && token.indexOf(":") === token.lastIndexOf(":") ? token.indexOf(":") : -1;
+    const entryHost = bracket ? bracket[1] : colon !== -1 ? token.slice(0, colon) : token;
+    const entryPort = bracket ? bracket[2] ?? "" : colon !== -1 ? token.slice(colon + 1) : "";
+    if (entryPort && entryPort !== port) continue;
+    if (entryHost === "*") return true;
+    const pattern = entryHost.replace(/^\.+/, "").replace(/\.$/, "");
+    if (pattern && (host === pattern || host.endsWith("." + pattern))) return true;
+  }
+  return false;
+}
+function resolveProxy(url, env = process.env) {
+  const raw = url.protocol === "https:" ? pickEnv(env, "HTTPS_PROXY", "https_proxy") : pickEnv(env, "HTTP_PROXY", "http_proxy");
+  if (!raw || matchesNoProxy(url, pickEnv(env, "NO_PROXY", "no_proxy"))) return void 0;
+  const parsed = URL.parse(/^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : "http://" + raw);
+  if (!parsed || parsed.protocol !== "http:" && parsed.protocol !== "https:") return void 0;
+  const port = parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
+  const auth = parsed.username || parsed.password ? "Basic " + Buffer.from(`${decodeCredential(parsed.username)}:${decodeCredential(parsed.password)}`).toString("base64") : void 0;
+  return { protocol: parsed.protocol, host: parsed.hostname.replace(/^\[|\]$/g, ""), port, ...auth ? { auth } : {} };
+}
+function requestViaTunnel(url, proxy, headers, signal, ca) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error(REACH_ERROR));
+      return;
+    }
+    const targetPort = url.port || "443", authority = `${url.hostname}:${targetPort}`, servername = url.hostname.replace(/^\[|\]$/g, "");
+    let settled = false, rawSocket, tlsSocket, innerReq;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const destroySockets = () => {
+      tlsSocket?.destroy();
+      rawSocket?.destroy();
+    };
+    const failReach = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      destroySockets();
+      reject(new Error(REACH_ERROR));
+    };
+    const onAbort = () => {
+      connectReq.destroy();
+      innerReq?.destroy();
+      destroySockets();
+      failReach();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    const connectReq = (proxy.protocol === "https:" ? requestHttps : requestHttp)({
+      host: proxy.host,
+      port: proxy.port,
+      method: "CONNECT",
+      path: authority,
+      agent: false,
+      signal,
+      ...proxy.protocol === "https:" && ca ? { ca } : {},
+      headers: { host: authority, ...proxy.auth ? { "proxy-authorization": proxy.auth } : {} }
+    });
+    connectReq.once("error", failReach);
+    connectReq.once("connect", (connectRes, socket, head) => {
+      rawSocket = socket;
+      socket.on("error", () => {
+        socket.destroy();
+      });
+      if (settled || signal.aborted || !connectRes.statusCode || connectRes.statusCode < 200 || connectRes.statusCode >= 300) {
+        failReach();
+        return;
+      }
+      if (head.length) socket.unshift(head);
+      innerReq = getHttps({
+        host: servername,
+        port: Number(targetPort),
+        path: url.pathname + url.search,
+        signal,
+        headers: { ...headers, host: url.host, connection: "close" },
+        createConnection: () => {
+          tlsSocket = tlsConnect({ socket, host: servername, ...isIP(servername) ? {} : { servername }, ...ca ? { ca } : {} });
+          tlsSocket.once("close", () => {
+            socket.destroy();
+            cleanup();
+          });
+          return tlsSocket;
+        }
+      }, (res) => {
+        res.once("close", () => {
+          destroySockets();
+          cleanup();
+        });
+        if (settled) {
+          res.destroy();
+          return;
+        }
+        settled = true;
+        resolve(res);
+      });
+      innerReq.once("error", failReach);
+    });
+    connectReq.end();
+  });
+}
+function openResponse(url, headers, signal, options) {
+  const proxy = resolveProxy(url);
+  if (proxy && url.protocol === "https:") return requestViaTunnel(url, proxy, headers, signal, options?.ca);
+  return new Promise((resolve, reject) => {
+    const request = proxy ? (proxy.protocol === "https:" ? getHttps : getHttp)({
+      host: proxy.host,
+      port: proxy.port,
+      path: url.href,
+      agent: false,
+      signal,
+      ...proxy.protocol === "https:" && options?.ca ? { ca: options.ca } : {},
+      headers: { ...headers, host: url.host, ...proxy.auth ? { "proxy-authorization": proxy.auth } : {} }
+    }, resolve) : (url.protocol === "https:" ? getHttps : getHttp)(url, {
+      agent: false,
+      lookup: options?.lookup ?? publicLookup,
+      signal,
+      headers,
+      ...url.protocol === "https:" && options?.ca ? { ca: options.ca } : {}
+    }, resolve);
+    request.once("error", () => reject(new Error(REACH_ERROR)));
+  });
+}
+async function publicResource(raw, kind, options) {
+  let url = checkedUrl(raw);
+  const signal = options?.signal ?? AbortSignal.timeout(35e3);
+  const headers = {
+    Accept: kind === "image" ? "image/*" : kind === "json" ? "application/json" : "text/html,application/xhtml+xml,application/pdf",
+    "Accept-Encoding": "identity",
+    "User-Agent": "DSH-Paper-Reader/0.1 (article reader)"
+  };
+  for (let hops = 0; hops < 6; hops++) {
+    const response = await openResponse(url, headers, signal, options);
+    const status = response.statusCode || 500;
+    if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) {
+      response.destroy();
+      url = checkedUrl(articleUrl(response.headers.location, url.href)?.href);
+      continue;
+    }
+    if (status < 200 || status >= 300) {
+      response.destroy();
+      fail("The website returned HTTP " + status + ". Open the original webpage to sign in or use the reader extension.", 502);
+    }
+    const mime = response.headers["content-type"] || "";
+    const type = mime.split(";")[0].trim().toLowerCase();
+    const imageType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
+    if (kind === "json" && type !== "application/json") {
+      response.destroy();
+      fail("OpenStax did not return book metadata.", 415);
+    }
+    if (kind === "image" && !imageType.test(type) || kind === "document" && !["application/pdf", "application/octet-stream", "text/html", "application/xhtml+xml", ""].includes(type)) {
+      response.destroy();
+      fail(kind === "image" ? "The website did not return an illustration." : "This link does not return an HTML article or PDF.", 415);
+    }
+    const html = ["text/html", "application/xhtml+xml"].includes(type);
+    const limit = kind === "json" ? 1024 * 1024 : kind === "image" ? 12 * 1024 * 1024 : html ? 5 * 1024 * 1024 : PDF_LIMIT;
+    if (Number(response.headers["content-length"]) > limit) {
+      response.destroy();
+      fail("This resource is too large to open.", 413);
+    }
+    const encoding = response.headers["content-encoding"];
+    const decoder = encoding === "gzip" ? createGunzip() : encoding === "br" ? createBrotliDecompress() : encoding === "deflate" ? createInflate() : void 0;
+    if (encoding && encoding !== "identity" && !decoder) {
+      response.destroy();
+      fail("The website returned an unsupported transfer encoding.", 415);
+    }
+    const source2 = decoder ? response.pipe(decoder) : response;
+    if (decoder) response.on("error", (error) => decoder.destroy(error));
+    const chunks = [];
+    let length = 0;
+    try {
+      for await (const chunk of source2) {
+        length += chunk.length;
+        if (length > limit) fail("This resource is too large to open.", 413);
+        chunks.push(chunk);
+      }
+    } finally {
+      response.destroy();
+      decoder?.destroy();
+    }
+    return { url, type, charset: /charset\s*=\s*["']?([\w-]+)/i.exec(mime)?.[1], bytes: Buffer.concat(chunks, length) };
+  }
+  fail("This website redirects too many times.", 502);
+}
+
+// src/server/library.ts
+var PDF_LIMIT = 80 * 1024 * 1024;
+var sampleDigest = "55b3b324d779a67c59dac2519445e3b07c14e6ff5c656fadb47a3d7b5997469e";
+var sample = {
+  id: "pagedattention",
+  kind: "pdf",
+  title: "PagedAttention.pdf",
+  authors: "Kwon et al.",
+  venue: "SOSP 2023",
+  paperTitle: "Efficient Memory Management for Large Language Model Serving with PagedAttention",
+  url: "https://arxiv.org/abs/2309.06180",
+  doi: "10.1145/3600006.3613165",
+  defaultPage: 6
+};
+var hash = (bytes) => createHash2("sha256").update(bytes).digest("hex");
+function translationCacheSlug(targetLanguage = DEFAULT_TARGET_LANGUAGE) {
+  const parsed = parseTargetLanguage(targetLanguage);
+  if (!parsed.ok) fail(parsed.error, 400);
+  const preset = findTargetLanguagePreset(parsed.value);
+  if (preset) return preset.slug;
+  const normalized = parsed.value.normalize("NFC").toLowerCase();
+  const ascii = normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+  return "custom-" + (ascii ? ascii + "-" : "") + hash(normalized).slice(0, 16);
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function fail(message, status = 400) {
+  throw Object.assign(new Error(message), { status });
+}
+function isFsError(error, code) {
+  return isRecord(error) && error.code === code;
+}
+var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
+async function writeOnce(file, bytes) {
+  const temporary = file + "." + randomUUID3() + ".tmp";
+  await writeFile2(temporary, bytes, { flag: "wx" });
+  try {
+    try {
+      await link(temporary, file);
+    } catch (error) {
+      if (!isFsError(error, "EEXIST")) throw error;
+    }
+  } finally {
+    await rm2(temporary, { force: true });
+  }
+}
+var pictureType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
+var Library = class {
+  constructor(root, readBook = publicResource, onDelete) {
+    this.readBook = readBook;
+    this.onDelete = onDelete;
+    this.directory = path3.join(root, "documents");
+    this.translationDir = path3.join(root, "translations");
+    this.imageDir = path3.join(root, "article-images");
+  }
+  readBook;
+  onDelete;
+  directory;
+  translationDir;
+  imageDir;
+  imageJobs = /* @__PURE__ */ new Map();
+  jobs = /* @__PURE__ */ new Map();
+  bookJobs = /* @__PURE__ */ new Map();
+  metaJobs = /* @__PURE__ */ new Map();
+  async store(doc) {
+    await mkdir2(this.directory, { recursive: true });
+    await writeOnce(path3.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
+    return this.get(doc.id);
+  }
+  hasSync(id) {
+    return id === sample.id || validDocId(id) && existsSync2(path3.join(this.directory, id + ".json"));
+  }
+  async get(id) {
+    if (!validDocId(id)) fail("Invalid document ID.", 404);
+    if (id === sample.id) return sample;
+    try {
+      const value = JSON.parse(await readFile2(path3.join(this.directory, id + ".json"), "utf8"));
+      if (!isRecord(value) || value.id !== id || typeof value.title !== "string" || !["pdf", "web", "abstract"].includes(String(value.kind))) fail("The document index is damaged.", 500);
+      if (id.startsWith("book-")) {
+        if (value.kind !== "web" || !isRecord(value.book) || !bookSlug(value.book.slug) || !Array.isArray(value.book.sections) || !value.book.sections.length || !value.book.sections.every((section) => isRecord(section) && bookSlug(section.slug) && typeof section.title === "string" && typeof section.chapterId === "string" && typeof section.chapterTitle === "string" && typeof section.url === "string")) fail("The saved book contents are damaged.", 500);
+        return value;
+      }
+      if (value.kind === "web" && (!Array.isArray(value.paragraphs) || !value.paragraphs.every((p) => typeof p === "string"))) fail("The saved article is damaged.", 500);
+      const doc = value;
+      if (doc.kind === "pdf" && !doc.url) {
+        try {
+          doc.url = await readFile2(path3.join(this.directory, id + ".source-url"), "utf8");
+        } catch (error) {
+          if (!isFsError(error, "ENOENT")) throw error;
+        }
+      }
+      if (doc.kind === "web") {
+        try {
+          doc.articleLayout = JSON.parse(await readFile2(path3.join(this.directory, id + ".layout.json"), "utf8"));
+        } catch (error) {
+          if (!isFsError(error, "ENOENT")) throw error;
+        }
+      }
+      return doc;
+    } catch (error) {
+      if (isFsError(error, "ENOENT")) fail("This document has not been imported.", 404);
+      throw error;
+    }
+  }
+  async list() {
+    await mkdir2(this.directory, { recursive: true });
+    const names = (await readdir(this.directory)).filter((file) => /^(pdf|web|book|abs)-[a-f0-9]{64}\.json$/.test(file));
+    const docs = await Promise.all(names.map((name2) => this.get(name2.slice(0, -5))));
+    return [sample, ...docs.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")).map(({ paragraphs, articleLayout, abstract, ...meta }) => meta)];
+  }
+  async withMetaLock(id, run) {
+    const prev = this.metaJobs.get(id);
+    const job = (async () => {
+      if (prev) await prev.catch(() => void 0);
+      return run();
+    })();
+    this.metaJobs.set(id, job);
+    try {
+      return await job;
+    } finally {
+      if (this.metaJobs.get(id) === job) this.metaJobs.delete(id);
+    }
+  }
+  async mutateMeta(id, mutate) {
+    return this.withMetaLock(id, async () => {
+      await this.get(id);
+      const file = path3.join(this.directory, id + ".json");
+      const saved = JSON.parse(await readFile2(file, "utf8"));
+      if (mutate(saved) !== false) await writeAtomic(file, JSON.stringify(saved));
+      return this.get(id);
+    });
+  }
+  async rename(id, title) {
+    if (id === sample.id) fail("The bundled sample paper cannot be renamed.");
+    const nextTitle = typeof title === "string" ? title.trim().slice(0, 250) : "";
+    if (!nextTitle) fail("A document title is required.");
+    const doc = await this.get(id);
+    return this.mutateMeta(doc.id, (saved) => {
+      saved.title = nextTitle;
+    });
+  }
+  async updateMeta(input) {
+    if (!isRecord(input)) fail("Invalid metadata payload.");
+    if (input.id === sample.id) fail("The bundled sample paper metadata cannot be edited.");
+    const doc = await this.get(input.id);
+    return this.mutateMeta(doc.id, (saved) => {
+      applyMetaPatch(saved, input);
+    });
+  }
+  async delete(id) {
+    if (id === sample.id) fail("The bundled sample paper cannot be deleted.");
+    if (!validDocId(id)) fail("Invalid document ID.", 404);
+    return this.withMetaLock(id, async () => {
+      const file = path3.join(this.directory, id + ".json");
+      const existed = existsSync2(file);
+      await Promise.all([
+        rm2(file, { force: true }),
+        rm2(path3.join(this.directory, id + ".pdf"), { force: true }),
+        rm2(path3.join(this.directory, id + ".source-url"), { force: true }),
+        rm2(path3.join(this.directory, id + ".layout.json"), { force: true }),
+        rm2(path3.join(this.directory, "book-sections", id), { recursive: true, force: true }),
+        rm2(path3.join(this.translationDir, id), { recursive: true, force: true }),
+        rm2(path3.join(this.imageDir, id), { recursive: true, force: true })
+      ]);
+      this.onDelete?.(id);
+      return { id, deleted: existed };
+    });
+  }
+  bookJob(key2, start) {
+    const pending = this.bookJobs.get(key2);
+    if (pending) return pending;
+    const job = start().finally(() => this.bookJobs.delete(key2));
+    this.bookJobs.set(key2, job);
+    return job;
+  }
+  sectionFile(id, slug) {
+    return path3.join(this.directory, "book-sections", id, hash(slug) + ".json");
+  }
+  /** Export uses only already-imported material, even when the publisher is offline. */
+  cachedSection(doc, page) {
+    const section = doc.book?.sections[page - 1];
+    if (!section) return;
+    try {
+      return JSON.parse(readFileSync(this.sectionFile(doc.id, section.slug), "utf8"));
+    } catch (error) {
+      if (!isFsError(error, "ENOENT")) throw error;
+    }
+  }
+  pdfFile(doc) {
+    if (doc.kind !== "pdf" || !validDocId(doc.id)) fail("This document has no saved PDF.");
+    if (doc.id !== sample.id) return path3.join(this.directory, doc.id + ".pdf");
+    const bundled = fileURLToPath(new URL("../web/assets/pagedattention.pdf", import.meta.url));
+    return existsSync2(bundled) ? bundled : fileURLToPath(new URL("../../public/assets/pagedattention.pdf", import.meta.url));
+  }
+  async saveSection(file, article) {
+    await mkdir2(path3.dirname(file), { recursive: true });
+    await writeOnce(file, JSON.stringify({ paragraphs: article.paragraphs, articleLayout: article.articleLayout }));
+  }
+  async openBook(location) {
+    const url = openStaxUrl(location.book), id = "book-" + hash(url);
+    const doc = await this.bookJob(id, async () => {
+      try {
+        return await this.get(id);
+      } catch (error) {
+        if (!isRecord(error) || error.status !== 404) throw error;
+      }
+      const section = location.section ?? await publishedEntry(location.book, this.readBook);
+      const source2 = await this.readBook(openStaxUrl(location.book, section), "document");
+      const { article, catalog } = parseOpenStaxPage(source2.bytes.toString("utf8"), location.book, section, true, location.section ? void 0 : section);
+      if (!catalog || !catalog.book.sections.some((item) => item.slug === section)) fail("This section is missing from the OpenStax table of contents.", 502);
+      await this.saveSection(this.sectionFile(id, section), article);
+      return this.store({ ...catalog, kind: "web", id, url, venue: "OpenStax", createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+    });
+    if (!location.section) return { doc };
+    const page = (doc.book?.sections.findIndex((item) => item.slug === location.section) ?? -1) + 1;
+    if (!page) fail("This section is not in the saved OpenStax table of contents.", 404);
+    const loaded = await this.readSection(doc, page);
+    const fragment = location.fragment;
+    const anchor = fragment && Object.entries(loaded.articleLayout ?? {}).find(([, block]) => block.ids?.includes(fragment))?.[0];
+    return { doc: loaded, page, ...anchor ? { anchor } : {} };
+  }
+  async bookSection(id, page) {
+    return this.readSection(await this.get(id), page);
+  }
+  async readSection(doc, page, cachedOnly = false) {
+    const book = doc.book;
+    if (!book || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > book.sections.length) fail("Unknown book section.", 404);
+    const section = book.sections[page - 1], file = this.sectionFile(doc.id, section.slug);
+    const read = async () => {
+      const saved = JSON.parse(await readFile2(file, "utf8"));
+      if (!isRecord(saved) || !Array.isArray(saved.paragraphs) || !saved.paragraphs.every((p) => typeof p === "string") || !isRecord(saved.articleLayout)) fail("The saved book section is damaged.", 500);
+      return { ...doc, sectionPage: page, url: section.url, paragraphs: saved.paragraphs, articleLayout: saved.articleLayout };
+    };
+    if (cachedOnly) {
+      try {
+        return await read();
+      } catch (error) {
+        if (isFsError(error, "ENOENT")) fail("This section has not been opened yet.", 404);
+        throw error;
+      }
+    }
+    return this.bookJob(file, async () => {
+      try {
+        return await read();
+      } catch (error) {
+        if (!isFsError(error, "ENOENT")) throw error;
+      }
+      const source2 = await this.readBook(openStaxUrl(book.slug, section.slug), "document");
+      const { article } = parseOpenStaxPage(source2.bytes.toString("utf8"), book.slug, section.slug, false);
+      await this.saveSection(file, article);
+      return read();
+    });
+  }
+  async importWeb(input) {
+    return (await this.importWebDocument(input)).doc;
+  }
+  async importWebDocument(input) {
+    if (!isRecord(input) || typeof input.url !== "string" || !URL.canParse(input.url)) fail("A valid article URL is required.");
+    const book = openStaxLocation(input.url);
+    if (book) return this.openBook(book);
+    const url = new URL(input.url);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) fail("Only HTTP and HTTPS articles are supported.");
+    url.hash = "";
+    const raw = input.paragraphs;
+    if (!Array.isArray(raw) || raw.length > 4e3 || !raw.every((p) => typeof p === "string")) fail("Invalid article paragraphs.");
+    const structured = input.articleLayout !== void 0;
+    const paragraphs = structured ? raw : raw.map((p) => p.trim()).filter(Boolean);
+    if (structured && paragraphs.some((p) => !p.trim())) fail("Invalid article paragraphs.");
+    if (!paragraphs.length || paragraphs.join("").length > 1e6) fail("The article is empty or too long.");
+    const id = "web-" + hash(JSON.stringify([url.href, paragraphs]));
+    if (structured) {
+      const layout = readArticleLayout(input.articleLayout, paragraphs);
+      await mkdir2(this.directory, { recursive: true });
+      await writeOnce(path3.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
+    }
+    return { doc: await this.store({
+      kind: "web",
+      id,
+      url: url.href,
+      title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname,
+      ...sanitizeDocMeta(input),
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      defaultPage: 1,
+      paragraphs
+    }) };
+  }
+  async importPdf(title, bytes, url, meta) {
+    if (bytes.length > PDF_LIMIT || !bytes.subarray(0, 1024).includes("%PDF-")) fail("Choose a valid PDF of up to 80 MB.");
+    const digest = hash(bytes);
+    if (digest === sampleDigest) return sample;
+    const id = "pdf-" + digest;
+    const safeUrl3 = articleUrl(url)?.href;
+    const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
+    await mkdir2(this.directory, { recursive: true });
+    await writeOnce(path3.join(this.directory, id + ".pdf"), bytes);
+    const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
+    const missing = missingDocMeta({ ...doc }, cleanMeta);
+    const needUrl = !doc.url && Boolean(safeUrl3);
+    if (needUrl || Object.keys(missing).length) {
+      return this.mutateMeta(id, (saved) => {
+        let changed = false;
+        if (!saved.url && safeUrl3) {
+          saved.url = safeUrl3;
+          changed = true;
+        }
+        for (const [k, v] of Object.entries(missingDocMeta(saved, cleanMeta))) {
+          saved[k] = v;
+          changed = true;
+        }
+        return changed;
+      });
+    }
+    return doc;
+  }
+  async createAbstract(input) {
+    const { id } = await createAbstractRecord(this.directory, input, (key2, run) => this.withMetaLock(key2, run));
+    return this.get(id);
+  }
+  async attachPdf(id, bytes) {
+    const doc = await this.get(id);
+    const { pages } = await attachPdfToRecord(this.directory, doc, bytes, PDF_LIMIT, (key2, run) => this.withMetaLock(key2, run));
+    return { doc: await this.get(doc.id), pages };
+  }
+  async bytes(id) {
+    const doc = await this.get(id);
+    if (doc.kind !== "pdf") fail("This document has no saved PDF.");
+    return readFile2(this.pdfFile(doc));
+  }
+  async articleImage(id, anchor, download, page) {
+    if (!validDocId(id) || !/^(?:web|book)-/.test(id) || typeof anchor !== "string" || !/^p-[1-9]\d{0,3}$/.test(anchor)) fail("Unknown article illustration.", 404);
+    const book = id.startsWith("book-");
+    if (book && (typeof page !== "number" || !Number.isSafeInteger(page) || page < 1)) fail("A book illustration needs its section number.", 404);
+    const directory = book ? path3.join(this.imageDir, id, String(page)) : path3.join(this.imageDir, id);
+    const file = path3.join(directory, anchor);
+    const read = async () => {
+      const saved = await readFile2(file);
+      const end = saved.indexOf(10), type = end > 0 && end < 40 ? saved.toString("ascii", 0, end) : "";
+      if (!pictureType.test(type)) fail("The saved illustration is damaged.", 500);
+      return { type, bytes: saved.subarray(end + 1) };
+    };
+    try {
+      return await read();
+    } catch (error) {
+      if (!isFsError(error, "ENOENT")) throw error;
+    }
+    const pending = this.imageJobs.get(file);
+    if (pending) return pending;
+    const job = (async () => {
+      const metadata = await this.get(id);
+      const doc = book ? await this.readSection(metadata, page, true) : metadata;
+      const url = doc.articleLayout?.[anchor]?.image?.url;
+      if (!url) fail("This illustration is not part of the saved article.", 404);
+      const picture = await download(url);
+      if (!pictureType.test(picture.type) || !picture.bytes.length) fail("The website did not return an illustration.", 415);
+      await mkdir2(directory, { recursive: true });
+      await writeOnce(file, Buffer.concat([Buffer.from(picture.type + "\n", "ascii"), picture.bytes]));
+      return read();
+    })();
+    this.imageJobs.set(file, job);
+    try {
+      return await job;
+    } finally {
+      this.imageJobs.delete(file);
+    }
+  }
+  pageFile(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
+    if (!validDocId(id) || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 1e5) fail("Invalid document or page number.");
+    const slug = translationCacheSlug(targetLanguage);
+    return slug ? path3.join(this.translationDir, id, slug, page + ".json") : path3.join(this.translationDir, id, page + ".json");
+  }
+  async translations(id, page, targetLanguage = DEFAULT_TARGET_LANGUAGE) {
+    const file = this.pageFile(id, page, targetLanguage);
+    const chinese = typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
+    try {
+      const data = JSON.parse(await readFile2(file, "utf8"));
+      if (!isRecord(data) || !Object.values(data).every((v) => typeof v === "string")) fail("The translation cache is damaged.", 500);
+      const translations = data;
+      if (typeof id === "string" && /^(?:web|book)-/.test(id) || !chinese) return translations;
+      return Object.fromEntries(Object.entries(translations).filter(([, text2]) => !hasDecoderRepetition(text2)));
+    } catch (error) {
+      if (isFsError(error, "ENOENT")) return {};
+      throw error;
+    }
+  }
+  async translate(id, page, input, translate, targetLanguage = DEFAULT_TARGET_LANGUAGE, force = false) {
+    const doc = await this.get(id);
+    const file = this.pageFile(id, page, targetLanguage);
+    const checkChineseQuality = doc.kind === "pdf" && typeof targetLanguage === "string" && targetsSimplifiedChinese(targetLanguage);
+    if (!Array.isArray(input) || !input.length || input.length > 4e3) fail("No translatable paragraphs or page too long.");
+    const seen = /* @__PURE__ */ new Set();
+    const blocks3 = input.map((b) => {
+      if (!isRecord(b) || typeof b.id !== "string" || !/^[\w.:-]{1,120}$/.test(b.id) || ["__proto__", "prototype", "constructor"].includes(b.id) || seen.has(b.id) || typeof b.text !== "string" || !b.text.trim() || b.text.length > 24e3) fail("Invalid paragraph format.");
+      seen.add(b.id);
+      return { id: b.id, text: b.text };
+    });
+    const previous = this.jobs.get(file);
+    const job = (async () => {
+      if (previous) await previous.catch(() => void 0);
+      const result = await this.translations(id, page, targetLanguage);
+      const pending = force ? blocks3 : blocks3.filter((b) => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || checkChineseQuality && translationQualityError(b.text, result[b.id]));
+      await mkdir2(path3.dirname(file), { recursive: true });
+      for (let i = 0; i < pending.length; i += 8) {
+        const batch = pending.slice(i, i + 8);
+        const translated = await translate(batch, doc.kind);
+        for (const { id: key2, text: text2 } of batch) {
+          if (!Object.hasOwn(translated, key2) || !translated[key2]?.trim()) fail("The model omitted a paragraph. Retry to resume the translation.", 502);
+          const problem = checkChineseQuality && translationQualityError(text2, translated[key2]);
+          if (problem) fail(problem, 502);
+          result[key2] = translated[key2];
+        }
+        await writeAtomic(file, JSON.stringify(result));
+      }
+      return result;
+    })();
+    this.jobs.set(file, job);
+    try {
+      return await job;
+    } finally {
+      if (this.jobs.get(file) === job) this.jobs.delete(file);
+    }
+  }
+};
 
 // src/server/provider-http.ts
 async function send(fetcher, url, init, name2, timeout, signal) {
@@ -3217,7 +3101,8 @@ var ReaderModel = class {
       openAlexEmail: settings.openAlexEmail || "",
       hasOpenAlexApiKey: Boolean(settings.openAlexApiKey),
       hasSemanticScholarApiKey: Boolean(settings.semanticScholarApiKey),
-      hasNcbiApiKey: Boolean(settings.ncbiApiKey)
+      hasNcbiApiKey: Boolean(settings.ncbiApiKey),
+      arxivFormat: settings.arxivFormat ?? "html"
     };
   }
   async #native(route, system, serialized, region, streamOptions) {
@@ -5743,6 +5628,294 @@ function exportBulkRefs(docs, format) {
   })].join("\n") + "\n";
 }
 
+// src/server/academic-intake.ts
+var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
+var isArxivHtmlUnavailable = (parsed) => parsed.paragraphs.length <= 4 && /html\s+(?:is\s+)?not\s+available|no\s+html\s+(?:version|for)/i.test(`${parsed.title} ${parsed.paragraphs.slice(0, 3).join(" ")}`);
+function pdfFilename(url) {
+  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+  try {
+    name2 = decodeURIComponent(name2);
+  } catch {
+  }
+  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
+}
+function decodeHtml(bytes, type, charset) {
+  if (type === "application/pdf" || bytes.length > 5 * 1024 * 1024) fail("This link did not return a readable HTML article or PDF.", 415);
+  const sniff = bytes.subarray(0, 4096).toString("latin1");
+  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
+  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return new TextDecoder().decode(bytes);
+  }
+}
+var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
+var mergeMeta = (p, f, doi) => ({
+  paperTitle: p.paperTitle ?? f.paperTitle,
+  authors: p.authors ?? f.authors,
+  venue: p.venue ?? f.venue,
+  year: p.year ?? f.year,
+  doi: p.doi ?? f.doi ?? doi,
+  publisher: p.publisher ?? f.publisher,
+  abstract: p.abstract ?? f.abstract
+});
+function parseCrossref(bytes) {
+  try {
+    const body = JSON.parse(bytes.toString("utf8"));
+    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
+    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
+    const authors = Array.isArray(m.author) ? m.author.map(
+      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
+    ).filter(Boolean).join("; ") : void 0;
+    let year;
+    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
+      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
+      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
+        year = String(part);
+        break;
+      }
+    }
+    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
+    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
+    return {
+      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
+      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
+    };
+  } catch {
+    return { meta: {} };
+  }
+}
+function safeHtmlMeta(parseArticle, res) {
+  let html;
+  try {
+    html = decodeHtml(res.bytes, res.type, res.charset);
+  } catch {
+    return { meta: {} };
+  }
+  try {
+    const parsed = parseArticle(html, res.url.href);
+    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
+  } catch {
+    try {
+      const stub = parseArticle(html + "<p>.</p>", res.url.href);
+      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
+    } catch {
+      return { meta: {} };
+    }
+  }
+}
+async function resolveAcademicIntake(library, target, readResource, parseArticle, options) {
+  if (target.kind === "arxiv") {
+    const fmt = options?.arxivFormat ?? target.explicitFormat ?? options?.defaultArxivFormat ?? "html";
+    const baseMeta = options?.meta ?? {}, pdfName = (meta) => meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf";
+    if (fmt === "html") {
+      const [htmlRes, absRes2] = await Promise.allSettled([
+        readResource(target.htmlUrl, "document"),
+        baseMeta.authors ? Promise.resolve(null) : readResource(target.absUrl, "document")
+      ]);
+      const absInfo2 = absRes2.status === "fulfilled" && absRes2.value && !isPdfBytes(absRes2.value.bytes) ? safeHtmlMeta(parseArticle, absRes2.value) : void 0;
+      if (htmlRes.status === "fulfilled") {
+        if (isPdfBytes(htmlRes.value.bytes)) {
+          const meta = mergeMeta(baseMeta, absInfo2?.meta ?? {});
+          return { doc: await library.importPdf(pdfName(meta), htmlRes.value.bytes, target.absUrl, meta) };
+        }
+        const htmlInfo = safeHtmlMeta(parseArticle, htmlRes.value);
+        if (htmlInfo.parsed && !isArxivHtmlUnavailable(htmlInfo.parsed)) {
+          const meta = mergeMeta(baseMeta, mergeMeta(htmlInfo.meta, absInfo2?.meta ?? {}));
+          return library.importWebDocument({ ...htmlInfo.parsed, ...meta, title: meta.paperTitle || htmlInfo.parsed.title });
+        }
+      }
+      const pdfRes2 = await readResource(target.pdfUrl, "document").then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason }));
+      if (pdfRes2.status === "fulfilled" && isPdfBytes(pdfRes2.value.bytes)) {
+        const meta = mergeMeta(baseMeta, absInfo2?.meta ?? {});
+        return { doc: await library.importPdf(pdfName(meta), pdfRes2.value.bytes, target.absUrl, meta), arxivFallback: "html-to-pdf" };
+      }
+      if (absInfo2?.parsed) {
+        const meta = mergeMeta(baseMeta, absInfo2.meta);
+        return library.importWebDocument({ ...absInfo2.parsed, ...meta, title: meta.paperTitle || absInfo2.parsed.title });
+      }
+      throw pdfRes2.status === "rejected" ? pdfRes2.reason : htmlRes.status === "rejected" ? htmlRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
+    }
+    const [absRes, pdfRes] = await Promise.allSettled([
+      baseMeta.authors ? Promise.resolve(null) : readResource(target.absUrl, "document"),
+      readResource(target.pdfUrl, "document")
+    ]);
+    const absInfo = absRes.status === "fulfilled" && absRes.value && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
+    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
+      const meta = mergeMeta(baseMeta, absInfo?.meta ?? {});
+      return { doc: await library.importPdf(pdfName(meta), pdfRes.value.bytes, target.absUrl, meta) };
+    }
+    if (absInfo?.parsed) {
+      const meta = mergeMeta(baseMeta, absInfo.meta);
+      return library.importWebDocument({ ...absInfo.parsed, ...meta, title: meta.paperTitle || absInfo.parsed.title });
+    }
+    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
+  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
+  const tryPdf = async (candidate, sourceUrl2, meta) => {
+    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
+    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
+  };
+  if (landRes.status === "fulfilled") {
+    const land = landRes.value;
+    if (isPdfBytes(land.bytes)) {
+      const meta = mergeMeta({}, cr.meta, target.doi);
+      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
+    }
+    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
+    if (redirected?.kind === "arxiv") return resolveAcademicIntake(library, { ...redirected, explicitFormat: void 0 }, readResource, parseArticle, { ...options, meta: merged });
+    const primary = landInfo.pdfUrl, sourceUrl2 = land.url.href;
+    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
+    if (pdfDoc) return pdfDoc;
+    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
+    fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
+}
+
+// src/server/web-article.ts
+import { parse as parse2 } from "parse5";
+function parseWebArticle(html, url) {
+  return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "").article;
+}
+async function openWebArticle(library, raw, readResource = publicResource, options) {
+  const book = openStaxLocation(raw);
+  if (book) return library.openBook(book);
+  const target = parseAcademicInput(raw);
+  if (target && target.kind !== "url") return resolveAcademicIntake(library, target, readResource, parseWebArticle, options);
+  const { url, bytes, type, charset } = await readResource(target ? target.url : raw, "document");
+  if (isPdfBytes(bytes)) return { doc: await library.importPdf(pdfFilename(url), bytes, url.href) };
+  return library.importWebDocument(parseWebArticle(decodeHtml(bytes, type, charset), url.href));
+}
+
+// src/server/paper-save.ts
+var PAYWALL_RE = /\b(?:purchase\s+pdf|buy\s+article|subscribe\s+to\s+read|institutional\s+login|access\s+through\s+your\s+institution|get\s+access|rent\s+this\s+article|sign\s+in\s+to\s+view\s+full\s+text|paywall)\b/i;
+var isSubstantialOaHtml = (parsed) => {
+  const text2 = parsed.paragraphs.join(" ");
+  return parsed.paragraphs.length >= 12 && text2.length >= 4e3 && !PAYWALL_RE.test(text2.slice(0, 3e3));
+};
+function parseOpenAlexOaPdf(bytes) {
+  try {
+    const body = JSON.parse(bytes.toString("utf8"));
+    const best = isObject(body) && isObject(body.best_oa_location) ? body.best_oa_location : void 0;
+    return best && typeof best.pdf_url === "string" ? articleUrl(best.pdf_url)?.href : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function arxivVersionSuffix(paper) {
+  for (const raw of [paper.arxivId, paper.url, paper.oaPdfUrl]) {
+    const m = raw ? /(v\d+)(?:\.pdf)?\/?$/i.exec(raw.trim()) : null;
+    if (m) return m[1].toLowerCase();
+  }
+  return "";
+}
+async function saveGraphPaper(input, deps) {
+  const { paper } = input, mode = input.mode ?? "auto";
+  const title = single(paper.title, "paper title", 250, true), topicTag = input.topicTag ? single(input.topicTag, "topic tag", 40) : "", doi = cleanDoi2(paper.doi);
+  const meta = { paperTitle: title, authors: paper.authors.filter(Boolean).join("; ") || void 0, venue: paper.venue, year: paper.year ? String(paper.year) : void 0, doi, abstract: paper.abstract };
+  const applyTag = (doc) => {
+    const prev = deps.store.listDocMeta(doc.id).get(doc.id);
+    return !topicTag ? prev ? { ...doc, meta: prev } : doc : { ...doc, meta: deps.store.updateDocTriage({ docId: doc.id, tags: [.../* @__PURE__ */ new Set([...prev?.tags ?? [], topicTag])].slice(0, 50) }) };
+  };
+  const savePdfBytes = async (bytes, sourceUrl2) => {
+    const docs = await deps.library.list(), absId = abstractDocId({ title, url: paper.url, ...meta }), matchedId = attachLibraryMatch(paper, docs).docId;
+    const existing = docs.find((d) => d.id === absId) ?? (matchedId ? docs.find((d) => d.id === matchedId) : void 0);
+    if (existing?.kind === "abstract") {
+      const { doc: doc2, pages } = await deps.library.attachPdf(existing.id, bytes);
+      if (pages.length && deps.library.hasSync(doc2.id)) deps.store.withDb(true, (db) => replaceDocPages(db, doc2.id, pages));
+      return { doc: applyTag(doc2), upgraded: true, mode: "oa-pdf" };
+    }
+    const doc = await deps.library.importPdf(title, bytes, sourceUrl2, meta);
+    await deps.indexDoc(doc, true).catch(() => 0);
+    return { doc: applyTag(doc), upgraded: false, mode: "oa-pdf" };
+  };
+  const saveWebArticle = async (parsed, extraMeta) => {
+    const merged = mergeMeta(meta, extraMeta, doi);
+    const opened = await deps.library.importWebDocument({ ...parsed, ...merged, title: merged.paperTitle || parsed.title });
+    await deps.indexDoc(opened.doc, true).catch(() => 0);
+    return { doc: applyTag(opened.doc), upgraded: false, mode: "oa-html" };
+  };
+  const saveAbstract = async (fallback) => {
+    const doc = await deps.library.createAbstract({ title, url: paper.url, ...meta });
+    await deps.indexDoc(doc, doc.kind === "abstract").catch(() => 0);
+    return { doc: applyTag(doc), mode: "abstract", ...fallback ? { fallback: "abstract_only", attachPdfSuggested: true } : {} };
+  };
+  if (mode === "abstract") return saveAbstract(false);
+  if (mode === "oa-pdf") {
+    const pdfUrl = paper.oaPdfUrl ?? (paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}.pdf` : void 0);
+    if (!pdfUrl) throw new ServiceError(400, "No open-access PDF URL is available for this paper.");
+    const res = await deps.readResource(pdfUrl, "document");
+    if (!isPdfBytes(res.bytes)) throw new ServiceError(415, "The open-access link did not return a valid PDF.");
+    return savePdfBytes(res.bytes, paper.url ?? pdfUrl);
+  }
+  const readFast = (url, kind, opts) => deps.readResource(url, kind, { ...opts, signal: opts?.signal ?? AbortSignal.timeout(15e3) });
+  const triedUrls = /* @__PURE__ */ new Set();
+  const tryPdfUrl = async (candidate, sourceUrl2) => {
+    const clean3 = candidate ? articleUrl(candidate)?.href : void 0;
+    if (!clean3 || triedUrls.has(clean3)) return null;
+    triedUrls.add(clean3);
+    const res = await readFast(clean3, "document").catch(() => null);
+    return res && isPdfBytes(res.bytes) ? savePdfBytes(res.bytes, sourceUrl2) : null;
+  };
+  const tryArxiv = async (versionedId) => {
+    const fmt = input.arxivFormat ?? deps.settings?.arxivFormat ?? "html";
+    const htmlUrl = "https://arxiv.org/html/" + versionedId, pdfUrl = "https://arxiv.org/pdf/" + versionedId + ".pdf", absUrl = "https://arxiv.org/abs/" + versionedId;
+    const sourceUrl2 = paper.url && extractArxivId(paper.url) ? paper.url : absUrl;
+    if (fmt === "html") {
+      const htmlRes = await readFast(htmlUrl, "document").catch(() => null);
+      if (htmlRes) {
+        if (isPdfBytes(htmlRes.bytes)) return savePdfBytes(htmlRes.bytes, sourceUrl2);
+        const info = safeHtmlMeta(parseWebArticle, htmlRes);
+        if (info.parsed && !isArxivHtmlUnavailable(info.parsed)) return saveWebArticle(info.parsed, info.meta);
+      }
+      const pdfSaved = await tryPdfUrl(pdfUrl, sourceUrl2);
+      return pdfSaved ? { ...pdfSaved, arxivFallback: "html-to-pdf" } : null;
+    }
+    return tryPdfUrl(pdfUrl, sourceUrl2);
+  };
+  const arxivId = extractArxivId(paper.arxivId, doi) ?? extractArxivId(paper.url, paper.oaPdfUrl);
+  if (arxivId) {
+    const ver = arxivVersionSuffix(paper);
+    const saved = await tryArxiv(ver && !arxivId.endsWith(ver) ? arxivId + ver : arxivId);
+    if (saved) return saved;
+  }
+  if (paper.oaPdfUrl) {
+    const saved = await tryPdfUrl(paper.oaPdfUrl, paper.url ?? paper.oaPdfUrl);
+    if (saved) return saved;
+  }
+  if (doi) {
+    const doiUrl = "https://doi.org/" + encodeURI(doi);
+    const [landRes, crRes, oaRes] = await Promise.allSettled([
+      readFast(doiUrl, "document"),
+      readFast("https://api.crossref.org/works/" + encodeURIComponent(doi), "json"),
+      readFast(oaUrl("/works/https://doi.org/" + encodeURIComponent(doi.toLowerCase()), { select: "best_oa_location" }, deps.settings), "json")
+    ]);
+    const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
+    const oaPdf = oaRes.status === "fulfilled" ? parseOpenAlexOaPdf(oaRes.value.bytes) : void 0;
+    let landInfo;
+    if (landRes.status === "fulfilled") {
+      const land = landRes.value;
+      if (isPdfBytes(land.bytes)) return savePdfBytes(land.bytes, land.url.href);
+      const redirected = parseAcademicInput(land.url.href);
+      if (redirected?.kind === "arxiv") {
+        const saved = await tryArxiv(redirected.versionedId);
+        if (saved) return saved;
+      }
+      landInfo = safeHtmlMeta(parseWebArticle, land);
+    }
+    const sourceUrl2 = paper.url ?? doiUrl;
+    for (const candidate of [landInfo?.pdfUrl, oaPdf, cr.pdfUrl]) {
+      const saved = await tryPdfUrl(candidate, sourceUrl2);
+      if (saved) return saved;
+    }
+    if (landInfo?.parsed && isSubstantialOaHtml(landInfo.parsed)) return saveWebArticle(landInfo.parsed, mergeMeta(landInfo.meta, cr.meta, doi));
+  }
+  return saveAbstract(true);
+}
+
 // src/shared/review-types.ts
 var col = (id, name2, prompt, type = "text") => ({ id, name: name2, prompt, type });
 var REVIEW_PRESETS = {
@@ -7654,21 +7827,6 @@ var PdfOutlines = class {
   }
 };
 
-// src/server/web-article.ts
-import { parse as parse2 } from "parse5";
-function parseWebArticle(html, url) {
-  return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "").article;
-}
-async function openWebArticle(library, raw, readResource = publicResource) {
-  const book = openStaxLocation(raw);
-  if (book) return library.openBook(book);
-  const target = parseAcademicInput(raw);
-  if (target && target.kind !== "url") return resolveAcademicIntake(library, target, readResource, parseWebArticle);
-  const { url, bytes, type, charset } = await readResource(target ? target.url : raw, "document");
-  if (isPdfBytes(bytes)) return { doc: await library.importPdf(pdfFilename(url), bytes, url.href) };
-  return library.importWebDocument(parseWebArticle(decodeHtml(bytes, type, charset), url.href));
-}
-
 // src/server/zotero-attachment.ts
 import { open } from "node:fs/promises";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -8329,10 +8487,12 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       }, graphCtx(await documents.list(), options?.signal));
     },
     "graph.savePaper": async (input) => {
-      if (input.mode !== "abstract" && input.mode !== "oa-pdf") throw new ServiceError(400, "Choose abstract or oa-pdf.");
+      const mode = input.mode === void 0 ? "auto" : input.mode === "oa_pdf" ? "oa-pdf" : input.mode;
+      if (mode !== "auto" && mode !== "abstract" && mode !== "oa-pdf") throw new ServiceError(400, "Choose auto, abstract, or oa-pdf.");
       if (!isObject(input.paper)) throw new ServiceError(400, "Invalid paper payload.");
       const topicTag = input.topicTag === void 0 ? void 0 : single(input.topicTag, "topic tag", 40);
-      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode: input.mode, topicTag }, { library: documents, store: database, readResource, indexDoc });
+      const arxivFormat = input.arxivFormat === void 0 ? void 0 : readArxivFormat(input.arxivFormat);
+      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode, arxivFormat, topicTag }, { library: documents, store: database, readResource, indexDoc, settings: database.settings() });
     },
     "trends.query": async (input, options) => queryFieldTrends(readTrendQueryInput(input), graphCtx(await listDocsWithMeta2(), options?.signal)),
     "trends.papers": async (input, options) => queryTrendPapers(readTrendPapersInput(input), graphCtx(await listDocsWithMeta2(), options?.signal)),
@@ -8360,7 +8520,8 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       return opened;
     },
     "web.open": async (input) => {
-      const opened = await openWebArticle(documents, input.url, readResource);
+      const arxivFormat = input.arxivFormat === void 0 ? void 0 : readArxivFormat(input.arxivFormat);
+      const opened = await openWebArticle(documents, input.url, readResource, { arxivFormat, defaultArxivFormat: database.settings().arxivFormat });
       await indexDoc(opened.doc, true).catch(() => 0);
       return opened;
     },

@@ -1,4 +1,5 @@
 import type { TrendPaper, TrendPaperSort, TrendSource } from '../../shared/research-types.js';
+import type { ArxivFormat } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { researchIcon } from './icons.js';
 import { formatCachedAt, formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
@@ -115,15 +116,15 @@ export class FieldTrendsDrilldown {
     }
   }
   private renderSlot(slot: HTMLElement, paper: TrendPaper): void {
-    renderPaperActions(slot, paper, { prefix: 'ft', busy: this.cb.savingIds.has(paper.id), openLabel: t('Open', '打开'), onOpen: docId => { void this.cb.shell()?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: mode => { void this.saveInPlace(paper, mode); } });
+    renderPaperActions(slot, paper, { prefix: 'ft', busy: this.cb.savingIds.has(paper.id), openLabel: t('Open', '打开'), arxivFormat: this.cb.shell()?.arxivFormat?.(), onOpen: docId => { void this.cb.shell()?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: arxivFormat => { void this.saveInPlace(paper, arxivFormat); } });
   }
-  private async saveInPlace(paper: TrendPaper, saveMode: 'abstract' | 'oa-pdf'): Promise<void> {
+  private async saveInPlace(paper: TrendPaper, arxivFormat?: ArxivFormat): Promise<void> {
     if (this.cb.savingIds.has(paper.id) || !this.target) return;
     const topicId = this.target.topicId, prevInLib = Boolean(paper.inLibrary), prevDocId = paper.docId;
     const apply = (inLib: boolean, docId?: string) => { paper.inLibrary = inLib; paper.docId = paper.localDocId = inLib ? docId : undefined; this.cb.onPaperSynced(paper.id, inLib, docId); };
     this.cb.savingIds.add(paper.id); apply(true, prevDocId); if (!prevInLib) this.cb.onCoverageDelta(topicId, 1);
     try {
-      const doc = await saveGraphPaper(paper, saveMode, this.cb.shell());
+      const doc = await saveGraphPaper(paper, { mode: 'auto', arxivFormat }, this.cb.shell());
       this.cb.savingIds.delete(paper.id); apply(true, doc.id); this.cb.onCoverageConfirmed(topicId, doc.id);
     } catch (err) {
       this.cb.savingIds.delete(paper.id); apply(prevInLib, prevDocId);

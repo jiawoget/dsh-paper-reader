@@ -1,4 +1,4 @@
-import type { DocumentInfo, GraphDirection, GraphExploreResult, GraphNode, GraphPaper } from '../../shared/types.js';
+import type { ArxivFormat, DocumentInfo, GraphDirection, GraphExploreResult, GraphNode, GraphPaper } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { CitationMapSvg, type AuthorLabelMode, type GraphViewMode } from './citation-map-svg.js';
 import { researchText, researchViewName } from './labels.js';
@@ -100,8 +100,9 @@ export function createCitationMapView(): ResearchViewModule {
   };
   const renderActionSlot = (slot: HTMLElement, node: GraphNode, inDetail: boolean) => renderPaperActions(slot, node, {
     prefix: 'cm', busy: savingIds.has(node.id), openLabel: inDetail ? t('Open in Reader', '在精读中打开') : researchText.open(),
+    arxivFormat: shell?.arxivFormat?.(),
     onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); },
-    onSave: saveMode => { void savePaperInPlace(node, saveMode); }
+    onSave: arxivFormat => { void savePaperInPlace(node, arxivFormat); }
   });
   const updatePaperStatusInPlace = (nodeId: string, inLibrary: boolean, docId?: string) => {
     for (const step of trail) {
@@ -127,12 +128,12 @@ export function createCitationMapView(): ResearchViewModule {
       syncSeedPill(); if (seedPickerOpen) renderSeedList();
     }).catch(() => undefined);
   };
-  const savePaperInPlace = async (node: GraphNode, saveMode: 'abstract' | 'oa-pdf') => {
+  const savePaperInPlace = async (node: GraphNode, arxivFormat?: ArxivFormat) => {
     if (savingIds.has(node.id)) return;
     const prevInLib = Boolean(node.inLibrary), prevDocId = node.docId;
     savingIds.add(node.id); updatePaperStatusInPlace(node.id, true, prevDocId);
     try {
-      const doc = await saveGraphPaper(node, saveMode, shell);
+      const doc = await saveGraphPaper(node, { mode: 'auto', arxivFormat }, shell);
       savingIds.delete(node.id); rememberDoc(doc); updatePaperStatusInPlace(node.id, true, doc.id);
     } catch (err) { savingIds.delete(node.id); updatePaperStatusInPlace(node.id, prevInLib, prevDocId); toast(message(err)); }
   };

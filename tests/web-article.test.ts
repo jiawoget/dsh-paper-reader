@@ -197,10 +197,15 @@ test('extractArticle extracts head bibliographic meta tags under browser-like in
 });
 
 test('parseAcademicInput classifies arXiv, DOI, URL, and rejects unsafe schemes or traversal', () => {
-  assert.deepEqual(parseAcademicInput('2309.06180v2'), { kind: 'arxiv', id: '2309.06180', versionedId: '2309.06180v2', absUrl: 'https://arxiv.org/abs/2309.06180v2', pdfUrl: 'https://arxiv.org/pdf/2309.06180v2.pdf' });
+  assert.deepEqual(parseAcademicInput('2309.06180v2'), { kind: 'arxiv', id: '2309.06180', versionedId: '2309.06180v2', htmlUrl: 'https://arxiv.org/html/2309.06180v2', absUrl: 'https://arxiv.org/abs/2309.06180v2', pdfUrl: 'https://arxiv.org/pdf/2309.06180v2.pdf' });
   assert.equal(parseAcademicInput('arXiv:hep-th/9901001v1')?.kind, 'arxiv');
   assert.equal(parseAcademicInput('10.48550/arXiv.2309.06180')?.kind, 'arxiv');
-  assert.equal(parseAcademicInput('https://arxiv.org/html/2309.06180')?.kind, 'url');
+  assert.deepEqual(parseAcademicInput('https://arxiv.org/html/2606.06523v3'), { kind: 'arxiv', id: '2606.06523', versionedId: '2606.06523v3', htmlUrl: 'https://arxiv.org/html/2606.06523v3', absUrl: 'https://arxiv.org/abs/2606.06523v3', pdfUrl: 'https://arxiv.org/pdf/2606.06523v3.pdf', explicitFormat: 'html' });
+  assert.equal(parseAcademicInput('https://arxiv.org/pdf/2309.06180v2.pdf')?.kind, 'arxiv');
+  const pdfTarget = parseAcademicInput('https://arxiv.org/pdf/2309.06180v2.pdf');
+  assert.ok(pdfTarget?.kind === 'arxiv' && pdfTarget.explicitFormat === 'pdf');
+  const absTarget = parseAcademicInput('https://arxiv.org/abs/2309.06180v2');
+  assert.ok(absTarget?.kind === 'arxiv' && absTarget.explicitFormat === undefined);
   assert.deepEqual(parseAcademicInput('doi:10.1145/3600006.3613165.'), { kind: 'doi', doi: '10.1145/3600006.3613165', url: 'https://doi.org/10.1145/3600006.3613165' });
   assert.deepEqual(parseAcademicInput('https://doi.org/10.1002/%28SICI%291097-4571'), { kind: 'doi', doi: '10.1002/(SICI)1097-4571', url: 'https://doi.org/10.1002/(SICI)1097-4571' });
   for (const bad of ['', 'javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x', 'ftp://example.org/a', '10.1000/../secret', '10.1000/a\\b', 'plain words']) assert.equal(parseAcademicInput(bad), null);
@@ -209,6 +214,11 @@ test('parseAcademicInput classifies arXiv, DOI, URL, and rejects unsafe schemes 
 test('openWebArticle resolves arXiv and DOI targets through local readResource with metadata merge and fallbacks', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'dsh-academic-intake-'));
   const routes = new Map<string, { status?: number; type: string; body: string | Buffer }>([
+    ['/html/2606.06523v3', { type: 'text/html', body: '<!doctype html><html><head><title>Lean4Agent</title></head><body><article><h1>Lean4Agent</h1><p>Formal verification for agent workflows and trajectories.</p><p>Detailed experimental evaluation and proofs.</p></article></body></html>' }],
+    ['/abs/2606.06523v3', { type: 'text/html', body: '<meta name="citation_title" content="Lean4Agent: Formal Modeling"><meta name="citation_author" content="Doe, Jane"><meta name="citation_date" content="2026/06/10"><article><p>Abstract text.</p></article>' }],
+    ['/pdf/2606.06523v3.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\nlean4agent-pdf') }],
+    ['/html/2401.00003', { type: 'text/html', body: '<title>HTML is not available for the source</title><article><p>HTML is not available for this paper.</p></article>' }],
+    ['/pdf/2401.00003.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\nstub-fallback-pdf') }],
     ['/abs/2309.06180v1', { type: 'text/html', body: '<meta name="citation_title" content="PagedAttention"><meta name="citation_author" content="Kwon, Woosuk"><meta name="citation_date" content="2023/09/12"><article><p>Abstract body.</p></article>' }],
     ['/pdf/2309.06180v1.pdf', { type: 'application/pdf', body: Buffer.from('%PDF-1.7\narxiv-bytes') }],
     ['/abs/2401.00002', { type: 'text/html', body: '<meta name="citation_title" content="Fallback Abs"><article><p>Readable abs text.</p></article>' }],
@@ -242,8 +252,21 @@ test('openWebArticle resolves arXiv and DOI targets through local readResource w
     return { url: target, type: (res.headers.get('content-type') || '').split(';')[0], bytes: Buffer.from(await res.arrayBuffer()) };
   };
   const library = new Library(root, readLocal);
-  const arxivDoc = (await openWebArticle(library, '2309.06180v1', readLocal)).doc, absFallback = (await openWebArticle(library, '2401.00002', readLocal)).doc;
-  assert.equal(arxivDoc.kind, 'pdf'); assert.equal(arxivDoc.paperTitle, 'PagedAttention'); assert.equal(arxivDoc.venue, undefined); assert.equal(arxivDoc.url, 'https://arxiv.org/abs/2309.06180v1');
+  const htmlDefault = await openWebArticle(library, '2606.06523v3', readLocal);
+  assert.equal(htmlDefault.doc.kind, 'web'); assert.equal(htmlDefault.arxivFallback, undefined);
+  assert.equal(htmlDefault.doc.paperTitle, 'Lean4Agent: Formal Modeling'); assert.equal(htmlDefault.doc.authors, 'Doe, Jane');
+  assert.equal(htmlDefault.doc.url, 'https://arxiv.org/html/2606.06523v3');
+  const htmlUrlOpen = await openWebArticle(library, 'https://arxiv.org/html/2606.06523v3', readLocal);
+  assert.equal(htmlUrlOpen.doc.kind, 'web'); assert.equal(htmlUrlOpen.arxivFallback, undefined);
+  const explicitPdfUrl = await openWebArticle(library, 'https://arxiv.org/pdf/2606.06523v3.pdf', readLocal);
+  assert.equal(explicitPdfUrl.doc.kind, 'pdf'); assert.equal(explicitPdfUrl.arxivFallback, undefined);
+  const explicitPdfOpt = await openWebArticle(library, '2606.06523v3', readLocal, { arxivFormat: 'pdf' });
+  assert.equal(explicitPdfOpt.doc.kind, 'pdf'); assert.equal(explicitPdfOpt.arxivFallback, undefined);
+  const stubFallback = await openWebArticle(library, '2401.00003', readLocal);
+  assert.equal(stubFallback.doc.kind, 'pdf'); assert.equal(stubFallback.arxivFallback, 'html-to-pdf');
+  const arxivRes = await openWebArticle(library, '2309.06180v1', readLocal), absFallback = (await openWebArticle(library, '2401.00002', readLocal)).doc;
+  assert.equal(arxivRes.doc.kind, 'pdf'); assert.equal(arxivRes.arxivFallback, 'html-to-pdf');
+  assert.equal(arxivRes.doc.paperTitle, 'PagedAttention'); assert.equal(arxivRes.doc.venue, undefined); assert.equal(arxivRes.doc.url, 'https://arxiv.org/abs/2309.06180v1');
   assert.equal(absFallback.kind, 'web'); assert.equal(absFallback.paperTitle, 'Fallback Abs');
   const doiPdf = (await openWebArticle(library, '10.1000/pdf-land', readLocal)).doc, crFallback = (await openWebArticle(library, '10.1000/paywall', readLocal)).doc;
   assert.equal(doiPdf.kind, 'pdf'); assert.equal(doiPdf.paperTitle, 'Landing Title'); assert.equal(doiPdf.authors, 'Ada, Lovelace'); assert.equal(doiPdf.doi, '10.1000/pdf-land'); assert.equal(doiPdf.year, '2024');

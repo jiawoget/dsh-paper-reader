@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { DEFAULT_TARGET_LANGUAGE, parseTargetLanguage } from '../shared/languages.js';
-import type { ChatExchange, Collection, JournalNote, NotebookSnapshot, Operations, QuestionModel, Settings, ZoteroStatus, ZoteroItem as ReaderZoteroItem } from '../shared/types.js';
+import type { ArxivFormat, ChatExchange, Collection, JournalNote, NotebookSnapshot, Operations, QuestionModel, Settings, ZoteroStatus, ZoteroItem as ReaderZoteroItem } from '../shared/types.js';
 
 export class ServiceError extends Error {
   readonly status: number;
@@ -55,6 +55,10 @@ export function pageNumber(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) throw new ServiceError(400, 'The page number must be a positive integer.');
   return value;
 }
+export function readArxivFormat(value: unknown): ArxivFormat {
+  if (value === 'html' || value === 'pdf') return value;
+  throw new ServiceError(400, 'Choose html or pdf for arXiv import format.');
+}
 export function readTargetLanguage(value: unknown): string {
   const parsed = parseTargetLanguage(value);
   if (!parsed.ok) throw new ServiceError(400, parsed.error);
@@ -83,12 +87,13 @@ export interface PrivateSettings {
   openAlexApiKey?: string;
   semanticScholarApiKey?: string;
   ncbiApiKey?: string;
+  arxivFormat?: ArxivFormat;
 }
 export const initialSettings: Readonly<PrivateSettings> = {
   baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', apiKey: '',
   targetLanguage: DEFAULT_TARGET_LANGUAGE, glossary: '', customPrompts: '', vaultPath: '',
   zoteroLibraryId: '', zoteroLibraryType: 'user', zoteroApiKey: '',
-  openAlexEmail: '', openAlexApiKey: '', semanticScholarApiKey: '', ncbiApiKey: ''
+  openAlexEmail: '', openAlexApiKey: '', semanticScholarApiKey: '', ncbiApiKey: '', arxivFormat: 'html'
 };
 export function zoteroModeFor(settings: PrivateSettings): 'desktop' | 'web' {
   return !settings.zoteroLibraryId || settings.zoteroMode === 'desktop' ? 'desktop' : 'web';
@@ -124,6 +129,7 @@ export function mergeSettings(current: PrivateSettings, input: Input): PrivateSe
   const customPrompts = input.customPrompts === undefined ? current.customPrompts : readMultilinePref(input.customPrompts, 'custom prompts', 'Custom prompts contain invalid control characters.');
   const openAlexEmail = single(input.openAlexEmail ?? current.openAlexEmail ?? '', 'OpenAlex email', 254);
   if (openAlexEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(openAlexEmail)) throw new ServiceError(400, 'Enter a valid email address for OpenAlex polite pool.');
+  const arxivFormat = input.arxivFormat === undefined ? (current.arxivFormat ?? 'html') : readArxivFormat(input.arxivFormat);
   return {
     questionModel: input.questionModel === undefined ? current.questionModel : readQuestionModel(input.questionModel),
     model, baseUrl, apiKey: updatedSecret(sameOrigin ? current.apiKey : '', input.apiKey, input.clearApiKey),
@@ -133,7 +139,8 @@ export function mergeSettings(current: PrivateSettings, input: Input): PrivateSe
     openAlexEmail,
     openAlexApiKey: updatedSecret(current.openAlexApiKey ?? '', input.openAlexApiKey, input.clearOpenAlexApiKey),
     semanticScholarApiKey: updatedSecret(current.semanticScholarApiKey ?? '', input.semanticScholarApiKey, input.clearSemanticScholarApiKey),
-    ncbiApiKey: updatedSecret(current.ncbiApiKey ?? '', input.ncbiApiKey, input.clearNcbiApiKey)
+    ncbiApiKey: updatedSecret(current.ncbiApiKey ?? '', input.ncbiApiKey, input.clearNcbiApiKey),
+    arxivFormat
   };
 }
 

@@ -1,4 +1,4 @@
-import type { PageView } from '../../shared/types.js';
+import type { ArxivFormat, PageView } from '../../shared/types.js';
 import type { ReadingPosition } from '../jump-history.js';
 import type { ResearchViewId } from './labels.js';
 import type { PaperFloatBar } from './paper-float-bar.js';
@@ -12,7 +12,7 @@ export interface ResearchShellContext {
   activeDocId: () => string; activeTopic: () => string; setActiveTopic: (tag: string) => void;
   openContext: () => ResearchOpenContext | undefined; openView: (view: ResearchViewId, ctx?: ResearchOpenContext) => void;
   inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void; refreshNotebook?: (docId: string) => void;
-  paperFloatBar?: PaperFloatBar; openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void;
+  paperFloatBar?: PaperFloatBar; openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void; arxivFormat?: () => ArxivFormat;
 }
 
 export interface ResearchViewModule {
@@ -24,7 +24,7 @@ export interface ResearchViewModule {
 export interface ResearchWorkspaceHost {
   activeDocId: () => string; prepareOpen: () => void; capturePosition: () => ReturnAnchor; restorePosition: (anchor: ReturnAnchor) => Promise<void>;
   inspectFromWorkspace: (target: InspectTarget, returnAnchor?: ReturnAnchor) => Promise<void>; focusAfterCollapse: () => void; refreshNotebook?: (docId: string) => void;
-  openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void;
+  openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void; arxivFormat?: () => ArxivFormat;
 }
 
 const norm = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();

@@ -319,7 +319,10 @@ test('unified createServices wires web.open, library.updateMeta, and library.del
     }
   });
   const opened = await act('web.open', { url: '2402.12345' });
-  assert.equal(opened.doc.kind, 'pdf'); assert.equal(opened.doc.paperTitle, 'Unified Paper');
+  assert.equal(opened.doc.kind, 'web'); assert.equal(opened.doc.paperTitle, 'Unified Paper');
+  const openedPdf = await act('web.open', { url: '2402.12345', arxivFormat: 'pdf' });
+  assert.equal(openedPdf.doc.kind, 'pdf'); assert.equal(openedPdf.doc.paperTitle, 'Unified Paper');
+  await act('library.delete', { id: openedPdf.doc.id });
   const updated = await act('library.updateMeta', { id: opened.doc.id, authors: 'Ada Lovelace', year: '2024' });
   assert.equal(updated.doc.authors, 'Ada Lovelace'); assert.equal(updated.doc.year, '2024');
   await act('note.save', { docId: opened.doc.id, title: opened.doc.title, page: 1, anchor: 'p1', label: 'p. 1', sourceUrl: 'http://127.0.0.1/a', quote: 'q', text: 'Note to cascade' });

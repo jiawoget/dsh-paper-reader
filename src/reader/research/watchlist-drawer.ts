@@ -1,5 +1,5 @@
 import type { WatchlistEntry, WatchlistItem } from '../../shared/deep-search-types.js';
-import type { GraphPaper } from '../../shared/types.js';
+import type { ArxivFormat, GraphPaper } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, toast } from '../ui.js';
 import { researchIcon } from './icons.js';
 import { researchText } from './labels.js';
@@ -84,12 +84,12 @@ export class WatchlistDrawer {
   }
   private renderItemSlot(slot: HTMLElement, item: WatchlistItem): void {
     const p = item.paper;
-    renderPaperActions(slot, p, { prefix: 'wl', busy: this.savingIds.has(p.id), openLabel: t('Open in Reader', '打开精读'), onOpen: docId => { void this.cb.shell()?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: mode => { void this.saveItemPaper(item, mode); } });
+    renderPaperActions(slot, p, { prefix: 'wl', busy: this.savingIds.has(p.id), openLabel: t('Open in Reader', '打开精读'), arxivFormat: this.cb.shell()?.arxivFormat?.(), onOpen: docId => { void this.cb.shell()?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: arxivFormat => { void this.saveItemPaper(item, arxivFormat); } });
   }
-  private async saveItemPaper(item: WatchlistItem, mode: 'abstract' | 'oa-pdf'): Promise<void> {
+  private async saveItemPaper(item: WatchlistItem, arxivFormat?: ArxivFormat): Promise<void> {
     const p = item.paper; if (this.savingIds.has(p.id)) return;
     const prevIn = Boolean(p.inLibrary), prevDoc = p.docId; this.savingIds.add(p.id); this.syncPaperInLibrary(p.id, true, prevDoc);
-    try { const doc = await saveGraphPaper(p, mode, this.cb.shell()); this.savingIds.delete(p.id); this.syncPaperInLibrary(p.id, true, doc.id); this.cb.onPaperSaved?.(p, doc.id); }
+    try { const doc = await saveGraphPaper(p, { mode: 'auto', arxivFormat }, this.cb.shell()); this.savingIds.delete(p.id); this.syncPaperInLibrary(p.id, true, doc.id); this.cb.onPaperSaved?.(p, doc.id); }
     catch (err) { this.savingIds.delete(p.id); this.syncPaperInLibrary(p.id, prevIn, prevDoc); toast(message(err)); }
   }
   render(): void {

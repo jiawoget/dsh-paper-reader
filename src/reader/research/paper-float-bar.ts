@@ -23,16 +23,16 @@ const isTargetInLibrary = (t: PaperFloatTarget): boolean => Boolean(t.inLibrary 
 const paperSeedQuery = (p: GraphPaper): string => p.openAlexId || p.doi || (p.arxivId ? `arXiv:${p.arxivId}` : p.s2Id || p.title);
 
 export function createWorkspaceFloatCallbacks(getShell: () => ResearchShellContext | undefined): PaperFloatCallbacks {
-  const ensureDocId = async (target: PaperFloatTarget, preferOaPdf = false): Promise<string | undefined> => {
+  const ensureDocId = async (target: PaperFloatTarget): Promise<string | undefined> => {
     const existing = target.doc?.id ?? (target.paper?.inLibrary ? target.paper.docId : undefined);
     if (existing || !target.paper) return existing;
-    const doc = await saveGraphPaper(target.paper, preferOaPdf && target.paper.oaPdfUrl ? 'oa-pdf' : 'abstract', getShell());
+    const doc = await saveGraphPaper(target.paper, { mode: 'auto' }, getShell());
     target.paper.inLibrary = target.inLibrary = true; target.paper.docId = doc.id; target.onSaved?.(doc);
     return doc.id;
   };
   return {
-    async onRead(target) { const docId = await ensureDocId(target, false); if (docId) await getShell()?.inspectInReader({ docId, page: 1 }); },
-    async onAskAi(target) { const docId = await ensureDocId(target, false); if (docId) await getShell()?.inspectInReader({ docId, page: 1, openChat: true }); },
+    async onRead(target) { const docId = await ensureDocId(target); if (docId) await getShell()?.inspectInReader({ docId, page: 1 }); },
+    async onAskAi(target) { const docId = await ensureDocId(target); if (docId) await getShell()?.inspectInReader({ docId, page: 1, openChat: true }); },
     onCitations(target) {
       const shell = getShell(); if (!shell) return;
       if (target.doc) shell.openView('citations', { docId: target.doc.id });
@@ -43,7 +43,7 @@ export function createWorkspaceFloatCallbacks(getShell: () => ResearchShellConte
       if (target.doc) shell.openView('citation-map', { seedDocId: target.doc.id });
       else if (target.paper) shell.openView('citation-map', target.paper.inLibrary && target.paper.docId ? { seedDocId: target.paper.docId } : { query: paperSeedQuery(target.paper) });
     },
-    async onSave(target) { if (!isTargetInLibrary(target)) await ensureDocId(target, true); }
+    async onSave(target) { if (!isTargetInLibrary(target)) await ensureDocId(target); }
   };
 }
 

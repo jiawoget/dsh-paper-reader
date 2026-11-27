@@ -1,4 +1,5 @@
 import { DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGE_MAX_LENGTH, TARGET_LANGUAGE_PRESETS, findTargetLanguagePreset, parseTargetLanguage } from '../shared/languages.js';
+import { researchText } from './research/labels.js';
 import { api, bindTablist, button, byId, el, inputField, message, modal, readerLabel as label, toast, zoteroStatusText, type ReaderPort } from './ui.js';
 
 const close = () => byId<HTMLDialogElement>('dialog').close();
@@ -97,6 +98,14 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
 
   const clearModel = el('input'); clearModel.type = 'checkbox';
   const clearZot = el('input'); clearZot.type = 'checkbox';
+  const arxivRow = el('label', 'field'), arxivSelect = el('select');
+  arxivSelect.id = 'settingsArxivFormat';
+  arxivSelect.ariaLabel = researchText.arxivFormat();
+  for (const [value, name] of [['html', researchText.arxivHtmlDefault()], ['pdf', 'PDF']] as const) {
+    const option = el('option', '', name); option.value = value; arxivSelect.append(option);
+  }
+  arxivSelect.value = data.arxivFormat === 'pdf' ? 'pdf' : 'html';
+  arxivRow.append(el('span', '', researchText.arxivFormat()), arxivSelect);
   const oaEmail = inputField(label('OpenAlex email (polite pool)', 'OpenAlex 邮箱（高速通道）'), data.openAlexEmail ?? '', 'email', label('you@university.edu', '选填，例如：邮箱地址'));
   const oaKey = inputField(label('OpenAlex API key', 'OpenAlex API 密钥'), '', 'password', data.hasOpenAlexApiKey ? label('Key saved', '已保存密钥') : label('Optional', '选填'));
   const s2Key = inputField(label('Semantic Scholar API key', 'Semantic Scholar API 密钥'), '', 'password', data.hasSemanticScholarApiKey ? label('Key saved', '已保存密钥') : label('Optional', '选填'));
@@ -176,7 +185,7 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
     academicPanel.append(
       el('h3', '', label('Academic graph APIs', '学术图谱接口')),
       el('p', 'hint', label('All citation graph features work keyless. Optional free keys raise rate limits.', '所有学术图谱功能默认免密钥可用，选填免费密钥可提高速率上限。')),
-      oaEmail.row, oaKey.row, clearField(clearOa, label('Remove saved OpenAlex key', '移除已保存的 OpenAlex 密钥'), Boolean(data.hasOpenAlexApiKey)),
+      arxivRow, oaEmail.row, oaKey.row, clearField(clearOa, label('Remove saved OpenAlex key', '移除已保存的 OpenAlex 密钥'), Boolean(data.hasOpenAlexApiKey)),
       s2Key.row, clearField(clearS2, label('Remove saved Semantic Scholar key', '移除已保存的 Semantic Scholar 密钥'), Boolean(data.hasSemanticScholarApiKey)),
       ncbiKey.row, clearField(clearNcbi, label('Remove saved NCBI key', '移除已保存的 NCBI 密钥'), Boolean(data.hasNcbiApiKey))
     );
@@ -216,7 +225,8 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
           baseUrl: base.input.value, model: model.input.value, apiKey: key.input.value, targetLanguage, glossary: glossaryInput.value,
           customPrompts: promptsInput.value, vaultPath: vault.input.value, clearApiKey: clearModel.checked,
           openAlexEmail: oaEmail.input.value, openAlexApiKey: oaKey.input.value, clearOpenAlexApiKey: clearOa.checked,
-          semanticScholarApiKey: s2Key.input.value, clearSemanticScholarApiKey: clearS2.checked, ncbiApiKey: ncbiKey.input.value, clearNcbiApiKey: clearNcbi.checked
+          semanticScholarApiKey: s2Key.input.value, clearSemanticScholarApiKey: clearS2.checked, ncbiApiKey: ncbiKey.input.value, clearNcbiApiKey: clearNcbi.checked,
+          arxivFormat: arxivSelect.value === 'pdf' ? 'pdf' as const : 'html' as const
         }),
         ...zoteroSettings()
       });
@@ -230,5 +240,5 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
   body.append(form);
   if (initialTab === 'zotero') mode.focus();
   else if (initialTab === 'obsidian') vault.input.focus();
-  else if (initialTab === 'academic') oaEmail.input.focus();
+  else if (initialTab === 'academic') arxivSelect.focus();
 }

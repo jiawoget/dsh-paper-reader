@@ -78,7 +78,13 @@ export interface DocumentInfo extends DocMetadata {
   createdAt?: string;
   meta?: DocMeta;
 }
-export interface OpenDocument { doc: DocumentInfo; page?: number; anchor?: string }
+export type ArxivFormat = 'html' | 'pdf';
+export type SavePaperMode = 'auto' | 'abstract' | 'oa-pdf';
+export interface SaveGraphPaperResult {
+  doc: DocumentInfo; upgraded?: boolean; mode: 'abstract' | 'oa-pdf' | 'oa-html';
+  arxivFallback?: 'html-to-pdf'; fallback?: 'abstract_only'; attachPdfSuggested?: boolean;
+}
+export interface OpenDocument { doc: DocumentInfo; page?: number; anchor?: string; arxivFallback?: 'html-to-pdf' }
 
 export interface SelectionHit {
   id: string;
@@ -171,7 +177,7 @@ export interface Settings {
   questionModel?: QuestionModel;
   hostProvider?: string; hostModel?: string; vaultPath: string; zoteroLibraryType: 'user' | 'group';
   zoteroLibraryId: string; hasZoteroKey: boolean; zoteroMode?: 'web' | 'desktop';
-  openAlexEmail?: string; hasOpenAlexApiKey?: boolean; hasSemanticScholarApiKey?: boolean; hasNcbiApiKey?: boolean;
+  openAlexEmail?: string; hasOpenAlexApiKey?: boolean; hasSemanticScholarApiKey?: boolean; hasNcbiApiKey?: boolean; arxivFormat?: ArxivFormat;
 }
 export interface ReaderState { notes: JournalNote[]; vocabulary: WordRecord[]; history: WordRecord[]; settings: Settings }
 export interface ZoteroItem {
@@ -210,7 +216,7 @@ export interface Operations {
   'topics.delete': [{ id: string }, { id: string; deleted: boolean }];
   'graph.resolve': [{ query?: string; docId?: string }, { paper: GraphPaper | null; degraded: string[]; fromCache: boolean }];
   'graph.explore': [{ seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, GraphExploreResult];
-  'graph.savePaper': [{ paper: GraphPaper; mode: 'abstract' | 'oa-pdf'; topicTag?: string }, { doc: DocumentInfo; upgraded?: boolean; mode: 'abstract' | 'oa-pdf' }];
+  'graph.savePaper': [{ paper: GraphPaper; mode?: SavePaperMode; arxivFormat?: ArxivFormat; topicTag?: string }, SaveGraphPaperResult];
   'trends.query': [TrendQueryInput, TrendQueryResult];
   'trends.papers': [TrendPapersInput, TrendPapersResult];
   'library.cards': [PaperCardsInput, PaperCardsResult];
@@ -232,7 +238,7 @@ export interface Operations {
   'citations.summary': [CitationSummaryInput, CitationSummary];
   'citations.reclassify': [CitationReclassifyInput, CitationReclassifyResult];
   'web.import': [WebArticle, OpenDocument];
-  'web.open': [{ url: string }, OpenDocument];
+  'web.open': [{ url: string; arxivFormat?: ArxivFormat }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
   'article.capture.save': [{ docId: string; page: number; location: string; image: string; regionText: string; label: string }, { anchor: string }];
   'article.capture.get': [{ docId: string; page: number; anchor: string }, { image: string; regionText: string; label: string }];
@@ -257,7 +263,7 @@ export interface Operations {
   'vocab.save': [SourceRecord & { text: string; meaning: string; context: string }, { word: WordRecord }];
   'vocab.delete': [{ id: string }, unknown];
   'history.add': [SourceRecord & { text: string; meaning: string; context?: string }, unknown];
-  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'customPrompts'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'|'openAlexEmail'>> & {
+  'settings.save': [Partial<Pick<Settings,'baseUrl'|'model'|'targetLanguage'|'glossary'|'customPrompts'|'vaultPath'|'zoteroMode'|'zoteroLibraryType'|'zoteroLibraryId'|'openAlexEmail'|'arxivFormat'>> & {
     apiKey?: string; zoteroApiKey?: string; clearApiKey?: boolean; clearZoteroKey?: boolean;
     openAlexApiKey?: string; clearOpenAlexApiKey?: boolean; semanticScholarApiKey?: string; clearSemanticScholarApiKey?: boolean;
     ncbiApiKey?: string; clearNcbiApiKey?: boolean;

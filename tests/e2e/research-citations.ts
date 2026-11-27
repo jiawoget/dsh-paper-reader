@@ -59,6 +59,11 @@ async function run(): Promise<void> {
           const row = citedStmts.find(s => s.citingKey === String(body.payload?.citingKey ?? '')); if (row) { row.stance = body.payload?.stance as CitationStance; row.manualOverride = true; }
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ statement: row, tallies: calcTallies(citedStmts) }) }); return;
         }
+        if (body.op === 'graph.savePaper') {
+          assert.equal(body.payload?.mode, 'auto');
+          await route.continue({ postData: JSON.stringify({ ...body, payload: { ...body.payload, mode: 'abstract' } }) });
+          return;
+        }
         await route.fallback();
       });
 
@@ -91,7 +96,7 @@ async function run(): Promise<void> {
       assert.ok(await ws.evaluate(() => document.activeElement?.matches('.cit-expand-btn')));
       assert.match(await ws.locator('.cit-card[data-stance="unclassified"] .cit-no-ctx').innerText(), /No context available/);
       assert.ok(await ws.evaluate(() => document.querySelector('.cit-facet-select[data-facet="source"]')!.getBoundingClientRect().width <= document.querySelector('.cit-facet-select[data-facet="section"]')!.getBoundingClientRect().width + 1));
-      const saveCard = ws.locator('.cit-card[data-citing-key="s2:ext1"]'); await saveCard.locator('.cit-save-abs').click(); await saveCard.locator('.cit-open-btn').waitFor({ state: 'visible' });
+      const saveCard = ws.locator('.cit-card[data-citing-key="s2:ext1"]'); await saveCard.locator('.cit-import-btn').click(); await saveCard.locator('.cit-open-btn').waitFor({ state: 'visible' });
       await ws.locator('.cit-card[data-citing-key="s2:ext1#1"] .cit-open-btn').waitFor({ state: 'visible' });
       await ws.locator('.cit-tally-btn[data-stance="contrasting"]').click();
       await ws.locator(`.cit-reclass-select[data-citing-key="local:${localDocId}:p1"]`).selectOption('supporting');
@@ -145,7 +150,9 @@ async function run(): Promise<void> {
       const mapSeed = { id: 'W1', openAlexId: 'W1', title: 'PagedAttention: Efficient Memory Management', authors: ['Woosuk Kwon'], firstAuthor: 'Woosuk Kwon', lastAuthor: 'Woosuk Kwon', year: 2023, citationCount: 900, source: 'openalex', inLibrary: true, docId: 'pagedattention' };
       const mapAlt = { id: 'W9', openAlexId: 'W9', title: 'Adaptive Block Scheduling for Serving Pipelines', authors: ['Dana Park'], firstAuthor: 'Dana Park', lastAuthor: 'Dana Park', year: yr - 1, citationCount: 120, source: 'openalex', inLibrary: true, docId: localDocId };
       const mapNbr = { id: 'W2', openAlexId: 'W2', title: 'FlashAttention', authors: ['Tri Dao'], firstAuthor: 'Tri Dao', lastAuthor: 'Tri Dao', year: 2022, citationCount: 2400, source: 'openalex', inLibrary: false };
+      const mapArxiv = { id: 'W4', openAlexId: 'W4', title: 'Lean4Agent: Formal Modeling', authors: ['Jane Doe'], firstAuthor: 'Jane Doe', lastAuthor: 'Jane Doe', year: 2026, arxivId: '2606.06523v3', oaPdfUrl: 'https://arxiv.org/pdf/2606.06523v3.pdf', citationCount: 40, source: 'arxiv', inLibrary: false };
       const mapFar = { id: 'W3', openAlexId: 'W3', title: 'Unrelated Kernel Paper', authors: ['Sam Lee'], firstAuthor: 'Sam Lee', lastAuthor: 'Sam Lee', year: 2021, citationCount: 30, source: 'openalex', inLibrary: false };
+      const saveCalls: Record<string, unknown>[] = [], webOpenCalls: Record<string, unknown>[] = [];
       await page.route('**/api/paper-reader/action', async route => {
         const body = route.request().postDataJSON() as { op?: string; payload?: Record<string, unknown> };
         if (body.op === 'citations.summary') {
@@ -172,9 +179,25 @@ async function run(): Promise<void> {
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seeds: [root], nodes: [{ ...root, isSeed: true }, mapNbr, mapFar], edges: [{ source: root.id, target: 'W2', kind: 'cites', weight: 1 }, { source: 'W2', target: 'W3', kind: 'related', weight: 0.6 }], degraded: [], fromCache: false }) });
           return;
         }
+        if (body.op === 'graph.savePaper') {
+          saveCalls.push(body.payload ?? {});
+          const p = (body.payload?.paper ?? {}) as { id?: string; title?: string };
+          if (p.id === 'W2') {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ doc: { id: 'abs-w2', kind: 'abstract', title: p.title ?? 'FlashAttention' }, mode: 'abstract', fallback: 'abstract_only', attachPdfSuggested: true }) });
+            return;
+          }
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ doc: { id: 'pdf-w4', kind: 'pdf', title: p.title ?? 'Lean4Agent' }, mode: 'oa-pdf' }) });
+          return;
+        }
+        if (body.op === 'web.open') {
+          webOpenCalls.push(body.payload ?? {});
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ doc: { id: 'pagedattention', kind: 'pdf', title: 'PagedAttention', defaultPage: 1 } }) });
+          return;
+        }
         if (body.op === 'deepSearch.run') {
-          const cand = { ...mapNbr, matchScore: 91, rationale: 'Matches KV paging.', category: 'Serving', foundRound: 1 };
-          await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'result', result: { query: 'KV paging', overview: 'Overview [#1].', categories: ['Serving'], candidates: [cand], roundsCompleted: 2, totalEvaluated: 10, saturationCurve: [{ round: 1, evaluated: 10, matched: 1, newMatches: 1 }], degraded: ['s2'], aborted: false } }) + '\n' });
+          const cand1 = { ...mapNbr, matchScore: 91, rationale: 'Matches KV paging.', category: 'Serving', foundRound: 1 };
+          const cand2 = { ...mapArxiv, matchScore: 88, rationale: 'Formal workflow verification.', category: 'Verification', foundRound: 1 };
+          await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ type: 'result', result: { query: 'KV paging', overview: 'Overview [#1] [#2].', categories: ['Serving', 'Verification'], candidates: [cand1, cand2], roundsCompleted: 2, totalEvaluated: 10, saturationCurve: [{ round: 1, evaluated: 10, matched: 2, newMatches: 2 }], degraded: ['s2'], aborted: false } }) + '\n' });
           return;
         }
         await route.fallback();
@@ -229,7 +252,47 @@ async function run(): Promise<void> {
       assert.match(await ws.locator('.ds-degraded-text').innerText(), /429/);
       await ws.locator('.ds-degraded-settings').click();
       await page.locator('#settings-panel-academic').waitFor({ state: 'visible' });
-      await page.locator('#closeDialog').click();
+      assert.equal(await page.locator('#settingsArxivFormat').inputValue(), 'html');
+      await page.locator('#settingsArxivFormat').selectOption('pdf');
+      await page.locator('#dialog button[type="submit"]').click();
+      await page.locator('#dialog').waitFor({ state: 'hidden' });
+
+      const nonArxivCard = ws.locator('.ds-card[data-paper-id="W2"]'), arxivCard = ws.locator('.ds-card[data-paper-id="W4"]');
+      assert.equal(await ws.locator('.ds-save-abs, .ds-save-pdf').count(), 0);
+      assert.equal(await nonArxivCard.locator('.arxiv-fmt-seg').count(), 0);
+      assert.equal(await arxivCard.locator('.arxiv-fmt-seg').count(), 1);
+      assert.equal(await arxivCard.locator('.arxiv-fmt-btn[data-format="html"]').getAttribute('aria-pressed'), 'true');
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(60);
+      const mobFmtBox = await arxivCard.locator('.arxiv-fmt-btn[data-format="pdf"]').boundingBox();
+      assert.ok(mobFmtBox && mobFmtBox.width >= 43.5 && mobFmtBox.height >= 43.5, JSON.stringify(mobFmtBox));
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await arxivCard.locator('.arxiv-fmt-btn[data-format="pdf"]').click();
+      assert.equal(await arxivCard.locator('.arxiv-fmt-btn[data-format="pdf"]').getAttribute('aria-pressed'), 'true');
+      await arxivCard.locator('.ds-import-btn').click();
+      await arxivCard.locator('.ds-open-btn').waitFor({ state: 'visible' });
+      assert.equal(saveCalls.at(-1)?.mode, 'auto');
+      assert.equal(saveCalls.at(-1)?.arxivFormat, 'pdf');
+
+      await nonArxivCard.locator('.ds-import-btn').click();
+      await nonArxivCard.locator('.ds-attach-btn').waitFor({ state: 'visible' });
+      assert.match(await page.locator('#toast').innerText(), /No public full text found/);
+
+      await page.reload();
+      await page.locator('.pdf-sheet').first().waitFor({ state: 'visible' });
+      await page.locator('#library').click();
+      await page.locator('#dialog').waitFor({ state: 'visible' });
+      await page.locator('.reader-library button[aria-controls="library-url-form"]').click();
+      await page.locator('#library-url').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('.library-arxiv-fmt').isVisible(), false);
+      await page.locator('#library-url').fill('2606.06523v3');
+      await page.locator('.library-arxiv-fmt').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('.library-arxiv-fmt .arxiv-fmt-btn[data-format="pdf"]').getAttribute('aria-pressed'), 'true');
+      await page.locator('#library-url').fill('https://arxiv.org/html/2606.06523v3');
+      assert.equal(await page.locator('.library-arxiv-fmt .arxiv-fmt-btn[data-format="html"]').getAttribute('aria-pressed'), 'true');
+      await page.locator('#library-url-form button[type="submit"]').click();
+      await page.locator('#dialog').waitFor({ state: 'hidden' });
+      assert.deepEqual(webOpenCalls.at(-1), { url: 'https://arxiv.org/html/2606.06523v3', arxivFormat: 'html' });
+      await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'settings.save', payload: { arxivFormat: 'html' } } });
       await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });

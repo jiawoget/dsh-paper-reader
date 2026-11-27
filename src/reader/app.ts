@@ -37,7 +37,8 @@ import { bindPdfDropTarget, importPdfFiles } from './pdf-import.js';
 import { FigurePins } from './figure-pin.js';
 import { trackReadingProgress } from './reading-progress.js';
 import { copyRegionPng, saveRegionPng } from './region-png.js';
-import type { ResearchViewId } from './research/labels.js';
+import { researchText, type ResearchViewId } from './research/labels.js';
+import { clearAbstractOnly } from './research/paper-intake.js';
 import { locateQuoteInView, type InspectTarget, type ResearchOpenContext, type ReturnAnchor } from './research/state.js';
 import { registerResearchViews } from './research/index.js';
 import { ResearchWorkspace } from './research/workspace-shell.js';
@@ -126,6 +127,7 @@ class Reader implements ReaderPort {
     inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
     refreshNotebook: docId => { if (docId === this.doc.id) void this.refresh().catch(() => undefined); },
     openSettings: tab => settingsDialog(this, tab ?? 'ai'),
+    arxivFormat: () => this.state.settings.arxivFormat ?? 'html',
     focusAfterCollapse: () => (byId('workspaceSwitch').querySelector<HTMLElement>('.rw-sw-research') ?? byId('library')).focus({ preventScroll: true })
   });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
@@ -355,6 +357,7 @@ class Reader implements ReaderPort {
     localStorage.setItem('reader.page.'+this.doc.id,String(this.page));
   }
   openDocument(opened: OpenDocument): Promise<void> {
+    if (opened.arxivFallback === 'html-to-pdf') toast(researchText.arxivHtmlFallback());
     return this.navigate(opened.doc.id,opened.page,opened.anchor,'',undefined,undefined,{opened:opened.doc});
   }
   async navigate(id:string,page?:number,anchor='',quote='',target?:TranslatedLocator,range?:SavedSelectionRange,
@@ -647,7 +650,7 @@ class Reader implements ReaderPort {
     finally { this.attachingPdf = false; }
   }
   private async handleAttachedPdf(upgraded: DocumentInfo): Promise<void> {
-    this.research.notifyDocumentMutated(upgraded.id, false);
+    clearAbstractOnly(upgraded.id); this.research.notifyDocumentMutated(upgraded.id, false);
     await this.navigate(upgraded.id, 1, '', '', undefined, undefined, { opened: upgraded, forceReload: true, skipHistory: true });
     toast(label('PDF attached and indexed.', '已附加 PDF 并建立全文索引。'), {
       label: label('Re-extract matrix cells', '重抽该篇矩阵列'),
