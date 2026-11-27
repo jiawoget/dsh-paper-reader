@@ -1,6 +1,7 @@
 import type { DocStatus, DocumentInfo, LibrarySearchHit, LibrarySearchKind } from '../shared/types.js';
 import { abstractOnlyLabel } from './abstract-view.js';
 import { localBookPlace } from './book-position.js';
+import { PaperFloatBar } from './research/paper-float-bar.js';
 import { api, button, byId, el, icon, message, readerLabel as t, toast, type ReaderPort } from './ui.js';
 
 const nextStatus: Record<DocStatus, DocStatus> = { unread: 'reading', reading: 'done', done: 'unread' };
@@ -45,6 +46,14 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
   const status = el('p', 'library-status', t('Loading documents…', '正在读取文档…')); status.setAttribute('role', 'status');
   const list = el('div', 'library-results'), matches = el('section', 'library-search-matches'); matches.hidden = true;
   panel.append(search, controls, status, list, matches);
+  const dialogEl = panel.closest<HTMLDialogElement>('dialog');
+  const floatBar = new PaperFloatBar(panel, {
+    onRead: async target => { if (target.doc) await read(target.doc); },
+    onAskAi: async target => { if (target.doc) { await read(target.doc); app.openPaperChat?.(); } },
+    onCitations: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citations', { docId: target.doc.id }); } },
+    onCitationMap: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citation-map', { seedDocId: target.doc.id }); } }
+  });
+  dialogEl?.addEventListener('close', () => floatBar.destroy(), { once: true });
 
   let searchTimer = 0, searchSeq = 0;
   function renderHits(hits: LibrarySearchHit[]): void {
@@ -183,6 +192,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           actions.append(renameBtn, delBtn); wrap.append(row, actions); list.append(wrap);
           if (focusDeleteId === doc.id) { focusDeleteId = ''; delBtn.focus({ preventScroll: true }); }
         } else { wrap.append(row, actions); list.append(wrap); }
+        floatBar?.attach(wrap, { doc, inLibrary: true });
       }
     }
     search.addEventListener('input', () => { render(); scheduleSearch(); });

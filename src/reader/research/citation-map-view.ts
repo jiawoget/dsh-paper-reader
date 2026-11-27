@@ -124,6 +124,7 @@ export function createCitationMapView(): ResearchViewModule {
       item.addEventListener('focusin', () => syncHover(node.id));
       item.addEventListener('focusout', e => { if (!(e.relatedTarget instanceof Node) || !item.contains(e.relatedTarget)) syncHover(null); });
       item.append(titleBtn, el('p', 'cm-row-meta', byline), act); listEl.append(item); rowEls.set(node.id, item); rowActions.set(node.id, act);
+      shell?.paperFloatBar?.attach(item, { paper: node, onSaved: doc => updatePaperStatusInPlace(node.id, true, doc.id) });
     }
     svg?.render(nodes, edges, mode, authorMode, selectedId); renderDetail();
   };

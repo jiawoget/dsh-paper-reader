@@ -3,6 +3,7 @@ import { abstractOnlyLabel } from '../abstract-view.js';
 import { answerMarkdown } from '../answer-markdown.js';
 import { bindChatComposer, copyAnswerButton, createSendStopPair, createStreamSlot } from '../chat-stream.js';
 import { api, apiStream, el, icon, message, readerLabel as t, sourceUrl, toast, undoLabel } from '../ui.js';
+import { infoTip } from './icons.js';
 import { researchText } from './labels.js';
 import { LibraryChatScope, type ScopeSavedState } from './library-chat-scope.js';
 import { isAbortError, mkBtn } from './paper-intake.js';
@@ -161,7 +162,9 @@ export function createLibraryChatView(): ResearchViewModule {
     if (!turns.length && !pending) {
       const box = el('div', 'lc-welcome'), chips = el('div', 'lc-presets');
       for (const p of PRESETS) { const b = mkBtn('btn lc-preset-chip', p.label(), () => { void runChat(p.label(), p.id); }); b.dataset.preset = p.id; chips.append(b); }
-      box.append(el('h2', 'lc-welcome-title', t('Ask across your local library', '跨文献库综合提问')), el('p', 'lc-welcome-desc', t('Compare methods, surface limitations, spot disagreements, and inspect verifiable inline citations across selected papers.', '基于本地文献卡片与全文索引综合分析研究方法、局限与跨篇分歧，每条引文均可悬停核验并直跳原文。')), chips);
+      const wHead = el('div', 'lc-welcome-head');
+      wHead.append(el('h2', 'lc-welcome-title', t('Ask across your local library', '跨文献库综合提问')), infoTip(t('Compare methods, surface limitations, spot disagreements, and inspect verifiable inline citations across selected papers.', '基于本地文献卡片与全文索引综合分析研究方法、局限与跨篇分歧，每条引文均可悬停核验并直跳原文。')));
+      box.append(wHead, chips);
       logEl.append(box);
     } else {
       for (const turn of turns) logEl.append(renderTurn(turn));
@@ -229,7 +232,7 @@ export function createLibraryChatView(): ResearchViewModule {
       sendStop = createSendStopPair(() => { ctrl?.abort(); }); sendStop.stop.prepend(icon('close', 14));
       bindChatComposer(inputEl, form, canSubmit); form.addEventListener('submit', e => { e.preventDefault(); if (canSubmit()) void runChat(inputEl!.value); });
       row.append(inputEl, sendStop.send, sendStop.stop); form.append(emptyScopeEl, row); chatPane.append(head, capBannerEl, errorBannerEl, logEl, form);
-      scope = new LibraryChatScope({ onChange: syncHeader, onClose: () => { syncHeader(); scopeToggleBtn?.focus({ preventScroll: true }); } });
+      scope = new LibraryChatScope({ onChange: syncHeader, onClose: () => { syncHeader(); scopeToggleBtn?.focus({ preventScroll: true }); }, onAttachRow: (rowEl, doc) => shell?.paperFloatBar?.attach(rowEl, { doc, inLibrary: true }) });
       viewEl.append(chatPane, scope.backdrop, scope.root, popoverEl); host.append(viewEl); renderLog();
       window.addEventListener('resize', () => { if (!mounted || !scope) return; if (prevWidth > 1080 && innerWidth <= 1080 && scope.isOpen()) { scope.setOpen(false); syncHeader(); } else if (prevWidth <= 1080 && innerWidth > 1080 && !scope.isOpen()) { scope.setOpen(true); syncHeader(); } prevWidth = innerWidth; }, { signal: events.signal });
       const topic = ctx.openContext()?.topic || ctx.activeTopic() || undefined;

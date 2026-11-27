@@ -16,9 +16,9 @@ async function run(): Promise<void> {
       const pageErrors: string[] = [], consoleErrors: string[] = [];
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' });
       const page = await openReaderPage(ctx, host, '?doc=pagedattention&page=5', { tag: 'rw-en', scope: { allowZotero503: true }, pageErrors, consoleErrors });
-      assert.equal(await page.locator('.topbar #expandResearch').count(), 0);
-      if (!(await page.locator('#rail').isVisible())) await page.locator('#mobileRail').click();
-      await page.locator('#expandResearch').click();
+      assert.equal(await page.locator('#expandResearch').count(), 0);
+      assert.equal(await page.locator('.topbar #workspaceSwitch .rw-sw-read[aria-pressed="true"]').count(), 1);
+      await page.locator('.topbar #workspaceSwitch .rw-sw-research').click();
       const ws = page.locator('#researchWorkspace');
       await ws.waitFor({ state: 'visible' });
       assert.equal(await page.locator('#reader').isVisible(), false);
@@ -67,7 +67,7 @@ async function run(): Promise<void> {
       const hit6 = ws.locator('.cit-jump-btn', { hasText: 'p. 6' }).first();
       await hit6.waitFor({ state: 'visible', timeout: 15_000 });
       await hit6.click();
-      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
       assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16');
       assert.match(await page.locator('.return-workspace-go').innerText(), /Citations/);
       assert.equal(await page.locator('#jumpBack').isEnabled(), true);
@@ -80,7 +80,7 @@ async function run(): Promise<void> {
       assert.equal(await ws.locator('.cit-search-input').inputValue(), 'block table');
       assert.ok((await ws.locator('.cit-card').count()) >= 1);
       await hit6.click();
-      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
       await page.locator('.return-workspace-close').click();
       await page.locator('#returnWorkspace').waitFor({ state: 'hidden' });
 
@@ -92,7 +92,7 @@ async function run(): Promise<void> {
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.rw-mobile-select').selectOption('citations');
       await ws.locator('.cit-jump-btn', { hasText: 'p. 6' }).first().click();
-      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
       const pillFit = await page.evaluate(() => {
         const go = document.querySelector('.return-workspace-go')!, pill = document.getElementById('returnWorkspace')!, bar = document.getElementById('mobileBar')!;
         return { sw: go.scrollWidth, cw: go.clientWidth, h: go.getBoundingClientRect().height, clear: pill.getBoundingClientRect().bottom <= bar.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth };
@@ -185,7 +185,7 @@ async function run(): Promise<void> {
       await ws.locator('.cm-crumb[data-step="0"]').click();
       assert.equal(await ws.locator('.cm-crumb').count(), 1);
       await ws.locator('.cm-detail .cm-open-btn').click();
-      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
       assert.match(await page.locator('.return-workspace-go').innerText(), /Citation Map/);
       await page.locator('.return-workspace-go').click();
       await ws.waitFor({ state: 'visible' });
@@ -252,7 +252,7 @@ async function run(): Promise<void> {
       await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-open-btn').waitFor({ state: 'visible' });
       assert.equal((await ws.locator('tr', { hasText: 'Speculative Decoding' }).locator('.ft-lib-btn').innerText()).trim(), '★ 1');
       await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-open-btn').click();
-      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
       assert.match(await page.locator('.return-workspace-go').innerText(), /Field Trends/);
       await page.locator('.return-workspace-go').click(); await ws.locator('.ft-drill').waitFor({ state: 'visible' });
       await page.keyboard.press('Escape'); await ws.locator('.ft-drill').waitFor({ state: 'hidden' }); assert.equal(await ws.isVisible(), true);
@@ -374,7 +374,7 @@ async function run(): Promise<void> {
       await ws.locator('.rt-insp-textarea').fill('ShareGPT + LMSYS-Chat-1M'); await ws.locator('.rt-insp-save').click();
       await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="datasets"] .rt-cell-badge.is-manual').waitFor({ state: 'visible' });
       await mCell.click(); await ws.locator('.rt-insp-jump').click();
-      await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
+      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
       assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16');
       assert.match(await page.locator('.return-workspace-go').innerText(), /Review Table/);
       await page.locator('.return-workspace-go').click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });

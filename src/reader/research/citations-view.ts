@@ -193,6 +193,14 @@ export function createCitationsView(): ResearchViewModule {
     if (stmt.source !== 'local') { const slot = el('span', 'cit-save-slot'); slot.dataset.citingKey = stmt.citingKey; renderExternalActions(slot, stmt); actions.append(slot); }
     else if (stmt.citingUrl && safeWeb(stmt.citingUrl)) { const ext = el('a', 'external cit-ext-link', t('Source ↗', '来源 ↗')); ext.href = safeWeb(stmt.citingUrl)!; ext.target = '_blank'; ext.rel = 'noopener noreferrer'; actions.append(ext); }
     card.append(head, stanceRow, ctxBox, actions);
+    shell?.paperFloatBar?.attach(card, {
+      paper: toGraphPaper(stmt),
+      onSaved: doc => {
+        savedMap.set(stmt.citingKey, doc.id);
+        if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs];
+        if (mounted) { syncDocOptions(); syncExternalSlots(); }
+      }
+    });
     return card;
   };
   const renderList = () => {

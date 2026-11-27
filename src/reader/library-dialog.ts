@@ -105,7 +105,7 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   openWeb.addEventListener('click', clearRequest);
   const openWorkspace = el('button', 'btn library-workspace-btn');
   openWorkspace.type = 'button';
-  openWorkspace.append(researchIcon('expand', 14), researchText.workspace());
+  openWorkspace.append(researchIcon('research', 18), researchText.workspace());
   openWorkspace.addEventListener('click', () => { if (active()) dialog.close(); app.openResearchWorkspace?.(); });
   imports.append(openWorkspace, openWeb, pdf, file);
   const tabs = el('div', 'library-tabs');

@@ -2,7 +2,7 @@ dialog:has(.reader-library) {
   width: min(710px, calc(100% - 28px));
   max-height: min(82dvh, 760px);
   color: var(--desk-ink);
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 dialog:has(.reader-library) > header { padding: 16px 22px 10px; border-bottom: 0; }
 dialog:has(.reader-library) h2 { font-size: 21px; }
@@ -120,7 +120,7 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .pdf-drop-overlay {
   position: absolute; inset: 8px; z-index: 60; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   border: 2px dashed var(--purple); border-radius: 10px; background: var(--surface-tint); color: var(--purple);
-  font: 600 15px/1.4 system-ui, sans-serif; pointer-events: none; box-shadow: var(--shadow-card);
+  font: 600 15px/1.4 var(--font-sans); pointer-events: none; box-shadow: var(--shadow-card);
 }
 [data-pdf-drop="active"] > .pdf-drop-overlay { display: flex; }
 .reader-library > .pdf-drop-overlay { inset: 0; }

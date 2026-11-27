@@ -103,6 +103,7 @@ export class PaperChat {
     this.root.append(this.grip, this.toggle, this.content);
     this.render();
   }
+  open(): void { this.setOpen(true); if (this.doc) void this.reload(this.doc.id); this.input.focus({ preventScroll: true }); }
   private setOpen(open: boolean): void {
     this.expanded = open;
     localStorage.setItem('reader.paper-chat.open', String(open));
