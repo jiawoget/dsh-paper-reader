@@ -283,10 +283,20 @@ async function run(): Promise<void> {
       await ws.locator('.lc-stopped-bar').waitFor({ state: 'visible' });
       assert.match(await ws.locator('.lc-answer-body h3').first().innerText(), /Key Result/);
 
+      await ws.locator('.lc-composer-bar .question-model-trigger').click();
+      const qPop = page.locator('#questionModelPopover'); await qPop.waitFor({ state: 'visible' });
+      await qPop.getByRole('option', { name: 'Reasoning model', exact: true }).click();
+      await qPop.getByRole('button', { name: 'High', exact: true }).click(); await qPop.waitFor({ state: 'hidden' });
+      assert.match(await ws.locator('.lc-composer-bar .question-model-trigger').innerText(), /Reasoning model · High/);
+      await ws.locator('.lc-doc-open[data-doc-id="pagedattention"]').first().click(); await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
+      assert.match(await page.locator('.return-workspace-go').innerText(), /Library Chat/);
+      await page.locator('.return-workspace-go').click(); await ws.locator('.lc-scope-pane').waitFor({ state: 'visible' });
       const lcCite = { key: 'pagedattention:p6', docId: 'pagedattention', authorLabel: 'Kwon et al.', year: '2023', page: 6, quote: 'PagedAttention divides the KV cache of each sequence into blocks.', title: 'PagedAttention: Efficient Memory Management', kind: 'pdf' as const };
+      let seenLcModel: unknown;
       await page.route('**/api/paper-reader/action', async route => {
-        const body = route.request().postDataJSON() as { op?: string };
+        const body = route.request().postDataJSON() as { op?: string; payload?: { questionModel?: unknown } };
         if (body.op === 'library.chat') {
+          seenLcModel = body.payload?.questionModel;
           const answer = 'PagedAttention partitions KV cache into fixed blocks (Kwon et al., 2023, p. 6).';
           await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body: JSON.stringify({ delta: answer }) + '\n' + JSON.stringify({ answer, citations: [lcCite], truncatedCount: 0, usedDocIds: ['pagedattention'], usedAbstractOnlyIds: [] }) + '\n' });
           return;
@@ -294,14 +304,14 @@ async function run(): Promise<void> {
         await route.fallback();
       });
       await ws.locator('.lc-clear-btn').click(); await ws.locator('.lc-preset-chip[data-preset="compare_methods"]').click();
-      const citeBtn = ws.locator('.lc-cite').first(); await citeBtn.waitFor({ state: 'visible' }); await citeBtn.hover();
-      await ws.locator('.lc-popover').waitFor({ state: 'visible' }); assert.match(await ws.locator('.lc-pop-quote').innerText(), /divides the KV cache/);
+      const citeBtn = ws.locator('.lc-cite').first(); await citeBtn.waitFor({ state: 'visible' });
+      assert.deepEqual(seenLcModel, { provider: 'reader-test', model: 'reasoner', reasoningEffort: 'high' });
+      await citeBtn.hover(); await ws.locator('.lc-popover').waitFor({ state: 'visible' }); assert.match(await ws.locator('.lc-pop-quote').innerText(), /divides the KV cache/);
       await citeBtn.click(); await page.locator('#returnWorkspace').waitFor({ state: 'visible' });
       assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16'); assert.match(await page.locator('.return-workspace-go').innerText(), /Library Chat/);
       await page.locator('.return-workspace-go').click(); await ws.locator('.lc-cite').first().waitFor({ state: 'visible' });
       await ws.locator('.lc-save-note').first().click(); await ws.locator('.lc-save-note[data-saved="true"]').waitFor({ state: 'visible' });
-      await page.locator('#toast').getByRole('button', { name: 'Undo', exact: true }).click();
-      await ws.locator('.lc-save-note:not([data-saved="true"])').waitFor({ state: 'visible' });
+      await page.locator('#toast').getByRole('button', { name: 'Undo', exact: true }).click(); await ws.locator('.lc-save-note:not([data-saved="true"])').waitFor({ state: 'visible' });
       await ws.locator('.lc-save-note').first().click(); await ws.locator('.lc-save-note[data-saved="true"]').waitFor({ state: 'visible' });
       await page.locator('#toast').getByRole('button', { name: 'View', exact: true }).click(); await page.locator('#notesTab[aria-selected="true"]').waitFor({ state: 'visible' });
       await page.waitForFunction(() => (document.getElementById('railBody')?.textContent ?? '').includes('PagedAttention partitions KV cache'));
@@ -311,69 +321,57 @@ async function run(): Promise<void> {
       const s1024 = await ws.locator('.lc-scope-pane').evaluate(el => { const r = el.getBoundingClientRect(); return { w: r.width, l: r.left, r: r.right }; });
       assert.ok(s1024.w >= 280 && s1024.l >= 52 && s1024.r <= 1024, JSON.stringify(s1024));
       await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
-
       await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
       const lcMob = await ws.evaluate(() => ({ top: document.querySelector('.lc-log')!.getBoundingClientRect().top, ov: document.documentElement.scrollWidth - innerWidth }));
       assert.ok(lcMob.top <= 150 && lcMob.ov <= 1, JSON.stringify(lcMob));
       await ws.locator('.lc-scope-pill').click(); await ws.locator('.lc-scope-pane').waitFor({ state: 'visible' });
       await assertMobilePanelTargets(page, '#researchWorkspace');
-      await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' });
-      await page.unroute('**/api/paper-reader/action');
+      await page.keyboard.press('Escape'); await ws.locator('.lc-scope-pane').waitFor({ state: 'hidden' }); await page.unroute('**/api/paper-reader/action');
 
       await page.setViewportSize({ width: 1440, height: 900 });
       await ws.locator('.rw-nav-btn[data-view="review-table"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
-      assert.equal(await ws.getAttribute('data-rail-collapsed'), 'true'); assert.equal(await ws.locator('.rt-inspector').isVisible(), false);
-      assert.ok(await ws.evaluate(() => document.querySelector('.rt-col-paper')!.getBoundingClientRect().width / document.querySelector('.rt-main-pane')!.getBoundingClientRect().width <= 0.31));
-      assert.ok((await ws.locator('.rt-src-badge.is-pdf').count()) >= 1 && (await ws.locator('.rt-src-badge.is-abstract').count()) >= 1);
-
+      assert.ok(await ws.getAttribute('data-rail-collapsed') === 'true' && !(await ws.locator('.rt-inspector').isVisible()) && (await ws.locator('.rt-preset-select').count()) === 0 && (await ws.locator('.rt-step-item .re-info-btn').count()) === 2);
+      assert.deepEqual((await ws.locator('.rt-col-label').allTextContents()).map(s => s.trim()), ['Research Question', 'Method', 'Key Findings', 'Limitations']);
+      await ws.locator('.rt-step-item .re-info-btn').first().click();
+      assert.ok(await ws.evaluate(() => document.querySelector('.rt-step-item .re-info-btn')!.classList.contains('is-open') && document.querySelector('.rt-step-btn[data-step="extraction"]')!.getAttribute('aria-pressed') === 'true'));
+      await ws.locator('.rt-paper-cell .rt-paper-btn[data-doc-id="pagedattention"]').click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.rt-inspector .rt-paper-action').count(), 4);
+      await page.keyboard.press('Escape'); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
+      assert.ok(await ws.evaluate(() => document.querySelector('.rt-col-paper')!.getBoundingClientRect().width / document.querySelector('.rt-main-pane')!.getBoundingClientRect().width <= 0.31) && (await ws.locator('.rt-src-badge.is-pdf').count()) >= 1 && (await ws.locator('.rt-src-badge.is-abstract').count()) >= 1);
       await ws.locator('.rt-step-btn[data-step="screening"]').click();
-      for (const crit of ['LLM serving', 'Open weights']) {
-        await ws.locator('.rt-crit-in').fill(crit); await ws.locator('.rt-crit-add').click();
-        await ws.locator('.rt-crit-chip', { hasText: crit }).waitFor({ state: 'visible' });
-      }
-      await ws.locator('.rt-screen-run').click();
-      await ws.locator('.rt-part[data-part="excluded"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      for (const crit of ['LLM serving', 'Open weights']) { await ws.locator('.rt-crit-in').fill(crit); await ws.locator('.rt-crit-add').click(); await ws.locator('.rt-crit-chip', { hasText: crit }).waitFor({ state: 'visible' }); }
+      await ws.locator('.rt-screen-run').click(); await ws.locator('.rt-part[data-part="excluded"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
       assert.ok((await ws.locator('.rt-threshold').boundingBox())!.height >= 24);
-      await ws.locator('.rt-threshold').fill('40');
-      await ws.locator('.rt-part[data-part="included"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
-      await ws.locator('.rt-strict-btn').click();
-      await ws.locator('.rt-part[data-part="excluded"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
-      await ws.locator('.rt-srow[data-doc-id="pagedattention"] .rt-dec-btn[data-decision="yes"]').click();
-      await ws.locator('.rt-part[data-part="included"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
-      await ws.locator('.rt-save-next').click();
-      await page.waitForFunction(() => document.querySelector<HTMLElement>('.rt-srow.is-active')?.dataset.docId !== 'pagedattention');
+      await ws.locator('.rt-threshold').fill('40'); await ws.locator('.rt-part[data-part="included"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      await ws.locator('.rt-strict-btn').click(); await ws.locator('.rt-part[data-part="excluded"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      await ws.locator('.rt-srow[data-doc-id="pagedattention"] .rt-dec-btn[data-decision="yes"]').click(); await ws.locator('.rt-part[data-part="included"] .rt-srow[data-doc-id="pagedattention"]').waitFor({ state: 'visible' });
+      await ws.locator('.rt-save-next').click(); await page.waitForFunction(() => document.querySelector<HTMLElement>('.rt-srow.is-active')?.dataset.docId !== 'pagedattention');
       await ws.locator('.rt-srow[data-doc-id="pagedattention"] .rt-scrit-cell').first().click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
       await ws.locator('.rt-crit-chip .rt-crit-del').first().click(); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
-
-      await ws.locator('.rt-step-btn[data-step="extraction"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
-      assert.equal(await ws.locator('.rt-inspector').isVisible(), false);
-      await ws.locator('.rt-pilot-btn').click();
-      await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"] .rt-cell-badge.is-verified').waitFor({ state: 'visible' });
+      await ws.locator('.rt-step-btn[data-step="extraction"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.rt-inspector').isVisible(), false);
+      await ws.locator('.rt-pilot-btn').click(); await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"] .rt-cell-badge.is-verified').waitFor({ state: 'visible' });
       await ws.locator('.rt-stop-btn').click(); await ws.locator('.rt-stop-btn').waitFor({ state: 'hidden' });
       assert.match(await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"]').innerText(), /PagedAttention block KV cache/);
-      assert.equal(await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="datasets"] .rt-cell-badge.is-unverified').count(), 1);
+      assert.equal(await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="key_findings"] .rt-cell-badge.is-unverified').count(), 1);
       await ws.locator('.rt-add-col-btn').click(); await ws.locator('.rt-col-picker').waitFor({ state: 'visible' });
-      await page.keyboard.press('Escape'); await ws.locator('.rt-col-picker').waitFor({ state: 'hidden' });
-      await ws.locator('.rt-add-col-btn').click(); await ws.locator('.rt-col-picker').waitFor({ state: 'visible' });
-      await ws.locator('.rt-col-name-in').fill('Throughput'); await ws.locator('.rt-col-submit').click();
+      assert.ok((await ws.locator('.rt-tpl-btn').count()) === 4 && (await ws.locator('.rt-col-foot').boundingBox())!.y + (await ws.locator('.rt-col-foot').boundingBox())!.height <= 900);
+      await ws.locator('.rt-tpl-btn[data-preset="cs_ai"]').click(); await ws.locator('.rt-col-label', { hasText: 'Datasets' }).waitFor({ state: 'visible' });
+      await ws.locator('.rt-add-col-btn').click(); await ws.locator('.rt-tpl-btn[data-preset="general"]').click(); await ws.locator('.rt-col-label', { hasText: 'Key Findings' }).waitFor({ state: 'visible' });
+      await ws.locator('.rt-add-col-btn').click(); await page.keyboard.press('Escape'); await ws.locator('.rt-col-picker').waitFor({ state: 'hidden' });
+      await ws.locator('.rt-add-col-btn').click(); await ws.locator('.rt-col-name-in').fill('Throughput'); await ws.locator('.rt-col-submit').click();
       await ws.locator('.rt-col-label', { hasText: 'Throughput' }).waitFor({ state: 'visible' });
-
       const mCell = ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="method"]');
-      await mCell.click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
-      assert.match(await ws.locator('.rt-insp-quote').innerText(), /block tables/);
-      await mCell.focus(); await page.keyboard.press('ArrowRight');
-      await page.waitForFunction(() => (document.querySelector('.rt-insp-col')?.textContent ?? '').includes('Datasets'));
+      await mCell.click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' }); assert.match(await ws.locator('.rt-insp-quote').innerText(), /block tables/);
+      await mCell.focus(); await page.keyboard.press('ArrowRight'); await page.waitForFunction(() => (document.querySelector('.rt-insp-col')?.textContent ?? '').includes('Key Findings'));
       assert.match(await ws.locator('.rt-insp-status').innerText(), /Unverified/);
-      await ws.locator('.rt-insp-textarea').fill('ShareGPT + LMSYS-Chat-1M'); await ws.locator('.rt-insp-save').click();
-      await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="datasets"] .rt-cell-badge.is-manual').waitFor({ state: 'visible' });
-      await mCell.click(); await ws.locator('.rt-insp-jump').click();
-      await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
-      assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16');
-      assert.match(await page.locator('.return-workspace-go').innerText(), /Review Table/);
+      await ws.locator('.rt-insp-textarea').fill('2-4x throughput vs FasterTransformer'); await ws.locator('.rt-insp-save').click();
+      await ws.locator('.rt-cell[data-doc-id="pagedattention"][data-col-id="key_findings"] .rt-cell-badge.is-manual').waitFor({ state: 'visible' });
+      await mCell.click(); await ws.locator('.rt-insp-jump').click(); await page.locator('.topbar #returnWorkspace').waitFor({ state: 'visible' });
+      assert.equal((await page.locator('#pageCount').innerText()).trim(), '6 / 16'); assert.match(await page.locator('.return-workspace-go').innerText(), /Review Table/);
       await page.locator('.return-workspace-go').click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
-
-      const [csvDl] = await Promise.all([page.waitForEvent('download'), ws.locator('.rt-export-csv').click()]);
-      assert.match(csvDl.suggestedFilename(), /\.csv$/);
+      const [mdDl] = await Promise.all([page.waitForEvent('download'), ws.locator('.rt-export-btn').click()]); assert.match(mdDl.suggestedFilename(), /\.md$/);
+      await ws.locator('.rt-export-toggle').click();
+      const [csvDl] = await Promise.all([page.waitForEvent('download'), ws.locator('.rt-export-item[data-format="csv"]').click()]); assert.match(csvDl.suggestedFilename(), /\.csv$/);
       await page.setViewportSize({ width: 1024, height: 768 });
       const rt1024 = await ws.locator('.rt-inspector').evaluate(el => { const r = el.getBoundingClientRect(); return { w: r.width, l: r.left, r: r.right }; });
       assert.ok(rt1024.w >= 320 && rt1024.l >= 52 && rt1024.r <= 1024, JSON.stringify(rt1024));
@@ -383,8 +381,7 @@ async function run(): Promise<void> {
       assert.ok(rtMob.top <= 150 && rtMob.cards >= 3 && rtMob.ov <= 1 && rtMob.ebOv <= 1 && rtMob.bw < 140, JSON.stringify(rtMob));
       await assertMobilePanelTargets(page, '#researchWorkspace');
       await ws.locator('.rt-mcard-row').first().click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });
-      await assertMobilePanelTargets(page, '.rt-inspector');
-      await page.keyboard.press('Escape'); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
+      await assertMobilePanelTargets(page, '.rt-inspector'); await page.keyboard.press('Escape'); await ws.locator('.rt-inspector').waitFor({ state: 'hidden' });
       await ws.locator('.rt-step-btn[data-step="screening"]').click();
       assert.ok(await ws.evaluate(() => { const sc = document.querySelector('.rt-screen-ctrls')!; return sc.scrollWidth <= sc.clientWidth + 1 && document.querySelector('.rt-body-scroll')!.getBoundingClientRect().top <= 150; }));
 
@@ -475,13 +472,13 @@ async function run(): Promise<void> {
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.ft-starter-chip, .ft-topic-name'), 'zh-CN Field Trends');
       await zhPage.locator('.rw-nav-btn[data-view="library-chat"]').click();
       await zhPage.locator('.lc-scope-pane').waitFor({ state: 'visible' });
-      const zhLc = await collectChromeStrings(zhPage, '.lc-doc-info, .lc-group-name');
+      const zhLc = await collectChromeStrings(zhPage, '.lc-doc-open, .lc-check, .lc-group-name, .question-model-trigger');
       assertNoZhEnglishLeaks(zhLc, 'zh-CN Library Chat');
       assert.equal(zhLc.some(s => /全库\s*Copilot|摘要存根|筛抽矩阵|纳排筛选/.test(s.text)), false);
       await zhPage.locator('.rw-nav-btn[data-view="review-table"]').click();
       await zhPage.locator('.rt-grid').waitFor({ state: 'visible' });
       await zhPage.locator('.rt-add-col-btn').click(); await zhPage.locator('.rt-col-picker').waitFor({ state: 'visible' });
-      const zhRt = await collectChromeStrings(zhPage, '.rt-paper-title, .rt-paper-meta, .rt-cell-val, .rt-mcard-v, .rt-col-label');
+      const zhRt = await collectChromeStrings(zhPage, '.rt-paper-title, .rt-paper-meta, .rt-cell-val, .rt-mcard-v, .rt-col-label, .question-model-trigger');
       assertNoZhEnglishLeaks(zhRt, 'zh-CN Review Table', ['screening', 'extraction', 'pico', 'pilot', 'evidence', 'verified', 'unverified', 'throughput']);
       assert.equal(zhRt.some(s => /纳排筛选|筛抽矩阵|摘要存根|全库\s*Copilot/.test(s.text)), false);
       await zhCtx.close();

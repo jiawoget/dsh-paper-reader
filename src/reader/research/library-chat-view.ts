@@ -68,6 +68,7 @@ export function createLibraryChatView(): ResearchViewModule {
   let scopePillBtn: HTMLButtonElement | undefined, scopeToggleBtn: HTMLButtonElement | undefined, clearBtn: HTMLButtonElement | undefined;
   let capBannerEl: HTMLElement | undefined, errorBannerEl: HTMLElement | undefined, emptyScopeEl: HTMLElement | undefined;
   let inputEl: HTMLTextAreaElement | undefined, sendStop: ReturnType<typeof createSendStopPair> | undefined, streamSlot: ReturnType<typeof createStreamSlot> | undefined;
+  let modelPicker: ReturnType<NonNullable<ResearchShellContext['createModelPicker']>> | undefined;
   let turns: ChatTurn[] = [], draft = '', streamText = '', activeQuestion = '';
   const savingTurns = new Set<string>();
 
@@ -185,7 +186,7 @@ export function createLibraryChatView(): ResearchViewModule {
     if (!preset && inputEl) { inputEl.value = ''; draft = ''; }
     renderLog(); if (logEl) logEl.scrollTop = logEl.scrollHeight;
     try {
-      const res = await apiStream('library.chat', { docIds: sel.map(d => d.id), ...(preset ? { preset } : { question: q }), history }, delta => { if (mounted && seq === reqSeq) { streamText += delta; streamSlot?.push(streamText); } }, ctrl.signal);
+      const res = await apiStream('library.chat', { docIds: sel.map(d => d.id), ...(preset ? { preset } : { question: q }), history, questionModel: shell?.currentQuestionModel?.() ?? null }, delta => { if (mounted && seq === reqSeq) { streamText += delta; streamSlot?.push(streamText); } }, ctrl.signal);
       if (!mounted || seq !== reqSeq) return;
       streamSlot?.finish(); pending = false; ctrl = null;
       turns.push({ id: crypto.randomUUID(), question: q, preset, answer: res.answer, citations: res.citations ?? [], usedDocIds: res.usedDocIds ?? usedIds, usedAbstractOnlyIds: res.usedAbstractOnlyIds ?? absIds, truncatedCount: res.truncatedCount ?? 0 });
@@ -231,14 +232,22 @@ export function createLibraryChatView(): ResearchViewModule {
       inputEl.addEventListener('input', () => { draft = inputEl!.value; sendStop?.sync(pending, canSubmit()); });
       sendStop = createSendStopPair(() => { ctrl?.abort(); }); sendStop.stop.prepend(icon('close', 14));
       bindChatComposer(inputEl, form, canSubmit); form.addEventListener('submit', e => { e.preventDefault(); if (canSubmit()) void runChat(inputEl!.value); });
-      row.append(inputEl, sendStop.send, sendStop.stop); form.append(emptyScopeEl, row); chatPane.append(head, capBannerEl, errorBannerEl, logEl, form);
-      scope = new LibraryChatScope({ onChange: syncHeader, onClose: () => { syncHeader(); scopeToggleBtn?.focus({ preventScroll: true }); }, onAttachRow: (rowEl, doc) => shell?.paperFloatBar?.attach(rowEl, { doc, inLibrary: true }) });
+      row.append(inputEl, sendStop.send, sendStop.stop);
+      modelPicker = ctx.createModelPicker?.();
+      if (modelPicker) { const bar = el('div', 'lc-composer-bar'); bar.append(modelPicker.button); form.append(emptyScopeEl, bar, row); }
+      else form.append(emptyScopeEl, row);
+      chatPane.append(head, capBannerEl, errorBannerEl, logEl, form);
+      scope = new LibraryChatScope({
+        onChange: syncHeader, onClose: () => { syncHeader(); scopeToggleBtn?.focus({ preventScroll: true }); },
+        onOpenDoc: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(err => toast(message(err))); },
+        onAttachRow: (rowEl, doc) => shell?.paperFloatBar?.attach(rowEl, { doc, inLibrary: true })
+      });
       viewEl.append(chatPane, scope.backdrop, scope.root, popoverEl); host.append(viewEl); renderLog();
       window.addEventListener('resize', () => { if (!mounted || !scope) return; if (prevWidth > 1080 && innerWidth <= 1080 && scope.isOpen()) { scope.setOpen(false); syncHeader(); } else if (prevWidth <= 1080 && innerWidth > 1080 && !scope.isOpen()) { scope.setOpen(true); syncHeader(); } prevWidth = innerWidth; }, { signal: events.signal });
       const topic = ctx.openContext()?.topic || ctx.activeTopic() || undefined;
       void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted) void loadLibrary(restored ? undefined : topic); });
     },
-    unmount() { mounted = false; events?.abort(); events = null; abortStream(); hidePopover(); scope = undefined; streamSlot = undefined; },
+    unmount() { mounted = false; events?.abort(); events = null; abortStream(); hidePopover(); modelPicker?.destroy(); modelPicker = undefined; scope = undefined; streamSlot = undefined; },
     saveState: (): SavedLibraryChatState => ({
       turns: turns.map(x => ({ ...x })), draft: inputEl?.value ?? draft, logScrollTop: logEl?.scrollTop ?? 0,
       scope: scope?.saveState() ?? { selectedIds: [], filter: '', open: true, collapsedSections: [], collapsedGroups: [], scrollTop: 0 }

@@ -1,7 +1,8 @@
 import { csvCell } from './citation-bulk.js';
 import type { DocMeta, DocPageRecord, DocumentInfo, QuestionModel } from './types.js';
 
-export type ReviewPresetId = 'cs_ai' | 'pico';
+export type ReviewPresetId = 'general' | 'cs_ai' | 'pico' | 'custom';
+export const REVIEW_PRESET_IDS: readonly ReviewPresetId[] = ['general', 'cs_ai', 'pico', 'custom'];
 export type ReviewColumnType = 'text' | 'boolean' | 'number' | 'list';
 export type ReviewDecision = 'yes' | 'no' | 'maybe';
 export type ReviewExtractMode = 'pilot' | 'all' | 'cell' | 'reextract';
@@ -34,7 +35,14 @@ export interface ReviewExportInput { tableId?: string; format: ReviewExportForma
 export interface ReviewExportResult { filename: string; mime: string; content: string }
 
 const col = (id: string, name: string, prompt: string, type: ReviewColumnType = 'text'): ReviewColumn => ({ id, name, prompt, type });
+const GENERAL_COLUMNS: readonly ReviewColumn[] = [
+  col('research_question', 'Research Question', 'Core research question, hypothesis, or problem addressed.'),
+  col('method', 'Method', 'Methodology, experimental design, model, or analytical approach.'),
+  col('key_findings', 'Key Findings', 'Headline quantitative or qualitative findings and evidence.'),
+  col('limitations', 'Limitations', 'Stated limitations, failure modes, or scope boundaries.')
+];
 export const REVIEW_PRESETS: Readonly<Record<ReviewPresetId, { name: string; columns: readonly ReviewColumn[] }>> = {
+  general: { name: 'General Research', columns: GENERAL_COLUMNS },
   cs_ai: { name: 'CS / AI Review', columns: [
     col('method', 'Method', 'Core algorithm, architecture, or system design proposed.'),
     col('datasets', 'Datasets', 'Benchmarks, datasets, or workloads evaluated.', 'list'),
@@ -42,13 +50,14 @@ export const REVIEW_PRESETS: Readonly<Record<ReviewPresetId, { name: string; col
     col('main_result', 'Main Result', 'Headline quantitative improvement or experimental finding.'),
     col('limitations', 'Limitations', 'Stated limitations, failure modes, or scope boundaries.')
   ] },
-  pico: { name: 'Medicine / Pharmacy PICO', columns: [
+  pico: { name: 'Clinical PICO', columns: [
     col('population', 'Population', 'Study participants, condition, sample size, and eligibility.'),
     col('intervention', 'Intervention', 'Active drug, dosage, regimen, or clinical intervention.'),
     col('comparator', 'Comparator', 'Control arm, placebo, or standard-of-care comparator.'),
     col('outcome', 'Outcome', 'Primary clinical outcome and effect size.'),
     col('study_design', 'Study Design', 'Trial design, blinding, randomization, and duration.')
-  ] }
+  ] },
+  custom: { name: 'Custom Review', columns: GENERAL_COLUMNS }
 };
 export const SUGGESTED_REVIEW_COLUMNS: readonly ReviewColumn[] = [
   col('sample_size', 'Sample Size', 'Total number of participants or evaluated samples.', 'number'),

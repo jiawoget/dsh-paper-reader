@@ -14,12 +14,16 @@ import { createServices } from '../src/server/services.js';
 
 const samplePdfPath = path.resolve('public/assets/pagedattention.pdf');
 const hasStatus = (status: number) => (err: unknown) => err instanceof Error && 'status' in err && (err as { status: number }).status === status;
-const makeLlmCtx = (handler: (sys: string, payload: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<{ type: string; text?: string; reason?: { kind: string } }>) => ({
+const makeLlmCtx = (handler: (sys: string, payload: Record<string, unknown>, signal?: AbortSignal, req?: { provider?: string; model?: string; reasoningEffort?: string }) => AsyncIterable<{ type: string; text?: string; reason?: { kind: string } }>) => ({
   llm: {
     listProviders: () => [{ id: 'test-provider' }],
-    listModels: async () => [{ id: 'test-model', name: 'Test Model', inputModalities: ['text'] }],
-    stream: (req: { system: string; messages: { content: { text?: string }[] }[]; signal: AbortSignal }) =>
-      handler(req.system, JSON.parse(req.messages[0]?.content[0]?.text || '{}') as Record<string, unknown>, req.signal)
+    listModels: async () => [
+      { id: 'test-model', name: 'Test Model', inputModalities: ['text'] },
+      { id: 'reason-model', name: 'Reason Model', inputModalities: ['text'], reasoning: { efforts: [{ id: 'high', name: 'High' }] } }
+    ],
+    resolveModelInfo: async (_p: string, id: string) => id === 'reason-model' ? { reasoning: { efforts: [{ id: 'high', name: 'High' }] } } : undefined,
+    stream: (req: { provider?: string; model?: string; reasoningEffort?: string; system: string; messages: { content: { text?: string }[] }[]; signal: AbortSignal }) =>
+      handler(req.system, JSON.parse(req.messages[0]?.content[0]?.text || '{}') as Record<string, unknown>, req.signal, req)
   }
 });
 
@@ -55,8 +59,9 @@ test('paper_cards caches hits, invalidates on Attach PDF upgrade, falls back on 
 
 test('library.chat enforces 30-doc cap, tags Abstract only docs, resolves verified quotes, rejects fabricated pages, and validates inputs', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'reader-library-chat-')); t.after(() => rm(root, { recursive: true, force: true }));
-  let lastChatPayload: Record<string, unknown> | undefined;
-  const ctx = makeLlmCtx(async function* (sys, payload) {
+  let lastChatPayload: Record<string, unknown> | undefined, lastReq: { provider?: string; model?: string; reasoningEffort?: string } | undefined;
+  const ctx = makeLlmCtx(async function* (sys, payload, _sig, req) {
+    lastReq = req;
     if (sys.includes('structured research paper card')) {
       yield { type: 'text-delta', text: JSON.stringify({ problem: 'P', method: 'M', findings: 'F', limitations: 'L', futureWork: 'FW' }) };
       yield { type: 'finish', reason: { kind: 'stop' } }; return;
@@ -96,8 +101,9 @@ test('library.chat enforces 30-doc cap, tags Abstract only docs, resolves verifi
   const u2 = await act('library.createAbstract', { title: 'Undated B', authors: 'Jones et al.', abstract: 'Beta findings.' });
   assert.deepEqual(resolveLibraryCitations('(Jones et al., n.d., Abstract)', [{ doc: u1.doc, pages: [] }, { doc: u2.doc, pages: [] }]), []);
   assert.deepEqual(resolveLibraryCitations('(Jones et al., n.d., Abstract; Jones et al., n.d.-b, Abstract)', [{ doc: u1.doc, pages: [], year: 'n.d.-a' }, { doc: u2.doc, pages: [], year: 'n.d.-b' }]).map(c => c.docId), [u2.doc.id]);
-  await act('library.chat', { docIds: [u1.doc.id, u2.doc.id], question: 'Compare undated?' });
+  await act('library.chat', { docIds: [u1.doc.id, u2.doc.id], question: 'Compare undated?', questionModel: { provider: 'test-provider', model: 'reason-model', reasoningEffort: 'high' } });
   assert.deepEqual(((lastChatPayload?.papers ?? []) as Array<{ citeFormat: string }>).map(p => p.citeFormat), ['(Jones et al., n.d.-a, Abstract)', '(Jones et al., n.d.-b, Abstract)']);
+  assert.deepEqual({ provider: lastReq?.provider, model: lastReq?.model, reasoningEffort: lastReq?.reasoningEffort }, { provider: 'test-provider', model: 'reason-model', reasoningEffort: 'high' });
   for (const bad of [{ docIds: [], question: 'Q' }, { docIds: ['pdf-' + '0'.repeat(64)], question: 'Q' }, { docIds: ['pagedattention'] }, { docIds: ['pagedattention'], preset: 'bogus' }, { docIds: ['pagedattention'], question: 'Q', history: 'bad' }]) {
     await assert.rejects(act('library.chat', bad), hasStatus(400));
   }

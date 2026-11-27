@@ -38,7 +38,9 @@ test('verifyQuote normalizes whitespace/hyphens/ligatures, rejects fabricated qu
   assert.deepEqual(verifyQuote({ quote: 'short', page: 1, sourceKind: 'pdf', pages }), { verified: false, page: 1 });
   assert.deepEqual(verifyQuote({ quote: 'mean body weight reduction of 14.9%', page: 2, sourceKind: 'abstract', abstract: 'Once-weekly semaglutide produced a mean body weight reduction of 14.9% versus placebo.' }), { verified: true, page: null });
   assert.deepEqual(verifyQuote({ quote: 'hallucinated trial endpoint', page: 1, sourceKind: 'abstract', abstract: 'Once-weekly semaglutide trial.' }), { verified: false, page: null });
-  assert.equal(REVIEW_PRESETS.cs_ai.columns.length, 5); assert.equal(REVIEW_PRESETS.pico.columns.length, 5); assert.ok(SUGGESTED_REVIEW_COLUMNS.length >= 4);
+  assert.deepEqual(REVIEW_PRESETS.general.columns.map(c => c.id), ['research_question', 'method', 'key_findings', 'limitations']);
+  assert.equal(REVIEW_PRESETS.cs_ai.columns.length, 5); assert.equal(REVIEW_PRESETS.pico.columns.length, 5); assert.equal(REVIEW_PRESETS.custom.columns.length, 4);
+  assert.ok(SUGGESTED_REVIEW_COLUMNS.length >= 4);
 });
 
 test('screening respects strictCriterion/threshold/manualOverride, syncs doc_meta, and upgrades legacy PR-3 schema', async t => {
@@ -55,11 +57,17 @@ test('screening respects strictCriterion/threshold/manualOverride, syncs doc_met
     } });
   });
   const store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id)), act = createServices({ root, ctx, library, store });
-  assert.equal((await act('review.get', {})).table.preset, 'cs_ai');
+  const initTable = (await act('review.get', {})).table;
+  assert.equal(initTable.preset, 'general');
+  assert.deepEqual(initTable.columns.map(c => c.id), ['research_question', 'method', 'key_findings', 'limitations']);
   const d1 = await act('library.createAbstract', { title: 'Alpha Trial', authors: 'A et al.', year: '2024', abstract: 'A randomized controlled clinical trial of semaglutide 2.4 mg in adults.' });
   const d2 = await act('library.createAbstract', { title: 'Beta Trial', authors: 'B et al.', year: '2024', abstract: 'A randomized controlled clinical trial of placebo comparator only.' });
+  const csSaved = await act('review.saveTable', { preset: 'cs_ai' });
+  assert.equal(csSaved.table.preset, 'cs_ai'); assert.equal(csSaved.table.columns.length, 5);
+  const customKeep = await act('review.saveTable', { preset: 'custom' });
+  assert.equal(customKeep.table.preset, 'custom'); assert.equal(customKeep.table.columns.length, 5);
   const saved = await act('review.saveTable', { preset: 'pico', strictCriterion: true, threshold: 0.6, criteria: [{ id: 'c1', label: 'RCT' }, { id: 'c2', label: 'Semaglutide' }] });
-  assert.equal(saved.table.preset, 'pico');
+  assert.equal(saved.table.preset, 'pico'); assert.equal(saved.table.columns.length, 5);
   const scr = await act('review.screen', { docIds: [d1.doc.id, d2.doc.id] });
   assert.equal(scr.processedDocs, 2);
   assert.ok(store.listDocMeta(d1.doc.id).get(d1.doc.id)?.tags.includes('screen:yes') && store.listDocMeta(d2.doc.id).get(d2.doc.id)?.tags.includes('screen:no'));

@@ -38,7 +38,9 @@ export function apply(ctx) {
           const isPaged = prompt.includes('PagedAttention'), isExt = prompt.includes('Extract structured review-table cells');
           if (isExt && !isPaged) await delay(650, signal);
           const text = isExt ? JSON.stringify({ cells: {
+            research_question: { value: isPaged ? 'Eliminate KV-cache fragmentation' : 'Reduce attention memory I/O', quote: isPaged ? 'The KV block manager also maintains block tables' : 'IO-aware exact attention', page: isPaged ? 6 : null, reasoning: 'Core problem.' },
             method: { value: isPaged ? 'PagedAttention block KV cache' : 'Abstract method', quote: isPaged ? 'The KV block manager also maintains block tables' : 'IO-aware exact attention', page: isPaged ? 6 : null, reasoning: 'Extracted from source.' },
+            key_findings: { value: '2-4x higher serving throughput', quote: 'fabricated unverified quote string', page: isPaged ? 6 : null, reasoning: 'Headline finding.' },
             datasets: { value: 'ShareGPT, Alpaca', quote: 'fabricated unverified quote string', page: isPaged ? 6 : null, reasoning: 'Datasets listed.' },
             key_metrics: { value: '2-4x throughput', quote: '', page: null, reasoning: 'Throughput metric.' },
             main_result: { value: 'Near-zero KV waste', quote: '', page: null, reasoning: 'Main result.' },
