@@ -15,10 +15,10 @@ export const formatCachedAt = (ts?: number): string => { const tm = ts ? new Dat
 let activeDegraded: { wrap: HTMLElement; close: (refocus?: boolean) => void } | null = null;
 const boundDegradedDocs = new WeakSet<object>();
 
-export const dismissDegradedPopover = (): boolean => {
-  if (!activeDegraded) return false;
-  activeDegraded.close(true);
-  return true;
+export const dismissDegradedPopover = (refocus = true): boolean => {
+  const cur = activeDegraded; activeDegraded = null;
+  if (!cur?.wrap.isConnected) return false;
+  cur.close(refocus); return true;
 };
 
 export function createDegradedInfoButton(sources: readonly string[], onOpenAcademicSettings?: () => void): HTMLElement {

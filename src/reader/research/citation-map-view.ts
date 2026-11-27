@@ -15,6 +15,11 @@ const CAP = 40, DIRS: readonly GraphDirection[] = ['earlier', 'later', 'similar'
 const DIR_TEXT: Record<GraphDirection, string> = { earlier: 'Earlier', later: 'Later', similar: 'Similar' };
 const isDir = (v?: string): v is GraphDirection => v === 'earlier' || v === 'later' || v === 'similar';
 const shortTitle = (s: string) => s.length > 26 ? s.slice(0, 25) + '…' : s;
+const shortAuthors = (raw?: string): string => {
+  const s = (raw ?? '').trim(), parts = s ? (s.includes(';') ? s.split(';') : s.split(',')).map(p => p.trim()).filter(Boolean) : [];
+  const first = parts[0] ?? s, head = first.length > 36 ? first.slice(0, 35) + '…' : first;
+  return parts.length > 1 ? `${head} et al.` : head;
+};
 const seedKey = (p: GraphPaper) => p.openAlexId || p.doi || (p.arxivId ? `arXiv:${p.arxivId}` : p.s2Id || p.id);
 
 export function createCitationMapView(): ResearchViewModule {
@@ -55,7 +60,7 @@ export function createCitationMapView(): ResearchViewModule {
     const filtered = docs.filter(d => !q || `${d.paperTitle || d.title} ${d.authors ?? ''} ${d.year ?? ''} ${d.doi ?? ''}`.toLowerCase().includes(q));
     if (!filtered.length) { seedListEl.append(el('p', 'cm-seed-empty', t('No matching library papers.', '未找到匹配的本地文献。'))); return; }
     for (const d of filtered) {
-      const full = d.paperTitle || d.title, meta = [d.authors ?? '', d.year ?? ''].filter(Boolean).join(' · ');
+      const full = d.paperTitle || d.title, meta = [shortAuthors(d.authors), d.year ?? ''].filter(Boolean).join(' · ');
       const opt = mkBtn(`cm-seed-opt${d.id === seedDocId ? ' is-active' : ''}`, '', () => {
         seedDocId = d.id; seedQuery = ''; if (seedInput) seedInput.value = '';
         closeSeedPicker(false); syncSeedPill();
@@ -109,13 +114,26 @@ export function createCitationMapView(): ResearchViewModule {
     if (activeNode && slot) renderActionSlot(slot, activeNode, false);
     if (selectedId === nodeId && activeNode) { const foot = detailEl?.querySelector<HTMLElement>('.cm-detail-foot'); if (foot) renderActionSlot(foot, activeNode, true); }
   };
+  const rememberDoc = (doc: DocumentInfo) => {
+    docs = docs.some(d => d.id === doc.id) ? docs.map(d => d.id === doc.id ? doc : d) : [doc, ...docs];
+    if (!seedDocId) seedDocId = doc.id;
+    if (mounted) { syncSeedPill(); if (seedPickerOpen) renderSeedList(); }
+  };
+  const refreshDocs = () => {
+    void api('library.list', {}).then(({ docs: listed }) => {
+      docs = listed; const liveIds = new Set(listed.map(d => d.id)); reconcileMissing((did, id) => !liveIds.has(did) && !savingIds.has(id));
+      if (!mounted) return;
+      if (!listed.some(d => d.id === seedDocId) && listed[0]) seedDocId = listed[0].id;
+      syncSeedPill(); if (seedPickerOpen) renderSeedList();
+    }).catch(() => undefined);
+  };
   const savePaperInPlace = async (node: GraphNode, saveMode: 'abstract' | 'oa-pdf') => {
     if (savingIds.has(node.id)) return;
     const prevInLib = Boolean(node.inLibrary), prevDocId = node.docId;
     savingIds.add(node.id); updatePaperStatusInPlace(node.id, true, prevDocId);
     try {
       const doc = await saveGraphPaper(node, saveMode, shell);
-      savingIds.delete(node.id); updatePaperStatusInPlace(node.id, true, doc.id);
+      savingIds.delete(node.id); rememberDoc(doc); updatePaperStatusInPlace(node.id, true, doc.id);
     } catch (err) { savingIds.delete(node.id); updatePaperStatusInPlace(node.id, prevInLib, prevDocId); toast(message(err)); }
   };
   const renderDetail = () => {
@@ -164,7 +182,7 @@ export function createCitationMapView(): ResearchViewModule {
       item.addEventListener('focusin', () => syncHover(node.id));
       item.addEventListener('focusout', e => { if (!(e.relatedTarget instanceof Node) || !item.contains(e.relatedTarget)) syncHover(null); });
       item.append(titleBtn, el('p', 'cm-row-meta', byline), act); listEl.append(item); rowEls.set(node.id, item); rowActions.set(node.id, act);
-      shell?.paperFloatBar?.attach(item, { paper: node, onSaved: doc => updatePaperStatusInPlace(node.id, true, doc.id) });
+      shell?.paperFloatBar?.attach(item, { paper: node, onSaved: doc => { rememberDoc(doc); updatePaperStatusInPlace(node.id, true, doc.id); } });
     }
     svg?.render(nodes, edges, mode, authorMode, selectedId); renderDetail();
   };
@@ -252,12 +270,7 @@ export function createCitationMapView(): ResearchViewModule {
       svg = new CitationMapSvg({ onHover: id => { for (const [nid, row] of rowEls) row.classList.toggle('is-highlighted', nid === id); }, onSelect: id => { selectedId = id; if (currentStep()) currentStep()!.selectedId = id; renderDetail(); } });
       graphPane.append(graphBar, svg.root); splitEl.append(left, detailBackdrop, detailEl, graphPane);
       topEl = el('div', 'cm-top'); topEl.append(bar, crumbsEl, degradedEl, mobileTabs); view.append(topEl, splitEl); host.append(view); renderStep();
-      void api('library.list', {}).then(({ docs: listed }) => {
-        docs = listed; const liveIds = new Set(listed.map(d => d.id)); reconcileMissing((did, id) => !liveIds.has(did) && !savingIds.has(id));
-        if (!mounted) return;
-        if (!listed.some(d => d.id === seedDocId) && listed[0]) seedDocId = listed[0].id;
-        syncSeedPill(); if (seedPickerOpen) renderSeedList();
-      }).catch(() => undefined);
+      refreshDocs();
       const explicitSeed = Boolean(startCtx?.seedDocId || startCtx?.query);
       if (explicitSeed || seedDocId) void Promise.resolve().then(() => Promise.resolve()).then(() => {
         if (mounted && !restored && (explicitSeed || !trail.length)) {
@@ -282,7 +295,7 @@ export function createCitationMapView(): ResearchViewModule {
     },
     handleEscape() { if (seedPickerOpen) { closeSeedPicker(true); return true; } if (!selectedId) return false; closeDetail(); return true; },
     onDocumentMutated(docId, deleted) {
-      if (!deleted) return;
+      if (!deleted) { refreshDocs(); return; }
       docs = docs.filter(d => d.id !== docId); if (seedDocId === docId) seedDocId = docs[0]?.id ?? '';
       syncSeedPill(); if (seedPickerOpen) renderSeedList();
       reconcileMissing(did => did === docId);

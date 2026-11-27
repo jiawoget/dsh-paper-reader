@@ -19,12 +19,13 @@ export function rankEarlierByCoCitation(candidates: GraphPaper[], seedCountMap: 
 }
 
 const clamp = (v: number, lo: number, hi: number): number => v < lo ? lo : v > hi ? hi : v;
+const safeCite = (v?: number): number => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
 const pairKey = (a: string, b: string): string => a < b ? `${a}|${b}` : `${b}|${a}`;
 const nodeRankCmp = (a: GraphNode, b: GraphNode): number =>
   Number(Boolean(b.isSeed)) - Number(Boolean(a.isSeed)) || (b.coCitations ?? 0) - (a.coCitations ?? 0) || (b.citationCount ?? 0) - (a.citationCount ?? 0) || (a.year ?? 9999) - (b.year ?? 9999) || a.id.localeCompare(b.id);
 
 export function timelineCitationScale(nodes: readonly GraphNode[]): { maxLog: number; ticks: number[] } {
-  const maxCite = nodes.reduce((m, n) => Math.max(m, Math.max(0, n.citationCount ?? 0)), 0);
+  const maxCite = nodes.reduce((m, n) => Math.max(m, safeCite(n.citationCount)), 0);
   const maxExp = Math.max(1, Math.ceil(Math.log10(Math.max(1, maxCite))));
   const maxLog = Math.max(maxExp, Math.log10(maxCite + 1));
   const step = maxExp > 5 ? 2 : 1, ticks: number[] = [0];
@@ -137,7 +138,7 @@ export function computeCitationMapLayout(
   const gap = Math.max(2, Math.round(4 * scale));
   const items = nodes.map(n => ({
     node: n, x: cx, y: cy, tx: cx, ty: cy,
-    r: Math.max(5, Math.round((n.isSeed ? 13 : 8 + Math.min(6, Math.round(Math.log10(Math.max(0, n.citationCount ?? 0) + 1) * 1.8))) * scale))
+    r: Math.max(5, Math.round((n.isSeed ? 13 : 8 + Math.min(6, Math.round(Math.log10(safeCite(n.citationCount) + 1) * 1.8))) * scale))
   }));
   const idIndex = new Map(items.map((item, idx) => [item.node.id, idx]));
 
@@ -147,8 +148,9 @@ export function computeCitationMapLayout(
     const { maxLog } = timelineCitationScale(nodes);
     items.forEach((item, idx) => {
       const yVal = typeof item.node.year === 'number' && Number.isFinite(item.node.year) ? item.node.year : medY;
-      item.x = item.tx = hiY === loY ? minX + ((idx + 0.5) / items.length) * spanX : minX + ((yVal - loY) / Math.max(1, hiY - loY)) * spanX;
-      const logC = Math.log10(Math.max(0, item.node.citationCount ?? 0) + 1);
+      item.tx = hiY === loY ? minX + ((idx + 0.5) / items.length) * spanX : minX + ((yVal - loY) / Math.max(1, hiY - loY)) * spanX;
+      item.x = clamp(item.tx + (((idx % 5) - 2) * 0.6), minX, maxX);
+      const logC = Math.log10(safeCite(item.node.citationCount) + 1);
       item.y = item.ty = clamp(minY + (1 - logC / maxLog) * spanY, minY, maxY);
     });
   } else {
@@ -172,15 +174,17 @@ export function computeCitationMapLayout(
     .filter((p): p is readonly [number, number, number] => p[0] !== undefined && p[1] !== undefined && p[0] !== p[1]);
   const cell = Math.sqrt((spanX * spanY) / Math.max(1, items.length)), idealEdge = Math.hypot(spanX, spanY) * 0.34;
   const sepX = Math.min(88, Math.max(34, cell * 1.1)), sepY = Math.min(46, Math.max(22, cell * 0.58));
-  for (let step = 0, total = mode === 'network' ? 90 : 70; step < total; step++) {
+  const maxDriftY = Math.min(14, Math.max(8, spanY * 0.045));
+  for (let step = 0, total = mode === 'network' ? 90 : 100; step < total; step++) {
     if (mode === 'network' && step < 40) {
       for (const [ai, bi, w] of edgeSpecs) {
         const a = items[ai], b = items[bi], dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy) || 1;
         const targetDist = idealEdge * (1.2 - 0.4 * w), pull = ((dist - targetDist) / dist) * (0.005 + 0.008 * w);
         a.x += dx * pull; a.y += dy * pull; b.x -= dx * pull; b.y -= dy * pull;
       }
-    } else if (mode === 'timeline' && step < 40) {
-      for (const item of items) { item.x += (item.tx - item.x) * 0.14; item.y += (item.ty - item.y) * 0.14; }
+    } else if (mode === 'timeline') {
+      const xPull = step < 35 ? 0.08 : 0, yPull = step < 55 ? 0.35 : 0;
+      for (const item of items) { item.x += (item.tx - item.x) * xPull; item.y += (item.ty - item.y) * yPull; }
     }
     const labelPass = mode === 'network' && step < 65, repelPass = mode === 'network' && step < 45;
     for (let i = 0; i < items.length; i++) {
@@ -190,8 +194,10 @@ export function computeCitationMapLayout(
         if (dist < 0.001) { const ang = ((i * 31 + j * 17) % 360) * (Math.PI / 180); dx = Math.cos(ang); dy = Math.sin(ang); dist = 1; }
         const minDist = a.r + b.r + gap;
         if (dist < minDist) {
-          const push = (minDist - dist) * 0.52, ux = dx / dist, uy = dy / dist, xw = mode === 'timeline' ? 0.45 : 1;
-          a.x -= ux * push * xw; a.y -= uy * push; b.x += ux * push * xw; b.y += uy * push;
+          const push = (minDist - dist) * 0.52, ux = dx / dist, uy = dy / dist;
+          const hx = mode === 'timeline' ? (Math.abs(dx) < 0.5 ? ((i + j) % 2 ? 0.7 : -0.7) : Math.sign(dx) * Math.max(Math.abs(ux), 0.55)) : ux;
+          const yw = mode === 'timeline' ? 0.12 : 1;
+          a.x -= hx * push; a.y -= uy * push * yw; b.x += hx * push; b.y += uy * push * yw;
         } else {
           if (repelPass && dist < idealEdge * 1.1) {
             const rf = Math.min(4, (cell * cell * 0.16) / (dist * dist + 60)), ux = dx / dist, uy = dy / dist;
@@ -206,7 +212,9 @@ export function computeCitationMapLayout(
     }
     for (const item of items) {
       item.x = clamp(Number.isFinite(item.x) ? item.x : cx, minX, maxX);
-      item.y = clamp(Number.isFinite(item.y) ? item.y : cy, minY, maxY);
+      const yLo = mode === 'timeline' ? Math.max(minY, item.ty - maxDriftY) : minY;
+      const yHi = mode === 'timeline' ? Math.min(maxY, item.ty + maxDriftY) : maxY;
+      item.y = clamp(Number.isFinite(item.y) ? item.y : cy, yLo, yHi);
     }
   }
   return items.map(({ node, x, y, r }) => ({ ...node, x: Number(x.toFixed(2)), y: Number(y.toFixed(2)), radius: r }));

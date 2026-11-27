@@ -196,8 +196,8 @@ test('exploreCitationGraph returns inter-paper citation edges in later mode and 
 });
 
 test('computeCitationMapLayout timeline mode orders Y by log10(citations + 1) with high-cited papers higher', () => {
-  const mk = (id: string, citationCount: number): GraphNode => ({
-    id, title: id, authors: ['A'], firstAuthor: 'A', lastAuthor: 'A', year: 2023, citationCount, source: 'openalex'
+  const mk = (id: string, citationCount: number, year = 2023): GraphNode => ({
+    id, title: id, authors: ['A'], firstAuthor: 'A', lastAuthor: 'A', year, citationCount, source: 'openalex'
   });
   const nodes = [mk('tiny', 5), mk('low', 100), mk('mid', 1000), mk('high', 10000)];
   const laid = computeCitationMapLayout(nodes, [], 'timeline', 800, 480);
@@ -206,4 +206,11 @@ test('computeCitationMapLayout timeline mode orders Y by log10(citations + 1) wi
   assert.ok(byId.get('mid')!.y < byId.get('low')!.y);
   assert.ok(byId.get('low')!.y < byId.get('tiny')!.y);
   assert.deepEqual(timelineCitationScale(nodes).ticks, [0, 10, 100, 1000, 10000]);
+  assert.deepEqual(timelineCitationScale([mk('nan', Number.NaN), mk('inf', Number.POSITIVE_INFINITY)]), { maxLog: 1, ticks: [0, 10] });
+  const cohort = [mk('top30k', 30488, 2024), ...Array.from({ length: 19 }, (_, i) => mk(`c${i}`, 800 + i * 120, 2024)), mk('other23', 1200, 2023), mk('other25', 900, 2025)];
+  const padY = Math.min(44, Math.max(24, 446 * 0.08)), spanY = 446 - padY * 2, { maxLog } = timelineCitationScale(cohort);
+  const yOf = (c: number) => padY + (1 - Math.log10(c + 1) / maxLog) * spanY;
+  const placed = computeCitationMapLayout(cohort, [], 'timeline', 760, 446), pMap = new Map(placed.map(n => [n.id, n]));
+  for (const n of placed) assert.ok(Math.abs(n.y - yOf(n.citationCount ?? 0)) <= 16, `${n.id} drifted: ${n.y} vs ${yOf(n.citationCount ?? 0)}`);
+  assert.ok(pMap.get('top30k')!.y > yOf(100_000) && pMap.get('top30k')!.y < yOf(10_000) && pMap.get('c0')!.y < yOf(100));
 });

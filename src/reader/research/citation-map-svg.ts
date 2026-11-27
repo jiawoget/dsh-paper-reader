@@ -48,7 +48,6 @@ export class CitationMapSvg {
 
   render(nodes: GraphNode[], edges: GraphEdge[], mode: GraphViewMode, authorMode: AuthorLabelMode, selectedId: string | null): void {
     this.authorMode = authorMode; this.hoveredId = null; this.refs.clear(); this.edgeEls.length = 0;
-    this.svg.classList.remove('has-hover');
     this.axisLayer.replaceChildren(); this.edgeLayer.replaceChildren(); this.nodeLayer.replaceChildren();
     const plotH = mode === 'timeline' ? VIEW_H - 34 : VIEW_H;
     const placed = computeCitationMapLayout(nodes, edges, mode, VIEW_W, plotH), byId = new Map(placed.map(n => [n.id, n]));
@@ -121,13 +120,15 @@ export class CitationMapSvg {
 
   private declutterLabels(): void {
     const boxes: [number, number, number, number][] = [];
+    const circles = [...this.refs.values()].map(({ node: n }) => ({ id: n.id, x1: n.x - n.radius - 2, y1: n.y - n.radius - 2, x2: n.x + n.radius + 2, y2: n.y + n.radius + 2 }));
     const ordered = [...this.refs.values()].sort((a, b) => Number(Boolean(b.node.isSeed)) - Number(Boolean(a.node.isSeed)) || Number(Boolean(b.node.inLibrary)) - Number(Boolean(a.node.inLibrary)) || (b.node.citationCount ?? 0) - (a.node.citationCount ?? 0));
     for (const ref of ordered) {
       const w = Math.max(44, (ref.label.textContent?.length ?? 8) * 6.8 + 8), ly = ref.node.y + ref.node.radius + 13;
       const x1 = ref.anchor === 'start' ? ref.node.x + ref.lx : ref.anchor === 'end' ? ref.node.x + ref.lx - w : ref.node.x + ref.lx - w / 2;
-      const hit = !ref.node.isSeed && boxes.some(b => x1 < b[2] && x1 + w > b[0] && ly - 12 < b[3] && ly + 3 > b[1]);
+      const y1 = ly - 12, x2 = x1 + w, y2 = ly + 3;
+      const hit = !ref.node.isSeed && (boxes.some(b => x1 < b[2] && x2 > b[0] && y1 < b[3] && y2 > b[1]) || circles.some(c => c.id !== ref.node.id && x1 < c.x2 && x2 > c.x1 && y1 < c.y2 && y2 > c.y1));
       ref.label.classList.toggle('is-muted', hit);
-      if (!hit) boxes.push([x1, ly - 12, x1 + w, ly + 3]);
+      if (!hit) boxes.push([x1, y1, x2, y2]);
     }
   }
 
@@ -145,7 +146,6 @@ export class CitationMapSvg {
         else if (e.target === nodeId) neighbors.add(e.source);
       }
     }
-    this.svg.classList.toggle('has-hover', active);
     for (const [id, ref] of this.refs) {
       const isSelf = id === nodeId, isNbr = active && !isSelf && neighbors.has(id);
       ref.group.classList.toggle('is-highlighted', isSelf);

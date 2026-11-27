@@ -286,7 +286,7 @@ export function createDeepSearchView(): ResearchViewModule {
       view.append(top, bodyEl, watchlist.backdrop, watchlist.root); host.replaceChildren(view); render(); void watchlist.refresh();
     },
     unmount() {
-      mounted = false; abortActive(); dismissDegradedPopover();
+      mounted = false; abortActive(); dismissDegradedPopover(false);
       if (mode === 'telemetry') { if (tel.candidates.length) { result = buildPartialResult(); mode = 'results'; } else mode = 'scoping'; }
       watchlist?.unmount(); watchlist = undefined; cardSlots.clear();
     },

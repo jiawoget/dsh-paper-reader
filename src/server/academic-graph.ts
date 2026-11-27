@@ -258,6 +258,7 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
       const dois = [...byDoi.keys()].slice(0, 50);
       if (dois.length) {
         const res = await fetchJson('openalex', 'oa:doi-batch:' + [...dois].sort().join('|'), oaUrl('/works', { filter: 'doi:' + dois.join('|'), 'per-page': String(dois.length) }, ctx.settings), ctx, degraded);
+        fromCache = fromCache && Boolean(res?.fromCache);
         for (const row of arrOf(isObject(res?.data) ? res.data.results : undefined)) {
           const w = parseOaWork(row), target = w?.paper.doi ? byDoi.get(w.paper.doi.toLowerCase()) : undefined;
           if (!w || !target) continue;
