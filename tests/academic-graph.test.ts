@@ -218,10 +218,13 @@ test('computeCitationMapLayout timeline mode orders Y by log10(citations + 1) wi
 test('graph.savePaper mode=auto handles arXiv HTML/PDF/404-fallback, OA PDF, DOI lookup, and paywall abstract fallback', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'reader-smart-import-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const store = new ReaderStore(root), pdfBytes = await readFile(path.resolve('public/assets/pagedattention.pdf'));
+  const store = new ReaderStore(root), pdfBytes = await readFile(path.resolve('public/assets/pagedattention.pdf')), fetched: string[] = [];
   const readResource = async (raw: unknown) => {
     const url = new URL(String(raw));
-    if (url.pathname === '/html/2606.06523v3') return { url, type: 'text/html', bytes: Buffer.from('<!doctype html><html><head><title>Lean4Agent</title></head><body><article><h1>Lean4Agent</h1><p>Full arXiv HTML body text.</p></article></body></html>') };
+    fetched.push(url.href);
+    if (url.pathname === '/html/2606.06523v3' || url.pathname === '/html/2606.06524v2' || url.pathname === '/html/2501.00001') {
+      return { url, type: 'text/html', bytes: Buffer.from('<!doctype html><html><head><title>Lean4Agent</title></head><body><article><h1>Lean4Agent</h1><p>Full arXiv HTML body text.</p></article></body></html>') };
+    }
     if (url.pathname === '/pdf/2606.06523v3.pdf' || url.pathname === '/pdf/2309.06180.pdf' || url.pathname === '/open.pdf' || url.pathname === '/oa-discovered.pdf') {
       return { url, type: 'application/pdf', bytes: pdfBytes };
     }
@@ -282,4 +285,25 @@ test('graph.savePaper mode=auto handles arXiv HTML/PDF/404-fallback, OA PDF, DOI
   const payRes = await act('graph.savePaper', { paper: paywalled });
   assert.equal(payRes.mode, 'abstract'); assert.equal(payRes.doc.kind, 'abstract');
   assert.equal(payRes.fallback, 'abstract_only'); assert.equal(payRes.attachPdfSuggested, true);
+
+  fetched.length = 0;
+  const oaArxivUrlPaper: GraphPaper = {
+    id: 'W-AX-OA', title: 'Venue Paper With arXiv OA PDF', authors: ['Linus Torvalds'], firstAuthor: 'Linus Torvalds', lastAuthor: 'Linus Torvalds',
+    year: 2026, doi: '10.1145/3600006.3613165', url: 'https://dl.acm.org/doi/10.1145/3600006.3613165',
+    oaPdfUrl: 'https://arxiv.org/pdf/2606.06524v2.pdf', source: 's2'
+  };
+  const oaArxivRes = await act('graph.savePaper', { paper: oaArxivUrlPaper });
+  assert.equal(oaArxivRes.mode, 'oa-html'); assert.equal(oaArxivRes.doc.kind, 'web');
+  assert.equal(oaArxivRes.doc.url, 'https://arxiv.org/html/2606.06524v2');
+  assert.deepEqual(fetched, ['https://arxiv.org/html/2606.06524v2']);
+
+  fetched.length = 0;
+  const nonArxivVerPaper: GraphPaper = {
+    id: 'W-AX-VER', title: 'Repo URL Ending In Version', authors: ['Ken Thompson'], firstAuthor: 'Ken Thompson', lastAuthor: 'Ken Thompson',
+    year: 2025, arxivId: '2501.00001', url: 'https://github.com/org/model-v9', oaPdfUrl: 'https://arxiv.org/pdf/2501.00001.pdf', source: 'openalex'
+  };
+  const nonArxivVerRes = await act('graph.savePaper', { paper: nonArxivVerPaper });
+  assert.equal(nonArxivVerRes.mode, 'oa-html'); assert.equal(nonArxivVerRes.doc.kind, 'web');
+  assert.equal(nonArxivVerRes.doc.url, 'https://arxiv.org/html/2501.00001');
+  assert.deepEqual(fetched, ['https://arxiv.org/html/2501.00001']);
 });

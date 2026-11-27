@@ -5807,7 +5807,8 @@ function parseOpenAlexOaPdf(bytes) {
 }
 function arxivVersionSuffix(paper) {
   for (const raw of [paper.arxivId, paper.url, paper.oaPdfUrl]) {
-    const m = raw ? /(v\d+)(?:\.pdf)?\/?$/i.exec(raw.trim()) : null;
+    if (!raw || !extractArxivId(raw)) continue;
+    const m = /(v\d+)(?:\.pdf)?\/?$/i.exec(raw.trim());
     if (m) return m[1].toLowerCase();
   }
   return "";
@@ -5876,7 +5877,7 @@ async function saveGraphPaper(input, deps) {
     }
     return tryPdfUrl(pdfUrl, sourceUrl2);
   };
-  const arxivId = extractArxivId(paper.arxivId, doi) ?? extractArxivId(paper.url, paper.oaPdfUrl);
+  const arxivId = extractArxivId(paper.arxivId, doi) ?? extractArxivId(paper.url) ?? extractArxivId(paper.oaPdfUrl);
   if (arxivId) {
     const ver = arxivVersionSuffix(paper);
     const saved = await tryArxiv(ver && !arxivId.endsWith(ver) ? arxivId + ver : arxivId);
