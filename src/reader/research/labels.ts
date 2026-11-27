@@ -39,5 +39,15 @@ export const researchText = {
   saveTopic: () => t('Save', '保存'),
   all: () => t('All', '全部'),
   open: () => t('Open', '打开'),
-  pageBadge: (page: number) => t(`p. ${page}`, `第 ${page} 页`)
+  pageBadge: (page: number) => t(`p. ${page}`, `第 ${page} 页`),
+  importPaper: () => t('Import', '导入'),
+  importSelected: () => t('Import selected', '批量导入'),
+  arxivFormat: () => t('arXiv import format', 'arXiv 导入格式'),
+  arxivHtmlDefault: () => t('HTML (default)', 'HTML（默认）'),
+  arxivHtmlFallback: () => t('arXiv HTML unavailable; imported PDF instead.', '该 arXiv 论文暂无 HTML 版本，已自动导入 PDF。'),
+  importedHtml: () => t('Imported full-text HTML into library.', '已导入全文 HTML 至资料库。'),
+  importedPdf: () => t('Imported PDF into library.', '已导入 PDF 至资料库。'),
+  savedAbstractFallback: () => t('No public full text found — saved abstract. You can attach a PDF anytime.', '未找到公开全文，已保存摘要；可随时手动关联 PDF。'),
+  savedAbstract: () => t('Saved abstract into library.', '已保存摘要至资料库。'),
+  attachPdfAction: () => t('Attach PDF', '附加 PDF')
 };

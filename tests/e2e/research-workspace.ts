@@ -127,14 +127,14 @@ async function run(): Promise<void> {
       const laterP = { id: 'W3', openAlexId: 'W3', title: 'vLLM-Next: Disaggregated Serving', authors: ['Alice Chen', 'Bob Zhang'], firstAuthor: 'Alice Chen', lastAuthor: 'Bob Zhang', year: 2025, venue: 'OSDI', citationCount: 120, source: 'openalex', inLibrary: false, abstract: 'Follow-up serving engine.' };
       const extraRows = Array.from({ length: 8 }, (_, i) => ({ id: `WX${i}`, openAlexId: `WX${i}`, title: `Related Systems Paper ${i + 1}`, authors: [`Author${i} One`, `Senior${i} Last`], firstAuthor: `Author${i} One`, lastAuthor: `Senior${i} Last`, year: 2019 + (i % 5), venue: 'SysML', citationCount: 50 + i, source: 'openalex', inLibrary: false }));
       await page.route('**/api/paper-reader/action', async route => {
-        const body = route.request().postDataJSON() as { op?: string; payload?: { direction?: string } };
+        const body = route.request().postDataJSON() as { op?: string; payload?: Record<string, unknown> };
         if (body.op === 'graph.resolve') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ paper: seedP, degraded: [], fromCache: false }) }); return; }
+        if (body.op === 'graph.savePaper') { assert.equal(body.payload?.mode, 'auto'); await route.continue({ postData: JSON.stringify({ ...body, payload: { ...body.payload, mode: 'abstract' } }) }); return; }
         if (body.op === 'graph.explore') {
           const isLater = body.payload?.direction === 'later';
           const nodes = isLater ? [{ ...discP, isSeed: true }, laterP] : [{ ...seedP, isSeed: true }, discP, ...extraRows];
           const edges = isLater ? [{ source: 'W3', target: 'W2', kind: 'cites' }] : [{ source: 'W1', target: 'W2', kind: 'cites' }];
-          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seeds: [isLater ? discP : seedP], nodes, edges, degraded: isLater ? ['s2'] : [], fromCache: false }) });
-          return;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seeds: [isLater ? discP : seedP], nodes, edges, degraded: isLater ? ['s2'] : [], fromCache: false }) }); return;
         }
         await route.fallback();
       });
@@ -157,7 +157,7 @@ async function run(): Promise<void> {
       await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Last Author', exact: true }).click();
       assert.equal((await ws.locator('.cm-node[data-node-id="W2"] .cm-node-label').textContent())?.trim(), 'Re 2022');
       await ws.locator('.cm-list').evaluate(el => { el.scrollTop = 48; });
-      await ws.locator('.cm-row[data-node-id="W2"] .cm-save-abs').click();
+      await ws.locator('.cm-row[data-node-id="W2"] .cm-import-btn').click();
       await ws.locator('.cm-row[data-node-id="W2"] .cm-open-btn').waitFor({ state: 'visible' });
       assert.equal(await ws.locator('.cm-node[data-node-id="W2"]').getAttribute('data-kind'), 'library');
       assert.ok((await ws.locator('.cm-list').evaluate(el => el.scrollTop)) >= 40);
@@ -214,16 +214,15 @@ async function run(): Promise<void> {
         { topicId: 'T2', topicName: 'Speculative Decoding', totalVolume: 95, recent2yr: 60, prior2yr: 6, growth: 9, lowBase: true, citationHeat: 42.5, localCount: 0, localDocIds: [], cells: mkCells([[2022, 2, 0, true, 10], [2023, 4, 1, true, 20], [2024, 24, 5, true, 40], [2025, 48, 1, false, 55], [2026, 17, null, false, 12]]) }
       ];
       await page.route('**/api/paper-reader/action', async route => {
-        const body = route.request().postDataJSON() as { op?: string; payload?: { query?: string; topicId?: string; year?: number; sort?: string } };
+        const body = route.request().postDataJSON() as { op?: string; payload?: Record<string, unknown> };
+        if (body.op === 'graph.savePaper') { assert.equal(body.payload?.mode, 'auto'); await route.continue({ postData: JSON.stringify({ ...body, payload: { ...body.payload, mode: 'abstract' } }) }); return; }
         if (body.op === 'trends.query') {
           trendsQueryCount++;
-          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: body.payload?.query ?? 'LLM inference', source: 'openalex', windowYears: 5, years: [2022, 2023, 2024, 2025, 2026], ytdYear: 2026, metric: 'volume', sort: 'fastest_growing', blindSpotsOnly: false, topics: ftTopics, degraded: [], fromCache: true, cachedAt: Date.now() }) });
-          return;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: body.payload?.query ?? 'LLM inference', source: 'openalex', windowYears: 5, years: [2022, 2023, 2024, 2025, 2026], ytdYear: 2026, metric: 'volume', sort: 'fastest_growing', blindSpotsOnly: false, topics: ftTopics, degraded: [], fromCache: true, cachedAt: Date.now() }) }); return;
         }
         if (body.op === 'trends.papers') {
           const isLib = body.payload?.sort === 'library', papers = isLib ? [{ ...seedP, localDocId: 'pagedattention', primaryTopicId: 'T1', primaryTopicName: 'KV Cache Compression' }] : [{ ...ftPaper, primaryTopicId: body.payload?.topicId ?? 'T2', primaryTopicName: 'Speculative Decoding' }];
-          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: 'LLM inference', topicId: body.payload?.topicId ?? 'T2', topicName: isLib ? 'KV Cache Compression' : 'Speculative Decoding', year: body.payload?.year ?? 2025, source: 'openalex', sort: body.payload?.sort ?? 'representative', papers, degraded: [], fromCache: false }) });
-          return;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: 'LLM inference', topicId: body.payload?.topicId ?? 'T2', topicName: isLib ? 'KV Cache Compression' : 'Speculative Decoding', year: body.payload?.year ?? 2025, source: 'openalex', sort: body.payload?.sort ?? 'representative', papers, degraded: [], fromCache: false }) }); return;
         }
         await route.fallback();
       });
@@ -248,7 +247,7 @@ async function run(): Promise<void> {
       await ws.locator('.ft-cell[data-topic-id="T2"][data-year="2024"]').focus(); await page.keyboard.press('ArrowRight');
       assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.year), '2025');
       await ws.locator('.ft-cell[data-topic-id="T2"][data-year="2025"]').click(); await ws.locator('.ft-drill').waitFor({ state: 'visible' });
-      await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-save-abs').click();
+      await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-import-btn').click();
       await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-open-btn').waitFor({ state: 'visible' });
       assert.equal((await ws.locator('tr', { hasText: 'Speculative Decoding' }).locator('.ft-lib-btn').innerText()).trim(), '★ 1');
       await ws.locator('.ft-paper-card[data-paper-id="FT1"] .ft-open-btn').click();
@@ -419,11 +418,11 @@ async function run(): Promise<void> {
         if (body.op === 'watchlist.save') { const e = { id: 'wl1', kind: 'topic', label: String(body.payload?.label ?? 'KV Watch'), query: String(body.payload?.query ?? ''), sources: ['openalex'], cursorDate: '2025-01-01', seenKeys: [], unread: [], createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' }; wlEntries.splice(0, wlEntries.length, e); await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entry: e }) }); return; }
         if (body.op === 'watchlist.check') { if (wlEntries[0]) (wlEntries[0] as { unread: unknown[] }).unread = [{ key: 'ds2', paper: dsC2, foundAt: '2025-02-01T00:00:00Z' }]; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entries: wlEntries, checkedCount: 1, newItemsCount: 1, degraded: [] }) }); return; }
         if (body.op === 'watchlist.markRead') { if (wlEntries[0]) (wlEntries[0] as { unread: unknown[] }).unread = []; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ entry: wlEntries[0] }) }); return; }
+        if (body.op === 'graph.savePaper') { assert.equal(body.payload?.mode, 'auto'); await route.continue({ postData: JSON.stringify({ ...body, payload: { ...body.payload, mode: 'abstract' } }) }); return; }
         if (body.op === 'graph.resolve' || body.op === 'graph.explore') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body.op === 'graph.resolve' ? { paper: dsC1, degraded: [], fromCache: false } : { seeds: [dsC1], nodes: [{ ...dsC1, isSeed: true }], edges: [], degraded: [], fromCache: false }) }); return; }
         await route.fallback();
       });
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await ws.locator('.rw-nav-btn[data-view="deep-search"]').click();
+      await page.setViewportSize({ width: 1440, height: 900 }); await ws.locator('.rw-nav-btn[data-view="deep-search"]').click();
       await ws.locator('.ds-query-input').fill('Eliminate KV fragmentation');
       await ws.locator('.ds-clarify-btn').click();
       await ws.locator('.ds-q-card').first().waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-q-card').count(), 2);
@@ -446,7 +445,7 @@ async function run(): Promise<void> {
       assert.ok(await ws.evaluate(() => document.activeElement?.matches('.ds-card[data-rank="1"] .ds-abs-toggle')));
       await ws.locator('.ds-card[data-rank="1"] .ds-sel-check').focus(); await page.keyboard.press('Space');
       assert.ok(await ws.evaluate(() => document.activeElement?.matches('.ds-card[data-rank="1"] .ds-sel-check') && !(document.querySelector('.ds-batch-save-btn') as HTMLButtonElement).disabled));
-      await ws.locator('.ds-card[data-rank="1"] .ds-save-abs').click(); await ws.locator('.ds-card[data-rank="1"] .ds-open-btn').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-batch-save-btn').isDisabled(), true);
+      await ws.locator('.ds-card[data-rank="1"] .ds-import-btn').click(); await ws.locator('.ds-card[data-rank="1"] .ds-open-btn').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.ds-batch-save-btn').isDisabled(), true);
       await ws.locator('.ds-wl-btn').click(); await ws.locator('.wl-drawer').waitFor({ state: 'visible' });
       await ws.locator('.wl-add-input').fill('KV Paging Watch'); await ws.locator('.wl-add-btn').click();
       await ws.locator('.wl-check-one').click(); await ws.locator('.wl-unread-badge').waitFor({ state: 'visible' });

@@ -1,6 +1,8 @@
-import type { DocumentInfo, GraphPaper } from '../../shared/types.js';
+import { extractArxivId } from '../../shared/citation-export.js';
+import type { ArxivFormat, DocumentInfo, GraphPaper, SavePaperMode } from '../../shared/types.js';
 import { api, el, readerLabel as t, toast } from '../ui.js';
 import { researchIcon } from './icons.js';
+import { researchText } from './labels.js';
 import type { ResearchShellContext } from './state.js';
 
 const SRC_NAME: Record<string, string> = { openalex: 'OpenAlex', s2: 'Semantic Scholar', europepmc: 'Europe PMC', arxiv: 'arXiv' };
@@ -71,25 +73,74 @@ export function createDegradedInfoButton(sources: readonly string[], onOpenAcade
   return wrap;
 }
 
+const abstractOnlyDocIds = new Set<string>();
+export const clearAbstractOnly = (docId: string): void => { abstractOnlyDocIds.delete(docId); };
+const isArxivPaper = (paper: GraphPaper): boolean => Boolean(paper.arxivId || extractArxivId(paper.url, paper.doi) || extractArxivId(paper.oaPdfUrl));
+
+export function createArxivFormatToggle(
+  initial: ArxivFormat = 'html',
+  onChange?: (fmt: ArxivFormat) => void
+): { root: HTMLElement; value: () => ArxivFormat; set: (fmt: ArxivFormat) => void } {
+  let cur: ArxivFormat = initial;
+  const root = el('div', 'arxiv-fmt-seg');
+  root.setAttribute('role', 'group');
+  root.ariaLabel = researchText.arxivFormat();
+  const btns: Record<ArxivFormat, HTMLButtonElement> = {
+    html: el('button', 'arxiv-fmt-btn', 'HTML'),
+    pdf: el('button', 'arxiv-fmt-btn', 'PDF')
+  };
+  const sync = () => {
+    for (const k of ['html', 'pdf'] as const) btns[k].setAttribute('aria-pressed', String(cur === k));
+  };
+  for (const k of ['html', 'pdf'] as const) {
+    btns[k].type = 'button'; btns[k].dataset.format = k;
+    btns[k].addEventListener('click', () => { if (cur !== k) { cur = k; sync(); onChange?.(cur); } });
+    root.append(btns[k]);
+  }
+  sync();
+  return { root, value: () => cur, set: fmt => { cur = fmt; sync(); } };
+}
+
 export function renderPaperActions(
   slot: HTMLElement, paper: GraphPaper,
-  opts: { prefix: string; busy: boolean; openLabel: string; onOpen: (docId: string) => void; onSave: (mode: 'abstract' | 'oa-pdf') => void }
+  opts: { prefix: string; busy: boolean; openLabel: string; arxivFormat?: ArxivFormat; onOpen: (docId: string) => void; onSave: (arxivFormat?: ArxivFormat) => void }
 ): void {
   slot.replaceChildren();
   if (paper.inLibrary) {
     const openBtn = mkBtn(`btn ${opts.prefix}-open-btn`, opts.openLabel, () => { if (paper.docId) opts.onOpen(paper.docId); });
     openBtn.disabled = opts.busy || !paper.docId;
     slot.append(el('span', `${opts.prefix}-lib-badge`, t('✓ In Library', '✓ 已在库')), openBtn);
+    if (paper.docId && abstractOnlyDocIds.has(paper.docId)) {
+      const attachBtn = mkBtn(`btn ${opts.prefix}-attach-btn`, researchText.attachPdfAction(), () => { if (paper.docId) opts.onOpen(paper.docId); });
+      attachBtn.disabled = opts.busy;
+      slot.append(attachBtn);
+    }
     return;
   }
-  const saveAbs = mkBtn(`btn ${opts.prefix}-save-abs`, t('+ Save Abstract only', '+ 仅摘要入库'), () => opts.onSave('abstract'));
-  saveAbs.disabled = opts.busy; slot.append(saveAbs);
-  if (paper.oaPdfUrl) { const b = mkBtn(`btn primary ${opts.prefix}-save-pdf`, t('+ Import OA PDF', '+ 拉取 OA PDF'), () => opts.onSave('oa-pdf')); b.disabled = opts.busy; slot.append(b); }
+  const toggle = isArxivPaper(paper) ? createArxivFormatToggle(opts.arxivFormat ?? 'html') : undefined;
+  if (toggle) {
+    for (const b of toggle.root.querySelectorAll<HTMLButtonElement>('button')) b.disabled = opts.busy;
+    slot.append(toggle.root);
+  }
+  const importBtn = mkBtn(`btn primary ${opts.prefix}-import-btn`, researchText.importPaper(), () => opts.onSave(toggle?.value()));
+  importBtn.disabled = opts.busy;
+  slot.append(importBtn);
 }
 
-export async function saveGraphPaper(paper: GraphPaper, saveMode: 'abstract' | 'oa-pdf', shell?: ResearchShellContext): Promise<DocumentInfo> {
-  const topic = shell?.activeTopic(), res = await api('graph.savePaper', { paper, mode: saveMode, ...(topic ? { topicTag: topic } : {}) });
+export async function saveGraphPaper(
+  paper: GraphPaper,
+  opts?: { mode?: SavePaperMode; arxivFormat?: ArxivFormat },
+  shell?: ResearchShellContext
+): Promise<DocumentInfo> {
+  const topic = shell?.activeTopic(), mode = opts?.mode ?? 'auto';
+  const arxivFormat = opts?.arxivFormat ?? (isArxivPaper(paper) ? shell?.arxivFormat?.() : undefined);
+  const res = await api('graph.savePaper', { paper, mode, ...(arxivFormat ? { arxivFormat } : {}), ...(topic ? { topicTag: topic } : {}) });
+  if (res.doc.kind === 'abstract') abstractOnlyDocIds.add(res.doc.id); else abstractOnlyDocIds.delete(res.doc.id);
   shell?.notifyDocumentMutated(res.doc.id, false);
-  toast(saveMode === 'oa-pdf' ? t('Imported OA PDF into library.', '已拉取 OA PDF 入库。') : t('Saved Abstract only into library.', '已仅摘要入库。'));
+  if (res.arxivFallback === 'html-to-pdf') toast(researchText.arxivHtmlFallback());
+  else if (res.attachPdfSuggested) toast(researchText.savedAbstractFallback(), shell ? { label: researchText.attachPdfAction(), run: () => shell.inspectInReader({ docId: res.doc.id, page: 1 }) } : undefined);
+  else if (res.mode === 'oa-html') toast(researchText.importedHtml());
+  else if (res.mode === 'oa-pdf') toast(researchText.importedPdf());
+  else toast(researchText.savedAbstract());
   return res.doc;
 }

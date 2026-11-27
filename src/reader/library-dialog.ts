@@ -6,6 +6,7 @@ import { renderDeviceLibrary } from './library-triage.js';
 import { bindPdfDropTarget } from './pdf-import.js';
 import { researchIcon } from './research/icons.js';
 import { researchText } from './research/labels.js';
+import { createArxivFormatToggle } from './research/paper-intake.js';
 import { settingsDialog } from './settings-dialog.js';
 import { api, bindTablist, button, byId, downloadFile, el, message, modal, readerLabel as t, safeWeb, toast, webPageError, type ReaderPort } from './ui.js';
 import { browseZotero, type ZoteroBrowsePosition } from './zotero-browser.js';
@@ -65,9 +66,14 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
   submit.type = 'submit';
   const urlRow = el('div', 'library-url-row');
   urlRow.append(address, submit);
+  let arxivManual = false;
+  const arxivFmtRow = el('div', 'library-arxiv-fmt');
+  arxivFmtRow.hidden = true;
+  const arxivFmtToggle = createArxivFormatToggle(app.state.settings.arxivFormat ?? 'html', () => { arxivManual = true; });
+  arxivFmtRow.append(el('span', 'library-arxiv-lbl', researchText.arxivFormat()), arxivFmtToggle.root);
   const urlStatus = el('div', 'library-status');
   urlStatus.setAttribute('role', 'status');
-  form.append(field, urlRow, urlStatus);
+  form.append(field, urlRow, arxivFmtRow, urlStatus);
   const openWeb = button(t('Open web page', '打开网页'), () => {
     form.hidden = !form.hidden;
     openWeb.setAttribute('aria-expanded', String(!form.hidden));
@@ -89,7 +95,7 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
     submit.disabled = true;
     urlStatus.textContent = openStaxLocation(raw) ? t('Opening book…','正在打开书籍…') : parsed.kind !== 'url' ? t('Importing paper…', '正在导入论文…') : t('Opening web page…', '正在打开网页…');
     try {
-      const opened = await api('web.open', { url: raw });
+      const opened = await api('web.open', { url: raw, ...(parsed.kind === 'arxiv' ? { arxivFormat: arxivFmtToggle.value() } : {}) });
       if (version === openRequest && !form.hidden) await read(opened);
     } catch (error) {
       if (version !== openRequest || !active()) return;
@@ -97,13 +103,17 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
       urlStatus.replaceChildren(document.createTextNode(webPageError(error) + (fallback ? ' ' : '')), ...(fallback ? [webLink(fallback, t('Open original page', '打开原网页'))] : []));
     } finally { if (version === openRequest) submit.disabled = false; }
   });
-  function clearRequest() { ++openRequest; submit.disabled = false; urlStatus.replaceChildren(); }
-  address.addEventListener('input', () => {
-    clearRequest();
+  function syncArxivRow() {
     const raw = address.value.trim(), parsed = parseAcademicInput(raw);
     submit.textContent = openStaxLocation(raw) ? t('Open book', '打开书籍') : parsed && parsed.kind !== 'url' ? t('Import paper', '导入论文') : t('Read article', '阅读文章');
-  });
-  openWeb.addEventListener('click', clearRequest);
+    const isArxiv = parsed?.kind === 'arxiv';
+    arxivFmtRow.hidden = !isArxiv;
+    if (!isArxiv) arxivManual = false;
+    else if (!arxivManual) arxivFmtToggle.set(parsed.explicitFormat ?? app.state.settings.arxivFormat ?? 'html');
+  }
+  function clearRequest() { ++openRequest; submit.disabled = false; urlStatus.replaceChildren(); }
+  address.addEventListener('input', () => { clearRequest(); syncArxivRow(); });
+  openWeb.addEventListener('click', () => { clearRequest(); arxivManual = false; syncArxivRow(); });
   const openWorkspace = el('button', 'btn library-workspace-btn');
   openWorkspace.type = 'button';
   openWorkspace.append(researchIcon('research', 18), researchText.workspace());

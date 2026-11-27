@@ -173,6 +173,15 @@ svg { flex-shrink: 0; }
 .btn:hover { background: var(--lavender); }
 .btn.primary { background: var(--accent-solid); border-color: var(--accent-solid); color: var(--accent-on-solid); }
 .btn.primary:hover { background: var(--accent-solid-hover); border-color: var(--accent-solid-hover); }
+.arxiv-fmt-seg { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-sunken); }
+.arxiv-fmt-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 24px;
+  padding: 0 8px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; color: var(--muted); white-space: nowrap;
+}
+.arxiv-fmt-btn:hover:not([aria-pressed="true"]) { background: var(--lavender); color: var(--purple); }
+.arxiv-fmt-btn[aria-pressed="true"] { background: var(--paper); color: var(--desk-ink); font-weight: 600; box-shadow: var(--shadow-subtle); }
+.library-arxiv-fmt { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.library-arxiv-lbl { font-size: 12px; font-weight: 500; color: var(--muted); }
 .subtle, .text-btn { font-size: 12px; padding: 4px; color: var(--muted); }
 .text-btn { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; color: var(--purple); }
 .subtle:hover, .text-btn:hover { text-decoration: underline; }
@@ -223,9 +232,10 @@ dialog summary { min-height: 24px; padding-block: 4px; }
   dialog :is(.btn, .text-btn, .subtle) { min-width: 44px; }
   dialog summary { min-height: 44px; padding-block: 11px; }
   dialog a.external { display: inline-flex; align-items: center; min-height: 44px; }
+  .arxiv-fmt-btn { min-width: 44px; min-height: 44px; padding: 8px 12px; }
 }
 @media (prefers-reduced-motion: no-preference) {
-  :root:not([data-theme-switching]) :is(.btn, .icon-btn, .text-btn, .subtle, .source-chip, .doc-row, .tabs [role="tab"]) {
+  :root:not([data-theme-switching]) :is(.btn, .icon-btn, .text-btn, .subtle, .source-chip, .doc-row, .tabs [role="tab"], .arxiv-fmt-btn) {
     transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease;
   }
 }

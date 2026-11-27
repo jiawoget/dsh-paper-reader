@@ -214,3 +214,96 @@ test('computeCitationMapLayout timeline mode orders Y by log10(citations + 1) wi
   for (const n of placed) assert.ok(Math.abs(n.y - yOf(n.citationCount ?? 0)) <= 16, `${n.id} drifted: ${n.y} vs ${yOf(n.citationCount ?? 0)}`);
   assert.ok(pMap.get('top30k')!.y > yOf(100_000) && pMap.get('top30k')!.y < yOf(10_000) && pMap.get('c0')!.y < yOf(100));
 });
+
+test('graph.savePaper mode=auto handles arXiv HTML/PDF/404-fallback, OA PDF, DOI lookup, and paywall abstract fallback', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-smart-import-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ReaderStore(root), pdfBytes = await readFile(path.resolve('public/assets/pagedattention.pdf')), fetched: string[] = [];
+  const readResource = async (raw: unknown) => {
+    const url = new URL(String(raw));
+    fetched.push(url.href);
+    if (url.pathname === '/html/2606.06523v3' || url.pathname === '/html/2606.06524v2' || url.pathname === '/html/2501.00001') {
+      return { url, type: 'text/html', bytes: Buffer.from('<!doctype html><html><head><title>Lean4Agent</title></head><body><article><h1>Lean4Agent</h1><p>Full arXiv HTML body text.</p></article></body></html>') };
+    }
+    if (url.pathname === '/pdf/2606.06523v3.pdf' || url.pathname === '/pdf/2309.06180.pdf' || url.pathname === '/open.pdf' || url.pathname === '/oa-discovered.pdf') {
+      return { url, type: 'application/pdf', bytes: pdfBytes };
+    }
+    if (url.hostname === 'api.openalex.org' && url.pathname.includes('10.1000%2Foa-doi')) {
+      return { url, type: 'application/json', bytes: Buffer.from(JSON.stringify({ best_oa_location: { pdf_url: 'https://repo.example/oa-discovered.pdf' } })) };
+    }
+    if (url.pathname === '/10.1000/paywalled') {
+      return { url, type: 'text/html', bytes: Buffer.from('<article><h1>Paywalled Paper</h1><p>Buy article or subscribe to read full text.</p></article>') };
+    }
+    throw Object.assign(new Error('HTTP 404'), { status: 502 });
+  };
+  const act = createServices({ root, library: new Library(root, readResource, id => store.deleteDocument(id)), store, readResource });
+
+  assert.equal((await act('state')).settings.arxivFormat, 'html');
+  await assert.rejects(act('settings.save', { arxivFormat: 'epub' }), { status: 400 });
+  const prefPdf = await act('settings.save', { arxivFormat: 'pdf' });
+  assert.equal(prefPdf.settings.arxivFormat, 'pdf');
+  assert.equal((await act('state')).settings.arxivFormat, 'pdf');
+  await act('settings.save', { arxivFormat: 'html' });
+
+  const arxivPaper: GraphPaper = {
+    id: 'W-AX1', title: 'Lean4Agent: Formal Modeling', authors: ['Jane Doe', 'John Roe'], firstAuthor: 'Jane Doe', lastAuthor: 'John Roe',
+    year: 2026, venue: 'arXiv', arxivId: '2606.06523v3', oaPdfUrl: 'https://arxiv.org/pdf/2606.06523v3.pdf',
+    url: 'https://arxiv.org/abs/2606.06523v3', abstract: 'Formal workflow verification.', source: 'arxiv'
+  };
+  const axHtml = await act('graph.savePaper', { paper: arxivPaper });
+  assert.equal(axHtml.mode, 'oa-html'); assert.equal(axHtml.doc.kind, 'web'); assert.equal(axHtml.arxivFallback, undefined);
+  assert.equal(axHtml.doc.authors, 'Jane Doe; John Roe'); assert.equal(axHtml.doc.year, '2026'); assert.equal(axHtml.doc.url, 'https://arxiv.org/html/2606.06523v3');
+
+  const axPdf = await act('graph.savePaper', { paper: arxivPaper, arxivFormat: 'pdf' });
+  assert.equal(axPdf.mode, 'oa-pdf'); assert.equal(axPdf.doc.kind, 'pdf'); assert.equal(axPdf.arxivFallback, undefined);
+
+  const oldArxiv: GraphPaper = {
+    id: 'W-AX2', title: 'Older Pre-LaTeXML Paper', authors: ['Woosuk Kwon'], firstAuthor: 'Woosuk Kwon', lastAuthor: 'Woosuk Kwon',
+    year: 2023, arxivId: '2309.06180', oaPdfUrl: 'https://arxiv.org/pdf/2309.06180.pdf', source: 'openalex'
+  };
+  const axFallback = await act('graph.savePaper', { paper: oldArxiv });
+  assert.equal(axFallback.mode, 'oa-pdf'); assert.equal(axFallback.doc.kind, 'pdf'); assert.equal(axFallback.arxivFallback, 'html-to-pdf');
+
+  const directOa: GraphPaper = {
+    id: 'W-OA1', title: 'Direct OA Full Text', authors: ['Ada Lovelace'], firstAuthor: 'Ada Lovelace', lastAuthor: 'Ada Lovelace',
+    year: 2024, venue: 'ICML', oaPdfUrl: 'https://repo.example/open.pdf', source: 'openalex'
+  };
+  const oaRes = await act('graph.savePaper', { paper: directOa });
+  assert.equal(oaRes.mode, 'oa-pdf'); assert.equal(oaRes.doc.kind, 'pdf'); assert.equal(oaRes.attachPdfSuggested, undefined);
+
+  const doiOa: GraphPaper = {
+    id: 'W-DOI1', title: 'DOI Discovered OA Paper', authors: ['Grace Hopper'], firstAuthor: 'Grace Hopper', lastAuthor: 'Grace Hopper',
+    year: 2025, doi: '10.1000/oa-doi', source: 'openalex'
+  };
+  const doiRes = await act('graph.savePaper', { paper: doiOa });
+  assert.equal(doiRes.mode, 'oa-pdf'); assert.equal(doiRes.doc.kind, 'pdf'); assert.equal(doiRes.attachPdfSuggested, undefined);
+
+  const paywalled: GraphPaper = {
+    id: 'W-PAY1', title: 'Paywalled Journal Paper', authors: ['Alan Turing'], firstAuthor: 'Alan Turing', lastAuthor: 'Alan Turing',
+    year: 2024, venue: 'Closed Journal', doi: '10.1000/paywalled', abstract: 'Closed-access study abstract.', source: 'openalex'
+  };
+  const payRes = await act('graph.savePaper', { paper: paywalled });
+  assert.equal(payRes.mode, 'abstract'); assert.equal(payRes.doc.kind, 'abstract');
+  assert.equal(payRes.fallback, 'abstract_only'); assert.equal(payRes.attachPdfSuggested, true);
+
+  fetched.length = 0;
+  const oaArxivUrlPaper: GraphPaper = {
+    id: 'W-AX-OA', title: 'Venue Paper With arXiv OA PDF', authors: ['Linus Torvalds'], firstAuthor: 'Linus Torvalds', lastAuthor: 'Linus Torvalds',
+    year: 2026, doi: '10.1145/3600006.3613165', url: 'https://dl.acm.org/doi/10.1145/3600006.3613165',
+    oaPdfUrl: 'https://arxiv.org/pdf/2606.06524v2.pdf', source: 's2'
+  };
+  const oaArxivRes = await act('graph.savePaper', { paper: oaArxivUrlPaper });
+  assert.equal(oaArxivRes.mode, 'oa-html'); assert.equal(oaArxivRes.doc.kind, 'web');
+  assert.equal(oaArxivRes.doc.url, 'https://arxiv.org/html/2606.06524v2');
+  assert.deepEqual(fetched, ['https://arxiv.org/html/2606.06524v2']);
+
+  fetched.length = 0;
+  const nonArxivVerPaper: GraphPaper = {
+    id: 'W-AX-VER', title: 'Repo URL Ending In Version', authors: ['Ken Thompson'], firstAuthor: 'Ken Thompson', lastAuthor: 'Ken Thompson',
+    year: 2025, arxivId: '2501.00001', url: 'https://github.com/org/model-v9', oaPdfUrl: 'https://arxiv.org/pdf/2501.00001.pdf', source: 'openalex'
+  };
+  const nonArxivVerRes = await act('graph.savePaper', { paper: nonArxivVerPaper });
+  assert.equal(nonArxivVerRes.mode, 'oa-html'); assert.equal(nonArxivVerRes.doc.kind, 'web');
+  assert.equal(nonArxivVerRes.doc.url, 'https://arxiv.org/html/2501.00001');
+  assert.deepEqual(fetched, ['https://arxiv.org/html/2501.00001']);
+});

@@ -4,11 +4,7 @@ import { extractArxivId } from '../shared/citation-export.js';
 import { buildCitationGraphEdges, rankEarlierByCoCitation, reconstructInvertedAbstract } from '../shared/graph-layout.js';
 import type { DocumentInfo, GraphDirection, GraphEdge, GraphExploreResult, GraphNode, GraphPaper, GraphSource } from '../shared/types.js';
 import { articleUrl } from '../shared/web-article.js';
-import { abstractDocId } from './abstract-library.js';
-import { isPdfBytes, type ResourceReader } from './academic-intake.js';
-import type { Library } from './library.js';
-import type { ReaderStore } from './reader-store.js';
-import { getGraphCache, replaceDocPages, setGraphCache } from './research-store.js';
+import { getGraphCache, setGraphCache } from './research-store.js';
 import { isObject, ServiceError, single, type Input, type PrivateSettings } from './service-types.js';
 
 export interface GraphContext {
@@ -280,27 +276,4 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
 export function readGraphPaperInput(raw: Input): GraphPaper {
   const title = single(raw.title, 'paper title', 250, true), authors = arrOf(raw.authors).map(a => str(a) ?? '').filter(Boolean).slice(0, 100);
   return makePaper({ id: str(raw.id), title, authors, year: num(raw.year), venue: str(raw.venue), doi: cleanDoi(raw.doi), arxivId: extractArxivId(str(raw.arxivId)), pmid: cleanPmid(raw.pmid), openAlexId: shortOaId(raw.openAlexId), s2Id: str(raw.s2Id), abstract: str(raw.abstract), citationCount: num(raw.citationCount), oaPdfUrl: str(raw.oaPdfUrl), url: str(raw.url), source: raw.source === 's2' || raw.source === 'europepmc' || raw.source === 'arxiv' ? raw.source : 'openalex' });
-}
-export async function saveGraphPaper(
-  input: { paper: GraphPaper; mode: 'abstract' | 'oa-pdf'; topicTag?: string },
-  deps: { library: Library; store: ReaderStore; readResource: ResourceReader; indexDoc: (doc: DocumentInfo, force?: boolean) => Promise<number> }
-): Promise<{ doc: DocumentInfo; upgraded?: boolean; mode: 'abstract' | 'oa-pdf' }> {
-  const { paper, mode } = input, title = single(paper.title, 'paper title', 250, true), topicTag = input.topicTag ? single(input.topicTag, 'topic tag', 40) : '';
-  const meta = { paperTitle: title, authors: paper.authors.filter(Boolean).join('; ') || undefined, venue: paper.venue, year: paper.year ? String(paper.year) : undefined, doi: cleanDoi(paper.doi), abstract: paper.abstract };
-  const applyTag = (doc: DocumentInfo): DocumentInfo => { const prev = deps.store.listDocMeta(doc.id).get(doc.id); return !topicTag ? (prev ? { ...doc, meta: prev } : doc) : { ...doc, meta: deps.store.updateDocTriage({ docId: doc.id, tags: [...new Set([...(prev?.tags ?? []), topicTag])].slice(0, 50) }) }; };
-  if (mode === 'abstract') { const doc = await deps.library.createAbstract({ title, url: paper.url, ...meta }); await deps.indexDoc(doc, doc.kind === 'abstract').catch(() => 0); return { doc: applyTag(doc), mode }; }
-  const pdfUrl = paper.oaPdfUrl ?? (paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}.pdf` : undefined);
-  if (!pdfUrl) throw new ServiceError(400, 'No open-access PDF URL is available for this paper.');
-  const res = await deps.readResource(pdfUrl, 'document');
-  if (!isPdfBytes(res.bytes)) throw new ServiceError(415, 'The open-access link did not return a valid PDF.');
-  const docs = await deps.library.list(), absId = abstractDocId({ title, url: paper.url, ...meta }), matchedId = attachLibraryMatch(paper, docs).docId;
-  const existing = docs.find(d => d.id === absId) ?? (matchedId ? docs.find(d => d.id === matchedId) : undefined);
-  if (existing?.kind === 'abstract') {
-    const { doc, pages } = await deps.library.attachPdf(existing.id, res.bytes);
-    if (pages.length && deps.library.hasSync(doc.id)) deps.store.withDb(true, db => replaceDocPages(db, doc.id, pages));
-    return { doc: applyTag(doc), upgraded: true, mode };
-  }
-  const doc = await deps.library.importPdf(title, res.bytes, paper.url ?? pdfUrl, meta);
-  await deps.indexDoc(doc, true).catch(() => 0);
-  return { doc: applyTag(doc), upgraded: false, mode };
 }

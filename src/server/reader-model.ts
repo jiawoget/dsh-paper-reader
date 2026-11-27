@@ -138,7 +138,7 @@ export class ReaderModel {
       vaultPath: settings.vaultPath, zoteroLibraryId: settings.zoteroLibraryId,
       zoteroLibraryType: settings.zoteroLibraryType, hasZoteroKey: Boolean(settings.zoteroApiKey), zoteroMode: zoteroModeFor(settings),
       openAlexEmail: settings.openAlexEmail || '', hasOpenAlexApiKey: Boolean(settings.openAlexApiKey),
-      hasSemanticScholarApiKey: Boolean(settings.semanticScholarApiKey), hasNcbiApiKey: Boolean(settings.ncbiApiKey)
+      hasSemanticScholarApiKey: Boolean(settings.semanticScholarApiKey), hasNcbiApiKey: Boolean(settings.ncbiApiKey), arxivFormat: settings.arxivFormat ?? 'html'
     };
   }
   async #native(route: NativeRoute, system: string, serialized: string, region?: RegionCompletion, streamOptions?: StreamOptions): Promise<string> {

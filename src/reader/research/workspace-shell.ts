@@ -2,6 +2,7 @@ import { byId, el, message, toast } from '../ui.js';
 import { researchIcon } from './icons.js';
 import { RESEARCH_VIEWS, researchText, researchViewMeta, researchViewName, type ResearchViewId } from './labels.js';
 import { createWorkspaceFloatCallbacks, PaperFloatBar } from './paper-float-bar.js';
+import { clearAbstractOnly } from './paper-intake.js';
 import type { InspectTarget, ResearchOpenContext, ResearchShellContext, ResearchViewModule, ResearchWorkspaceHost, ReturnAnchor, WorkspaceSnapshot } from './state.js';
 
 const COMPACT_BP = 1200;
@@ -83,7 +84,7 @@ export class ResearchWorkspace {
   registerView(mod: ResearchViewModule): void { this.modules.set(mod.id, mod); }
   isOpen(): boolean { return this.opened; }
   notifyDocumentMutated(docId: string, deleted = false): void {
-    if (deleted && this.returnAnchor?.doc === docId) this.returnAnchor = undefined;
+    if (deleted) { clearAbstractOnly(docId); if (this.returnAnchor?.doc === docId) this.returnAnchor = undefined; }
     this.activeModule?.onDocumentMutated?.(docId, deleted);
   }
   open(view?: ResearchViewId, ctx?: ResearchOpenContext): void {
@@ -167,7 +168,7 @@ export class ResearchWorkspace {
       activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
       openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
       inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted),
-      refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar, openSettings: tab => this.host.openSettings?.(tab)
+      refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar, openSettings: tab => this.host.openSettings?.(tab), arxivFormat: () => this.host.arxivFormat?.() ?? 'html'
     };
     this.shellCtx = ctx;
     void Promise.resolve(mod.mount(this.main, ctx)).then(() => {

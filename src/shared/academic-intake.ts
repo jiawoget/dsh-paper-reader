@@ -1,14 +1,20 @@
 import { extractArxivId } from './citation-export.js';
+import type { ArxivFormat } from './types.js';
 
 export type AcademicTarget =
-  | { kind: 'arxiv'; id: string; versionedId: string; absUrl: string; pdfUrl: string }
+  | { kind: 'arxiv'; id: string; versionedId: string; htmlUrl: string; absUrl: string; pdfUrl: string; explicitFormat?: ArxivFormat }
   | { kind: 'doi'; doi: string; url: string }
   | { kind: 'url'; url: string };
 
-const ARXIV_URL_RE = /^\/(?:abs|pdf)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
+const ARXIV_URL_RE = /^\/(abs|pdf|html)\/((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?)(?:\.pdf)?\/?$/i;
 const DOI_RE = /^10\.\d{4,9}\/[^\s<>"]+$/i;
-const arxiv = (id: string, versionedId: string): AcademicTarget =>
-  ({ kind: 'arxiv', id, versionedId, absUrl: 'https://arxiv.org/abs/' + versionedId, pdfUrl: 'https://arxiv.org/pdf/' + versionedId + '.pdf' });
+const arxiv = (id: string, versionedId: string, explicitFormat?: ArxivFormat): AcademicTarget => ({
+  kind: 'arxiv', id, versionedId,
+  htmlUrl: 'https://arxiv.org/html/' + versionedId,
+  absUrl: 'https://arxiv.org/abs/' + versionedId,
+  pdfUrl: 'https://arxiv.org/pdf/' + versionedId + '.pdf',
+  ...(explicitFormat ? { explicitFormat } : {})
+});
 
 function doiTarget(raw: string): AcademicTarget | null {
   let decoded = raw;
@@ -29,7 +35,10 @@ export function parseAcademicInput(raw: unknown): AcademicTarget | null {
     if (!url || url.username || url.password) return null;
     if (/(?:^|\.)arxiv\.org$/i.test(url.hostname)) {
       const m = ARXIV_URL_RE.exec(url.pathname);
-      return m ? arxiv(extractArxivId(url.href) ?? m[1].toLowerCase().replace(/v\d+$/, ''), m[1].toLowerCase()) : { kind: 'url', url: url.href };
+      if (!m) return { kind: 'url', url: url.href };
+      const seg = m[1].toLowerCase(), versionedId = m[2].toLowerCase();
+      const fmt: ArxivFormat | undefined = seg === 'pdf' ? 'pdf' : seg === 'html' ? 'html' : undefined;
+      return arxiv(extractArxivId(url.href) ?? versionedId.replace(/v\d+$/, ''), versionedId, fmt);
     }
     if (/^(?:dx\.)?doi\.org$/i.test(url.hostname)) {
       const id = extractArxivId(url.href);

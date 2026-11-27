@@ -121,12 +121,12 @@ export function createCitationsView(): ResearchViewModule {
   const renderExternalActions = (slot: HTMLElement, stmt: CitationStatement) => {
     const paper = toGraphPaper(stmt);
     renderPaperActions(slot, paper, {
-      prefix: 'cit', busy: savingKeys.has(stmt.citingKey), openLabel: researchText.open(),
+      prefix: 'cit', busy: savingKeys.has(stmt.citingKey), openLabel: researchText.open(), arxivFormat: shell?.arxivFormat?.(),
       onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); },
-      onSave: saveMode => {
+      onSave: arxivFormat => {
         if (savingKeys.has(stmt.citingKey)) return;
         savingKeys.add(stmt.citingKey); renderExternalActions(slot, stmt);
-        void saveGraphPaper(paper, saveMode, shell).then(doc => {
+        void saveGraphPaper(paper, { mode: 'auto', arxivFormat }, shell).then(doc => {
           savingKeys.delete(stmt.citingKey); savedMap.set(stmt.citingKey, doc.id);
           if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs];
           if (mounted) { syncDocOptions(); syncExternalSlots(); }

@@ -1,9 +1,9 @@
 import type { DeepSearchCandidate, DeepSearchProgressEvent, DeepSearchQuestion, DeepSearchResult, DeepSearchRoundMetric, DeepSearchStage } from '../../shared/deep-search-types.js';
-import type { GraphPaper } from '../../shared/types.js';
+import type { ArxivFormat, GraphPaper } from '../../shared/types.js';
 import { answerMarkdown } from '../answer-markdown.js';
 import { api, apiStream, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { infoTip } from './icons.js';
-import { researchViewName } from './labels.js';
+import { researchText, researchViewName } from './labels.js';
 import { createDegradedInfoButton, dismissDegradedPopover, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
 import type { ResearchOpenContext, ResearchShellContext, ResearchViewModule } from './state.js';
 import { WatchlistDrawer } from './watchlist-drawer.js';
@@ -83,11 +83,11 @@ export function createDeepSearchView(): ResearchViewModule {
     }
     syncBatchSaveBtn();
   };
-  const renderCardSlot = (slot: HTMLElement, cand: DeepSearchCandidate) => renderPaperActions(slot, cand, { prefix: 'ds', busy: savingIds.has(cand.id), openLabel: t('Open in Reader', '打开精读'), onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: saveMode => { void saveCandidateInPlace(cand, saveMode); } });
-  const saveCandidateInPlace = async (cand: DeepSearchCandidate, saveMode: 'abstract' | 'oa-pdf'): Promise<string | undefined> => {
+  const renderCardSlot = (slot: HTMLElement, cand: DeepSearchCandidate) => renderPaperActions(slot, cand, { prefix: 'ds', busy: savingIds.has(cand.id), openLabel: t('Open in Reader', '打开精读'), arxivFormat: shell?.arxivFormat?.(), onOpen: docId => { void shell?.inspectInReader({ docId, page: 1 }).catch(e => toast(message(e))); }, onSave: arxivFormat => { void saveCandidateInPlace(cand, arxivFormat); } });
+  const saveCandidateInPlace = async (cand: DeepSearchCandidate, arxivFormat?: ArxivFormat): Promise<string | undefined> => {
     if (savingIds.has(cand.id)) return cand.docId;
     const prevIn = Boolean(cand.inLibrary), prevDoc = cand.docId; savingIds.add(cand.id); syncCandidateInLibrary(cand.id, true, prevDoc);
-    try { const doc = await saveGraphPaper(cand, saveMode, shell); savingIds.delete(cand.id); syncCandidateInLibrary(cand.id, true, doc.id); watchlist?.syncPaperInLibrary(cand.id, true, doc.id); return doc.id; }
+    try { const doc = await saveGraphPaper(cand, { mode: 'auto', arxivFormat }, shell); savingIds.delete(cand.id); syncCandidateInLibrary(cand.id, true, doc.id); watchlist?.syncPaperInLibrary(cand.id, true, doc.id); return doc.id; }
     catch (err) { savingIds.delete(cand.id); syncCandidateInLibrary(cand.id, prevIn, prevDoc); toast(message(err)); return undefined; }
   };
   const runClarify = async () => {
@@ -129,7 +129,7 @@ export function createDeepSearchView(): ResearchViewModule {
       const chosen = selectedIds.size ? result.candidates.filter(c => selectedIds.has(c.id)) : result.candidates.slice(0, 5), topic = shell.activeTopic();
       const docs = topic ? (await api('library.list', {}).catch(() => ({ docs: [] }))).docs : [], byId = new Map(docs.map(d => [d.id, d]));
       for (const c of chosen) {
-        const wasIn = Boolean(c.inLibrary), docId = wasIn ? c.docId : await saveCandidateInPlace(c, 'abstract');
+        const wasIn = Boolean(c.inLibrary), docId = wasIn ? c.docId : await saveCandidateInPlace(c);
         if (docId && wasIn && topic) { const tags = byId.get(docId)?.meta?.tags ?? []; if (!tags.includes(topic)) await api('library.triage', { docId, tags: [...tags, topic] }).catch(() => undefined); }
       }
       if (mounted) shell.openView('review-table');
@@ -231,11 +231,11 @@ export function createDeepSearchView(): ResearchViewModule {
     selAllIn.type = 'checkbox'; selAllIn.checked = visible.length > 0 && visible.every(x => selectedIds.has(x.cand.id)); selAllIn.indeterminate = !selAllIn.checked && visible.some(x => selectedIds.has(x.cand.id));
     selAllIn.addEventListener('change', () => { for (const x of visible) if (selAllIn.checked) selectedIds.add(x.cand.id); else selectedIds.delete(x.cand.id); renderResults('.ds-batch-bar .ds-sel-check'); });
     selAllLbl.append(selAllIn, el('span', 'ds-sel-count', t(`${selectedIds.size} selected`, `已选 ${selectedIds.size} 篇`)));
-    const batchSave = mkBtn('btn ds-batch-save-btn', t('Save selected Abstract only', '批量仅摘要入库'), () => {
+    const batchSave = mkBtn('btn ds-batch-save-btn', researchText.importSelected(), () => {
       if (batchSaving || !result) return;
       const toSave = result.candidates.filter(c => selectedIds.has(c.id) && !c.inLibrary); if (!toSave.length) return;
       batchSaving = true; batchSave.disabled = true;
-      void (async () => { try { for (const c of toSave) if (!c.inLibrary) await saveCandidateInPlace(c, 'abstract'); } finally { batchSaving = false; if (mounted && mode === 'results') renderResults(); } })();
+      void (async () => { try { for (const c of toSave) if (!c.inLibrary) await saveCandidateInPlace(c); } finally { batchSaving = false; if (mounted && mode === 'results') renderResults(); } })();
     });
     batchSave.disabled = batchSaving || !res.candidates.some(c => selectedIds.has(c.id) && !c.inLibrary);
     const toRev = mkBtn('btn primary ds-to-review-btn', t('Send to Review Table', '送入文献筛选与提取'), () => { void sendToReviewTable(); }); toRev.disabled = sendingReview;

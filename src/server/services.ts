@@ -1,7 +1,8 @@
 import type { DocPageHit, DocumentInfo, GraphDirection } from '../shared/types.js';
 import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
-import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, saveGraphPaper, type GraphContext } from './academic-graph.js';
+import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from './academic-graph.js';
+import { saveGraphPaper } from './paper-save.js';
 import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
 import { ensurePaperCards, runLibraryChat } from './library-chat.js';
 import { exportReviewTable, getReviewTable, runReviewExtraction, runReviewScreening, saveReviewTable, setReviewCell } from './review-table.js';
@@ -18,7 +19,7 @@ import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
 import { deleteTopic, hasDocPages, listTopics, replaceDocPages, saveTopic, searchDocPagesFts } from './research-store.js';
 import { hostAttachments } from './region-image.js';
-import { inputObject, isObject, mergeSettings, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, type Input, type ServiceResults } from './service-types.js';
+import { inputObject, isObject, mergeSettings, readArxivFormat, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, type Input, type ServiceResults } from './service-types.js';
 import { openWebArticle } from './web-article.js';
 import { ZoteroLibrary } from './zotero.js';
 import { Library } from './library.js';
@@ -171,10 +172,12 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       }, graphCtx(await documents.list(), options?.signal));
     },
     'graph.savePaper': async input => {
-      if (input.mode !== 'abstract' && input.mode !== 'oa-pdf') throw new ServiceError(400, 'Choose abstract or oa-pdf.');
+      const mode = input.mode === undefined ? 'auto' : input.mode === 'oa_pdf' ? 'oa-pdf' : input.mode;
+      if (mode !== 'auto' && mode !== 'abstract' && mode !== 'oa-pdf') throw new ServiceError(400, 'Choose auto, abstract, or oa-pdf.');
       if (!isObject(input.paper)) throw new ServiceError(400, 'Invalid paper payload.');
       const topicTag = input.topicTag === undefined ? undefined : single(input.topicTag, 'topic tag', 40);
-      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode: input.mode, topicTag }, { library: documents, store: database, readResource, indexDoc });
+      const arxivFormat = input.arxivFormat === undefined ? undefined : readArxivFormat(input.arxivFormat);
+      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode, arxivFormat, topicTag }, { library: documents, store: database, readResource, indexDoc, settings: database.settings() });
     },
     'trends.query': async (input, options) => queryFieldTrends(readTrendQueryInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
     'trends.papers': async (input, options) => queryTrendPapers(readTrendPapersInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
@@ -197,7 +200,12 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'citations.summary': input => summarizeCitations({ store: database, library: documents }, input),
     'citations.reclassify': input => reclassifyCitation({ store: database }, input),
     'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
-    'web.open': async input => { const opened = await openWebArticle(documents, input.url, readResource); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
+    'web.open': async input => {
+      const arxivFormat = input.arxivFormat === undefined ? undefined : readArxivFormat(input.arxivFormat);
+      const opened = await openWebArticle(documents, input.url, readResource, { arxivFormat, defaultArxivFormat: database.settings().arxivFormat });
+      await indexDoc(opened.doc, true).catch(() => 0);
+      return opened;
+    },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
     'translation.get': async input => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
     'translation.page': async input => {
