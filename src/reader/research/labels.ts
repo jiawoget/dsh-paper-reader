@@ -49,5 +49,16 @@ export const researchText = {
   importedPdf: () => t('Imported PDF into library.', '已导入 PDF 至资料库。'),
   savedAbstractFallback: () => t('No public full text found — saved abstract. You can attach a PDF anytime.', '未找到公开全文，已保存摘要；可随时手动关联 PDF。'),
   savedAbstract: () => t('Saved abstract into library.', '已保存摘要至资料库。'),
-  attachPdfAction: () => t('Attach PDF', '附加 PDF')
+  attachPdfAction: () => t('Attach PDF', '附加 PDF'),
+  chartView: () => t('Chart', '趋势图'),
+  matrixView: () => t('Matrix', '热力表'),
+  myLibrary: () => t('My Library', '我的文库'),
+  blindSpot: () => t('Blind spot', '盲区'),
+  trendsGuide: () => t(
+    'Compare publication volume, YoY growth, citation heat, and library blind spots across years. Dashed tail marks partial YTD data; n < 10 low-base growth is muted.',
+    '跨年份对比发文量、同比增速、引文热度与本地文库盲区；末端虚线表示当年截至目前 (YTD) 数据，低基数 (n < 10) 增速淡显。'
+  ),
+  ytdGrowthNote: () => t('Partial YTD year (YoY N/A)', '当年为截至目前 (YTD) 数据，暂无同比增速'),
+  lowBaseTag: () => t('Low base (n < 10)', '低基数 (n < 10)'),
+  resetSeries: () => t('Reset series', '显示全部曲线')
 };
