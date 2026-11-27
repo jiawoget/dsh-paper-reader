@@ -34,6 +34,7 @@ export interface ReaderPort {
   exchangeDeleted?(thread: string, requestId: string): void;
   regionDiscussionClosed?(explicit: boolean): void;
   openResearchWorkspace?(view?: ResearchViewId, ctx?: ResearchOpenContext): void;
+  openPaperChat?(): void;
   notebook?: NotebookSnapshot;
   notebookError?: string;
 }
@@ -79,7 +80,7 @@ export type Glyph = keyof typeof paths;
 export function icon(name: Glyph, size = 16): SVGSVGElement {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns,'svg');
-  for (const [key,val] of Object.entries({width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':name === 'more'?3.5:1.65,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':true})) svg.setAttribute(key,String(val));
+  for (const [key,val] of Object.entries({width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':name === 'more'?3.5:1.5,'stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':true})) svg.setAttribute(key,String(val));
   const line=document.createElementNS(ns,'path'); line.setAttribute('d',paths[name]); svg.append(line); return svg;
 }
 const localizedErrors: Record<string, string> = {

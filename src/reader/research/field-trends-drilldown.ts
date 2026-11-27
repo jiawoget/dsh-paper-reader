@@ -111,6 +111,7 @@ export class FieldTrendsDrilldown {
       const act = el('div', 'ft-paper-actions'); this.renderSlot(act, p);
       card.append(el('p', 'ft-paper-meta', meta), el('p', 'ft-paper-abs', clipAbstract(p.abstract)), act);
       this.listEl.append(card); this.slots.set(p.id, act);
+      this.cb.shell()?.paperFloatBar?.attach(card, { paper: p, onSaved: doc => { p.inLibrary = true; p.docId = p.localDocId = doc.id; this.cb.onPaperSynced(p.id, true, doc.id); if (this.target) this.cb.onCoverageConfirmed(this.target.topicId, doc.id); } });
     }
   }
   private renderSlot(slot: HTMLElement, paper: TrendPaper): void {

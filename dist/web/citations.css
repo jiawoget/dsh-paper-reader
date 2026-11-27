@@ -34,7 +34,7 @@
   border-radius: 9px;
   box-shadow: var(--shadow-popover);
   padding: 10px 12px 11px;
-  font: 13px/1.45 system-ui, sans-serif;
+  font: 13px/1.45 var(--font-sans);
   text-align: left;
 }
 .citation-preview header { margin: 0 0 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
@@ -64,7 +64,7 @@
 .citation-preview-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
 .citation-preview-body { margin-top: 8px; }
 .citation-preview-tabs { display: flex; gap: 6px; margin-bottom: 6px; }
-.citation-preview-tab { min-height: 28px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--muted); font: 600 12px/1.2 system-ui, sans-serif; cursor: pointer; }
+.citation-preview-tab { min-height: 28px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--muted); font: 600 12px/1.2 var(--font-sans); cursor: pointer; }
 .citation-preview-tab[aria-selected="true"] { border-color: var(--purple); background: var(--lavender); color: var(--purple); }
 .citation-preview-code {
   margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;

@@ -116,6 +116,7 @@ export class WatchlistDrawer {
           const row = el('div', 'wl-item'), slot = el('div', 'wl-item-actions'), sub = [item.paper.firstAuthor, item.paper.year ? String(item.paper.year) : '', item.paper.venue ?? ''].filter(Boolean).join(' · ');
           row.append(el('div', 'wl-item-title', item.paper.title), ...(sub ? [el('div', 'wl-item-meta', sub)] : []), slot);
           this.renderItemSlot(slot, item); this.itemSlots.set(`${e.id}:${item.key}`, slot); list.append(row);
+          this.cb.shell()?.paperFloatBar?.attach(row, { paper: item.paper, onSaved: doc => { this.syncPaperInLibrary(item.paper.id, true, doc.id); this.cb.onPaperSaved?.(item.paper, doc.id); } });
         }
         card.append(list);
       }

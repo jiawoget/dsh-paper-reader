@@ -185,6 +185,7 @@ export function createReviewTableView(): ResearchViewModule {
           row.append(crRow);
         }
         sec.append(row);
+        shell?.paperFloatBar?.attach(row, { doc, inLibrary: true });
       }
       return sec;
     };
@@ -219,6 +220,8 @@ export function createReviewTableView(): ResearchViewModule {
         mRow.append(el('span', 'rt-mcard-k', reviewColLabel(col)), el('span', 'rt-mcard-v', valText), ...(badge.short ? [miniBadge(badge)] : [])); card.append(mRow);
       }
       tr.append(el('td', 'rt-cell-filler')); tbody.append(tr); cards.append(card);
+      shell?.paperFloatBar?.attach(tr, { doc, inLibrary: true });
+      shell?.paperFloatBar?.attach(card, { doc, inLibrary: true });
     }
     grid.addEventListener('keydown', e => {
       const dirs: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };

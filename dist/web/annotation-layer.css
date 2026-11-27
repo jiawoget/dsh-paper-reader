@@ -33,7 +33,7 @@
   color: var(--pin-ink, #492a68);
   background: var(--pin-bg, #f1e6fa);
   box-shadow: var(--shadow-subtle, 0 1px 3px rgb(43 24 52 / 15%));
-  font: 650 12px/1 system-ui, sans-serif;
+  font: 650 12px/1 var(--font-sans);
   pointer-events: auto;
 }
 .annotation-pin:hover { background: var(--pin-hover, #e5d3f3); }
@@ -57,7 +57,7 @@
   color: var(--desk-ink, #242738);
   background: var(--paper, #fff);
   box-shadow: var(--shadow-popover, 0 6px 22px rgb(48 51 70 / 22%));
-  font: 13px/1.4 "Segoe UI", sans-serif;
+  font: 13px/1.4 var(--font-sans);
 }
 .annotation-chooser strong { display: block; margin: 2px 5px 6px; }
 .annotation-chooser button {

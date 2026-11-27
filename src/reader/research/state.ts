@@ -1,16 +1,18 @@
 import type { PageView } from '../../shared/types.js';
 import type { ReadingPosition } from '../jump-history.js';
 import type { ResearchViewId } from './labels.js';
+import type { PaperFloatBar } from './paper-float-bar.js';
 
 export type ReturnAnchor = ReadingPosition;
 export interface ResearchOpenContext { docId?: string; doi?: string; arxivId?: string; stance?: string; direction?: string; topic?: string; filter?: string; query?: string; seedDocId?: string }
-export interface InspectTarget { docId: string; page: number; anchor?: string; quote?: string; openNotes?: boolean }
+export interface InspectTarget { docId: string; page: number; anchor?: string; quote?: string; openNotes?: boolean; openChat?: boolean }
 export interface WorkspaceSnapshot { activeView: ResearchViewId; viewState?: unknown; scrollTop: number }
 
 export interface ResearchShellContext {
   activeDocId: () => string; activeTopic: () => string; setActiveTopic: (tag: string) => void;
   openContext: () => ResearchOpenContext | undefined; openView: (view: ResearchViewId, ctx?: ResearchOpenContext) => void;
   inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void; refreshNotebook?: (docId: string) => void;
+  paperFloatBar?: PaperFloatBar;
 }
 
 export interface ResearchViewModule {

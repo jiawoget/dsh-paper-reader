@@ -51,7 +51,7 @@ export class LibraryChatScope {
   private groupRefs: { ids: string[]; input: HTMLInputElement; count: HTMLElement }[] = [];
   private docInputs = new Map<string, HTMLInputElement[]>();
 
-  constructor(private readonly opts: { onChange: () => void; onClose: () => void }) {
+  constructor(private readonly opts: { onChange: () => void; onClose: () => void; onAttachRow?: (row: HTMLElement, doc: DocumentInfo) => void }) {
     this.root.ariaLabel = t('Paper Scope', '文献范围'); this.backdrop.hidden = true;
     const close = () => { this.setOpen(false); this.opts.onClose(); };
     this.backdrop.addEventListener('click', close);
@@ -159,6 +159,7 @@ export class LibraryChatScope {
               if (doc.kind === 'abstract') meta.append(el('span', 'abstract-badge lc-doc-abs', abstractOnlyLabel()));
               info.append(el('span', 'lc-doc-title', docTitle(doc))); if (meta.childNodes.length) info.append(meta);
               row.append(cb, info); dList.append(row);
+              this.opts.onAttachRow?.(row, doc);
             }
             gWrap.append(dList);
           }

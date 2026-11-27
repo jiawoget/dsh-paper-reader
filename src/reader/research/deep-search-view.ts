@@ -2,6 +2,7 @@ import type { DeepSearchCandidate, DeepSearchProgressEvent, DeepSearchQuestion, 
 import type { GraphPaper } from '../../shared/types.js';
 import { answerMarkdown } from '../answer-markdown.js';
 import { api, apiStream, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
+import { infoTip } from './icons.js';
 import { researchViewName } from './labels.js';
 import { formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
 import type { ResearchOpenContext, ResearchShellContext, ResearchViewModule } from './state.js';
@@ -150,7 +151,6 @@ export function createDeepSearchView(): ResearchViewModule {
   const renderScoping = () => {
     if (!bodyEl) return;
     const wrap = el('div', 'ds-scoping'), form = el('form', 'ds-scope-form'), area = el('textarea', 'ds-query-input'), ctrls = el('div', 'ds-scope-controls');
-    wrap.append(el('p', 'ds-scope-lead', t('Describe your research question in natural language to uncover relevant papers beyond exact keywords.', '用自然语言描述研究问题，突破字面关键词限制，多轮深挖相关文献。')));
     Object.assign(area, { rows: 4, maxLength: 1000, value: query, ariaLabel: t('Research question', '研究问题'), placeholder: t('e.g., How do serving systems eliminate KV-cache memory fragmentation in autoregressive generation?', '例如：大语言模型推理系统如何消除自回归生成中的 KV 缓存显存碎片？') });
     const rWrap = el('label', 'ds-rounds-wrap'), rSel = el('select', 'ds-rounds-select'); rSel.ariaLabel = t('Search depth rounds', '深搜轮次');
     rSel.append(new Option(t('2 rounds (Standard)', '2 轮（标准）'), '2'), new Option(t('3 rounds (Thorough)', '3 轮（深入）'), '3'));
@@ -263,6 +263,7 @@ export function createDeepSearchView(): ResearchViewModule {
       }
       const actions = el('div', 'ds-card-actions'), slot = el('div', 'ds-intake-slot'); renderCardSlot(slot, cand); cardSlots.set(cand.id, slot);
       actions.append(slot, mkBtn('btn ds-card-map-btn', researchViewName('citation-map'), () => openInCitationMap(cand))); card.append(actions); list.append(card);
+      shell?.paperFloatBar?.attach(card, { paper: cand, onSaved: doc => { syncCandidateInLibrary(cand.id, true, doc.id); watchlist?.syncPaperInLibrary(cand.id, true, doc.id); } });
     }
     wrap.append(ovCard, catBar, batch, list); bodyEl.replaceChildren(wrap); bodyEl.scrollTop = prevTop; if (focusSel) bodyEl.querySelector<HTMLElement>(focusSel)?.focus({ preventScroll: true });
   };
@@ -278,7 +279,9 @@ export function createDeepSearchView(): ResearchViewModule {
       headActionsEl = el('div', 'ds-head-actions');
       wlBtnEl = mkBtn('btn ds-wl-btn', t('Watchlist', 'Watchlist'), () => { if (watchlist?.isOpen()) watchlist.close(); else { watchlist?.open(); wlBtnEl?.setAttribute('aria-expanded', 'true'); } });
       wlBadgeEl = el('span', 'ds-wl-badge'); wlBadgeEl.hidden = true; wlBtnEl.append(wlBadgeEl); wlBtnEl.setAttribute('aria-expanded', 'false');
-      top.append(el('h1', 'ds-title', researchViewName('deep-search')), headActionsEl); bodyEl = el('div', 'ds-body');
+      const titleRow = el('div', 'ds-title-row');
+      titleRow.append(el('h1', 'ds-title', researchViewName('deep-search')), infoTip(t('Describe your research question in natural language to uncover relevant papers beyond exact keywords.', '用自然语言描述研究问题，突破字面关键词限制，多轮深挖相关文献。'), researchViewName('deep-search')));
+      top.append(titleRow, headActionsEl); bodyEl = el('div', 'ds-body');
       watchlist = new WatchlistDrawer({ shell: () => shell, currentQuery: () => (mode === 'results' && result?.query) || query, onClose: () => wlBtnEl?.setAttribute('aria-expanded', 'false'), onUnreadChange: n => { unreadCount = n; syncWatchlistBadge(); }, onPaperSaved: (p, docId) => syncCandidateInLibrary(p.id, true, docId) });
       view.append(top, bodyEl, watchlist.backdrop, watchlist.root); host.replaceChildren(view); render(); void watchlist.refresh();
     },
