@@ -43,6 +43,16 @@ const closeOpenTip = (): void => {
   openTip.classList.remove('is-open'); openTip.setAttribute('aria-expanded', 'false'); openTip = null;
 };
 
+export function dismissInfoTip(): boolean {
+  const active = document.activeElement;
+  const focused = typeof HTMLButtonElement !== 'undefined' && active instanceof HTMLButtonElement && active.matches('.re-info-btn:focus-visible:not(.is-dismissed)') ? active : null;
+  const target = openTip ?? focused ?? document.querySelector?.<HTMLButtonElement>('.re-info-btn:hover:not(.is-dismissed)') ?? null;
+  if (!target) return false;
+  const hadOpen = openTip; closeOpenTip(); target.classList.add('is-dismissed');
+  if (hadOpen) hadOpen.focus({ preventScroll: true });
+  return true;
+}
+
 const syncTipShift = (btn: HTMLButtonElement): void => {
   const r = btn.getBoundingClientRect(), vw = typeof innerWidth === 'number' && innerWidth > 0 ? innerWidth : 1024;
   if (!r.width && !r.height) return;
@@ -54,18 +64,20 @@ export function infoTip(text: string, label?: string): HTMLButtonElement {
   if (typeof document !== 'undefined' && !boundTipDocs.has(document)) {
     boundTipDocs.add(document);
     document.addEventListener('pointerdown', e => { if (openTip && !(e.target instanceof Node && openTip.contains(e.target))) closeOpenTip(); });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && openTip) { const b = openTip; closeOpenTip(); b.focus({ preventScroll: true }); } });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && dismissInfoTip()) { e.preventDefault(); e.stopPropagation(); } });
   }
   const btn = el('button', 'icon-btn re-info-btn');
   btn.type = 'button'; btn.dataset.tip = text; btn.setAttribute('aria-expanded', 'false');
   btn.ariaLabel = label ? `${label}: ${text}` : `${researchText.infoLabel()}: ${text}`;
   btn.append(researchIcon('info', 20));
-  btn.addEventListener('pointerenter', () => syncTipShift(btn));
+  btn.addEventListener('pointerenter', () => { btn.classList.remove('is-dismissed'); syncTipShift(btn); });
+  btn.addEventListener('pointerleave', () => { if (!btn.matches(':focus-visible')) btn.classList.remove('is-dismissed'); });
   btn.addEventListener('focus', () => syncTipShift(btn));
+  btn.addEventListener('blur', () => { if (!btn.matches(':hover')) btn.classList.remove('is-dismissed'); });
   btn.addEventListener('click', e => {
     e.stopPropagation(); const opening = openTip !== btn; closeOpenTip();
-    if (!opening) return;
-    syncTipShift(btn); openTip = btn; btn.classList.add('is-open'); btn.setAttribute('aria-expanded', 'true');
+    if (!opening) { btn.classList.add('is-dismissed'); return; }
+    btn.classList.remove('is-dismissed'); syncTipShift(btn); openTip = btn; btn.classList.add('is-open'); btn.setAttribute('aria-expanded', 'true');
   });
   return btn;
 }

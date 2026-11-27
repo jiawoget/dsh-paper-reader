@@ -22,6 +22,7 @@ import { installShortcuts } from './shortcuts.js';
 import { libraryDialog } from './library-dialog.js';
 import { SelectionCard } from './selection-card.js';
 import { PaperChat } from './paper-chat.js';
+import { questionModelButton } from './question-model.js';
 import type { ChatSource } from '../shared/types.js';
 import { ReadingDesk, type ReadingMode } from './reading-desk.js';
 import type { TranslationFocus } from './pdf/focus.js';
@@ -128,6 +129,7 @@ class Reader implements ReaderPort {
     refreshNotebook: docId => { if (docId === this.doc.id) void this.refresh().catch(() => undefined); },
     openSettings: tab => settingsDialog(this, tab ?? 'ai'),
     arxivFormat: () => this.state.settings.arxivFormat ?? 'html',
+    createModelPicker: () => questionModelButton(this), currentQuestionModel: () => this.state.settings.questionModel,
     focusAfterCollapse: () => (byId('workspaceSwitch').querySelector<HTMLElement>('.rw-sw-research') ?? byId('library')).focus({ preventScroll: true })
   });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;

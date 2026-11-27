@@ -1,5 +1,5 @@
 import { byId, el, message, toast } from '../ui.js';
-import { researchIcon } from './icons.js';
+import { dismissInfoTip, researchIcon } from './icons.js';
 import { RESEARCH_VIEWS, researchText, researchViewMeta, researchViewName, type ResearchViewId } from './labels.js';
 import { createWorkspaceFloatCallbacks, PaperFloatBar } from './paper-float-bar.js';
 import { clearAbstractOnly } from './paper-intake.js';
@@ -123,6 +123,7 @@ export class ResearchWorkspace {
 
   handleEscape(): boolean {
     if (!this.opened) return false;
+    if (dismissInfoTip()) return true;
     if (this.overlayOpen) { this.floatBar.hide(); this.overlayOpen = false; this.syncRail(); this.railToggle.focus({ preventScroll: true }); return true; }
     const active = document.activeElement;
     if (active instanceof Element && active.closest('#researchWorkspace') && active.matches('input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return false;
@@ -168,7 +169,8 @@ export class ResearchWorkspace {
       activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },
       openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
       inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted),
-      refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar, openSettings: tab => this.host.openSettings?.(tab), arxivFormat: () => this.host.arxivFormat?.() ?? 'html'
+      refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar, openSettings: tab => this.host.openSettings?.(tab), arxivFormat: () => this.host.arxivFormat?.() ?? 'html',
+      createModelPicker: this.host.createModelPicker, currentQuestionModel: this.host.currentQuestionModel
     };
     this.shellCtx = ctx;
     void Promise.resolve(mod.mount(this.main, ctx)).then(() => {

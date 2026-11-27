@@ -2,6 +2,7 @@ import type { DocumentInfo } from '../../shared/types.js';
 import { abstractOnlyLabel } from '../abstract-view.js';
 import { el, icon, readerLabel as t } from '../ui.js';
 import { researchIcon } from './icons.js';
+import { researchText } from './labels.js';
 import { mkBtn } from './paper-intake.js';
 
 export interface ScopeSavedState {
@@ -51,7 +52,7 @@ export class LibraryChatScope {
   private groupRefs: { ids: string[]; input: HTMLInputElement; count: HTMLElement }[] = [];
   private docInputs = new Map<string, HTMLInputElement[]>();
 
-  constructor(private readonly opts: { onChange: () => void; onClose: () => void; onAttachRow?: (row: HTMLElement, doc: DocumentInfo) => void }) {
+  constructor(private readonly opts: { onChange: () => void; onClose: () => void; onOpenDoc?: (docId: string) => void; onAttachRow?: (row: HTMLElement, doc: DocumentInfo) => void }) {
     this.root.ariaLabel = t('Paper Scope', '文献范围'); this.backdrop.hidden = true;
     const close = () => { this.setOpen(false); this.opts.onClose(); };
     this.backdrop.addEventListener('click', close);
@@ -151,14 +152,18 @@ export class LibraryChatScope {
           if (!gCollapsed) {
             const dList = el('div', 'lc-group-docs');
             for (const doc of group.docs) {
-              const row = el('label', 'lc-doc-row'), cb = el('input', 'lc-check'), info = el('span', 'lc-doc-info'), meta = el('span', 'lc-doc-meta');
-              cb.type = 'checkbox'; cb.dataset.docId = doc.id;
+              const title = docTitle(doc), row = el('div', 'lc-doc-row'), checkWrap = el('label', 'lc-doc-check-wrap'), cb = el('input', 'lc-check');
+              const openBtn = el('button', 'lc-doc-open'), meta = el('span', 'lc-doc-meta');
+              cb.type = 'checkbox'; cb.dataset.docId = doc.id; cb.ariaLabel = `${researchText.selectPaper()}: ${title}`;
               cb.addEventListener('change', () => { if (cb.checked) this.selected.add(doc.id); else this.selected.delete(doc.id); this.syncChecks(); this.opts.onChange(); });
+              checkWrap.append(cb);
               const bucket = this.docInputs.get(doc.id) ?? []; bucket.push(cb); this.docInputs.set(doc.id, bucket);
               const sub = docSub(doc); if (sub) meta.append(el('span', 'lc-doc-sub', sub));
               if (doc.kind === 'abstract') meta.append(el('span', 'abstract-badge lc-doc-abs', abstractOnlyLabel()));
-              info.append(el('span', 'lc-doc-title', docTitle(doc))); if (meta.childNodes.length) info.append(meta);
-              row.append(cb, info); dList.append(row);
+              openBtn.type = 'button'; openBtn.dataset.docId = doc.id; openBtn.title = researchText.openInReader();
+              openBtn.append(el('span', 'lc-doc-title', title)); if (meta.childNodes.length) openBtn.append(meta);
+              openBtn.addEventListener('click', () => this.opts.onOpenDoc?.(doc.id));
+              row.append(checkWrap, openBtn); dList.append(row);
               this.opts.onAttachRow?.(row, doc);
             }
             gWrap.append(dList);

@@ -1,24 +1,26 @@
-import { computeScreeningStatus, type ExtractionCell, type ReviewBatchResult, type ReviewDecision, type ReviewExportFormat, type ReviewExtractMode, type ReviewPresetId, type ReviewTable } from '../../shared/review-types.js';
+import { computeScreeningStatus, type ExtractionCell, type ReviewBatchResult, type ReviewDecision, type ReviewExportFormat, type ReviewExtractMode, type ReviewTable } from '../../shared/review-types.js';
 import type { DocumentInfo } from '../../shared/types.js';
-import { api, apiStream, downloadFile, el, message, readerLabel as t, toast } from '../ui.js';
+import { api, apiStream, downloadFile, el, icon, message, readerLabel as t, toast } from '../ui.js';
+import { infoTip } from './icons.js';
+import { researchText } from './labels.js';
 import { isAbortError, mkBtn } from './paper-intake.js';
-import { cellBadgeInfo, coverageLabel, decisionLabel, ReviewColumnPicker, reviewColLabel, ReviewTableInspector, slugColumnId } from './review-table-inspector.js';
+import { cellBadgeInfo, coverageLabel, decisionLabel, ReviewColumnPicker, reviewColLabel, ReviewTableInspector, slugColumnId, type ReviewPaperAction } from './review-table-inspector.js';
 import type { ResearchOpenContext, ResearchShellContext, ResearchViewModule } from './state.js';
 
 type ReviewStep = 'screening' | 'extraction';
-interface SavedReviewState { step: ReviewStep; selected: { docId: string; colId: string } | null; inspectorOpen: boolean; activeScreenDocId: string; scrollTop: number; scrollLeft: number }
+interface SavedReviewState { step: ReviewStep; selected: { docId: string; colId: string } | null; selectedPaperId: string | null; inspectorOpen: boolean; activeScreenDocId: string; scrollTop: number; scrollLeft: number }
 const cellKey = (docId: string, colId: string) => `${docId}\0${colId}`;
 const srcBadge = (doc: DocumentInfo) => el('span', `rt-src-badge ${doc.kind === 'abstract' ? 'is-abstract' : 'is-pdf'}`, coverageLabel(doc.kind));
 const miniBadge = (b: ReturnType<typeof cellBadgeInfo>) => { const s = el('span', `rt-cell-badge is-${b.kind}`, b.short); s.title = b.full; return s; };
-const paperHeading = (doc: DocumentInfo, tag: 'span' | 'strong') => { const m = [doc.authors, doc.year].filter(Boolean).join(' · '); return [el(tag, 'rt-paper-title', doc.paperTitle || doc.title), ...(m ? [el('span', 'rt-paper-meta', m)] : [])]; };
 
 export function createReviewTableView(): ResearchViewModule {
   let lastOpenCtx: ResearchOpenContext | undefined, mounted = false, mountSeq = 0, running = false, step: ReviewStep = 'extraction';
   let shell: ResearchShellContext | undefined, table: ReviewTable | null = null, docs: DocumentInfo[] = [];
-  let cells = new Map<string, ExtractionCell>(), selected: { docId: string; colId: string } | null = null;
-  let activeScreenDocId = '', statusMsg = '', abortCtrl: AbortController | null = null;
+  let cells = new Map<string, ExtractionCell>(), selected: { docId: string; colId: string } | null = null, selectedPaperId: string | null = null;
+  let activeScreenDocId = '', statusMsg = '', abortCtrl: AbortController | null = null, events: AbortController | null = null;
   let splitEl: HTMLElement | null = null, topEl: HTMLElement | null = null, subBarEl: HTMLElement | null = null, bodyEl: HTMLElement | null = null;
-  let presetSel: HTMLSelectElement | null = null, progressEl: HTMLElement | null = null, stopBtn: HTMLButtonElement | null = null, toolsToggleEl: HTMLButtonElement | null = null;
+  let progressEl: HTMLElement | null = null, stopBtn: HTMLButtonElement | null = null, toolsToggleEl: HTMLButtonElement | null = null;
+  let exportMenuEl: HTMLElement | null = null, exportToggleBtn: HTMLButtonElement | null = null;
   let stepBtns = new Map<ReviewStep, HTMLButtonElement>(), actionBtns: HTMLButtonElement[] = [];
   let inspector: ReviewTableInspector | null = null, colPicker: ReviewColumnPicker | null = null;
 
@@ -27,9 +29,10 @@ export function createReviewTableView(): ResearchViewModule {
   const mergeCells = (list: readonly ExtractionCell[]) => { for (const c of list) cells.set(cellKey(c.docId, c.colId), c); };
   const setStatus = (text: string) => { statusMsg = text; if (progressEl) progressEl.textContent = text; };
   const setBody = (...nodes: Node[]) => { bodyEl?.replaceChildren(...(progressEl ? [progressEl] : []), ...nodes); };
+  const setExportMenu = (open: boolean) => { if (exportMenuEl) exportMenuEl.hidden = !open; exportToggleBtn?.setAttribute('aria-expanded', String(open)); };
   const hasCol = (colId: string) => colId === '__screen__' || Boolean(table && (colId.startsWith('screen:') ? table.criteria.some(c => `screen:${c.id}` === colId) : table.columns.some(c => c.id === colId)));
   const syncRunning = () => {
-    if (stopBtn) stopBtn.hidden = !running; if (presetSel) presetSel.disabled = running; for (const b of actionBtns) b.disabled = running;
+    if (stopBtn) stopBtn.hidden = !running; for (const b of actionBtns) b.disabled = running;
     for (const host of [subBarEl, bodyEl]) for (const b of host?.querySelectorAll<HTMLButtonElement>('.rt-add-col-btn, .rt-add-col-m, .rt-col-del, .rt-cell-retry, .rt-crit-req, .rt-crit-del, .rt-crit-add, .rt-strict-btn') ?? []) b.disabled = running;
     inspector?.setBusy(running);
   };
@@ -44,15 +47,41 @@ export function createReviewTableView(): ResearchViewModule {
       const active = Boolean(selected && btn.dataset.docId === selected.docId && btn.dataset.colId === selected.colId);
       btn.classList.toggle('is-selected', active); btn.setAttribute('aria-selected', String(active)); btn.tabIndex = active ? 0 : -1; if (active) hasFocus = true;
     }
+    for (const btn of bodyEl.querySelectorAll<HTMLButtonElement>('.rt-paper-btn')) {
+      const active = Boolean(selectedPaperId && btn.dataset.docId === selectedPaperId);
+      btn.classList.toggle('is-selected', active); btn.setAttribute('aria-pressed', String(active));
+    }
     if (!hasFocus) { const first = bodyEl.querySelector<HTMLButtonElement>('.rt-cell'); if (first) first.tabIndex = 0; }
   };
   const openInspector = (docId: string, colId: string) => {
     const doc = docs.find(d => d.id === docId); if (!doc || !inspector) return;
-    selected = { docId, colId }; const meta = colLabelFor(colId);
+    selectedPaperId = null; selected = { docId, colId }; const meta = colLabelFor(colId);
     inspector.show({ doc, colId, colLabel: meta.label, isScreening: meta.isScreening, cell: cells.get(cellKey(docId, colId)) });
     syncSplitAttr(); syncGridSelection();
   };
-  const syncInspector = () => { if (inspector?.isOpen() && selected) { if (!docs.some(d => d.id === selected!.docId) || !hasCol(selected.colId)) { inspector.close(); selected = null; } else openInspector(selected.docId, selected.colId); } };
+  const openPaperDrawer = (docId: string) => {
+    const doc = docs.find(d => d.id === docId); if (!doc || !inspector) return;
+    selected = null; selectedPaperId = docId;
+    inspector.showPaper(doc); syncSplitAttr(); syncGridSelection();
+  };
+  const paperBtn = (doc: DocumentInfo) => {
+    const btn = el('button', 'rt-paper-btn'), m = [doc.authors, doc.year].filter(Boolean).join(' · ');
+    btn.type = 'button'; btn.dataset.docId = doc.id; btn.title = researchText.paperSummary();
+    btn.setAttribute('aria-pressed', String(selectedPaperId === doc.id));
+    btn.append(el('span', 'rt-paper-title', doc.paperTitle || doc.title), ...(m ? [el('span', 'rt-paper-meta', m)] : []));
+    btn.addEventListener('click', () => openPaperDrawer(doc.id));
+    return btn;
+  };
+  const syncInspector = () => {
+    if (!inspector?.isOpen()) return;
+    if (selectedPaperId) {
+      if (!docs.some(d => d.id === selectedPaperId)) { inspector.close(); selectedPaperId = null; }
+      else openPaperDrawer(selectedPaperId);
+    } else if (selected) {
+      if (!docs.some(d => d.id === selected!.docId) || !hasCol(selected.colId)) { inspector.close(); selected = null; }
+      else openInspector(selected.docId, selected.colId);
+    }
+  };
   const partitionDocs = (list: readonly DocumentInfo[]) => {
     const included: { doc: DocumentInfo; status: ReturnType<typeof computeScreeningStatus> }[] = [], excluded: typeof included = [];
     for (const doc of list) { const status = computeScreeningStatus(table?.criteria ?? [], docCells(doc.id), Boolean(table?.strictCriterion), table?.threshold ?? 0.6); (status.included ? included : excluded).push({ doc, status }); }
@@ -149,7 +178,7 @@ export function createReviewTableView(): ResearchViewModule {
       actionBtns.push(runBtn, nextBtn); ctrlRow.append(strictBtn, thWrap, runBtn, stopBtn, nextBtn); subBarEl.append(topRow, ctrlRow);
     } else {
       const row = el('div', 'rt-extract-bar'), pilotBtn = mkBtn('btn primary rt-pilot-btn', t('Pilot (3 papers)', 'Pilot 试跑 3 篇'), () => { void runBatch('extract', 'pilot'); });
-      const allBtn = mkBtn('btn rt-run-all-btn', t('Run all', '全量提取'), () => { void runBatch('extract', 'all'); }), addColM = mkBtn('btn rt-add-col-m', t('+ Add Column', '+ 添加列'), () => colPicker?.open(table!.columns.map(c => c.id)));
+      const allBtn = mkBtn('btn rt-run-all-btn', t('Run all', '全量提取'), () => { void runBatch('extract', 'all'); }), addColM = mkBtn('btn rt-add-col-m', t('+ Add Column', '+ 添加列'), () => colPicker?.open(table!.columns.map(c => c.id), table!.preset));
       actionBtns.push(pilotBtn, allBtn); row.append(pilotBtn, allBtn, stopBtn, addColM); subBarEl.append(row);
     }
     syncRunning();
@@ -168,7 +197,7 @@ export function createReviewTableView(): ResearchViewModule {
         const row = el('article', 'rt-srow'), head = el('div', 'rt-srow-head'), info = el('div', 'rt-srow-info'), badges = el('div', 'rt-srow-badges'), decs = el('div', 'rt-dec-group');
         row.dataset.docId = doc.id; row.classList.toggle('is-active', doc.id === activeScreenDocId);
         badges.append(srcBadge(doc), el('span', `rt-dec-pill is-${status.decision}`, `${decisionLabel(status.decision)}${status.manualOverride ? ' ✎' : table!.criteria.length ? ` · ${Math.round(status.score * 100)}%` : ''}`));
-        info.append(...paperHeading(doc, 'strong'), badges); decs.setAttribute('role', 'group'); decs.ariaLabel = t('Screening decision', '筛选结论');
+        info.append(paperBtn(doc), badges); decs.setAttribute('role', 'group'); decs.ariaLabel = t('Screening decision', '筛选结论');
         for (const d of ['yes', 'maybe', 'no'] as const) {
           const b = mkBtn(`btn rt-dec-btn is-${d}`, decisionLabel(d), () => { activeScreenDocId = doc.id; void setManualCell(doc.id, '__screen__', d).catch(e => toast(message(e))); });
           b.dataset.decision = d; b.setAttribute('aria-pressed', String(status.decision === d)); decs.append(b);
@@ -204,11 +233,11 @@ export function createReviewTableView(): ResearchViewModule {
       if (cols.length > 1) { const del = mkBtn('rt-col-del', '×', () => { void saveTablePatch({ columns: cols.filter(c => c.id !== col.id) }, true); }); del.ariaLabel = t(`Remove column ${colLbl}`, `移除列 ${colLbl}`); inner.append(del); }
       th.append(inner); hr.append(th);
     }
-    const addTh = el('th', 'rt-col-add'); addTh.setAttribute('role', 'columnheader'); addTh.append(mkBtn('btn rt-add-col-btn', t('+ Add Column', '+ 添加列'), () => colPicker?.open(cols.map(c => c.id)))); hr.append(addTh); thead.append(hr);
+    const addTh = el('th', 'rt-col-add'); addTh.setAttribute('role', 'columnheader'); addTh.append(mkBtn('btn rt-add-col-btn', t('+ Add Column', '+ 添加列'), () => colPicker?.open(cols.map(c => c.id), table!.preset))); hr.append(addTh); thead.append(hr);
     for (let r = 0; r < list.length; r++) {
       const doc = list[r], tr = el('tr'), pCell = el('th', 'rt-paper-cell'), card = el('article', 'rt-mcard'), cHead = el('div', 'rt-mcard-head');
       tr.setAttribute('role', 'row'); tr.dataset.docId = card.dataset.docId = doc.id; pCell.scope = 'row'; pCell.setAttribute('role', 'rowheader');
-      pCell.append(...paperHeading(doc, 'span'), srcBadge(doc)); tr.append(pCell); cHead.append(...paperHeading(doc, 'strong'), srcBadge(doc)); card.append(cHead);
+      pCell.append(paperBtn(doc), srcBadge(doc)); tr.append(pCell); cHead.append(paperBtn(doc), srcBadge(doc)); card.append(cHead);
       for (let c = 0; c < cols.length; c++) {
         const col = cols[c], cell = cells.get(cellKey(doc.id, col.id)), badge = cellBadgeInfo(cell), valText = cell?.status === 'error' ? t('Failed', '失败') : (cell?.value || '—');
         const td = el('td', 'rt-cell-td'), btn = mkBtn('rt-cell', '', () => openInspector(doc.id, col.id));
@@ -234,46 +263,74 @@ export function createReviewTableView(): ResearchViewModule {
   }
 
   const renderBody = () => { if (step === 'screening') renderScreening(); else renderExtraction(); syncRunning(); };
-  const renderAll = () => { for (const [k, b] of stepBtns) b.setAttribute('aria-pressed', String(k === step)); if (presetSel && table) presetSel.value = table.preset; renderSubBar(); renderBody(); syncSplitAttr(); };
+  const renderAll = () => { for (const [k, b] of stepBtns) b.setAttribute('aria-pressed', String(k === step)); renderSubBar(); renderBody(); syncSplitAttr(); };
+  const runPaperAction = (action: ReviewPaperAction, doc: DocumentInfo) => {
+    if (action === 'read') void shell?.inspectInReader({ docId: doc.id, page: 1 }).catch(e => toast(message(e)));
+    else if (action === 'ask-ai') void shell?.inspectInReader({ docId: doc.id, page: 1, openChat: true }).catch(e => toast(message(e)));
+    else if (action === 'citations') shell?.openView('citations', { docId: doc.id });
+    else shell?.openView('citation-map', { seedDocId: doc.id });
+  };
   return {
     id: 'review-table',
     async mount(host, ctx) {
-      mounted = true; const seq = ++mountSeq; shell = ctx; stepBtns = new Map();
+      mounted = true; const seq = ++mountSeq; shell = ctx; stepBtns = new Map(); events = new AbortController();
       const root = el('section', 'rt-view'), top = el('header', 'rt-top'), head = el('div', 'rt-head'), steps = el('div', 'rt-steps'), tools = el('div', 'rt-head-tools');
       topEl = top; steps.setAttribute('role', 'group'); steps.ariaLabel = t('Review steps', '筛选与提取步骤');
-      for (const [id, en, zh] of [['screening', '1. Screening', '1. Screening 筛选'], ['extraction', '2. Extraction', '2. Extraction 提取']] as const) {
-        const b = mkBtn('btn rt-step-btn', t(en, zh), () => { if (step !== id) { step = id; inspector?.close(); renderAll(); } }); b.dataset.step = id; stepBtns.set(id, b); steps.append(b);
+      for (const [id, lbl, tip] of [['screening', researchText.screeningStep(), researchText.screeningTip()], ['extraction', researchText.extractionStep(), researchText.extractionTip()]] as const) {
+        const item = el('div', 'rt-step-item'), b = mkBtn('btn rt-step-btn', lbl, () => { if (step !== id) { step = id; selected = null; selectedPaperId = null; inspector?.close(); renderAll(); } });
+        b.dataset.step = id; stepBtns.set(id, b); item.append(b, infoTip(tip, lbl)); steps.append(item);
       }
-      const toolsToggle = mkBtn('btn rt-tools-toggle', t('Tools', '工具'), () => { const open = top.dataset.toolsOpen === 'true'; top.dataset.toolsOpen = String(!open); toolsToggle.setAttribute('aria-expanded', String(!open)); });
+      const toolsToggle = mkBtn('btn rt-tools-toggle', t('Tools', '工具'), () => { const open = top.dataset.toolsOpen === 'true'; top.dataset.toolsOpen = String(!open); toolsToggle.setAttribute('aria-expanded', String(!open)); setExportMenu(false); });
       toolsToggleEl = toolsToggle; toolsToggle.setAttribute('aria-expanded', 'false');
-      presetSel = el('select', 'rt-select rt-preset-select'); presetSel.ariaLabel = t('Review preset', '预设模板');
-      presetSel.append(new Option('CS / AI', 'cs_ai'), new Option(t('Medicine / Pharmacy PICO', '医学 / 药学 PICO'), 'pico'));
-      presetSel.addEventListener('change', () => { void saveTablePatch({ preset: presetSel!.value as ReviewPresetId }, true); });
-      const doExport = (fmt: ReviewExportFormat) => { if (!table) return; void api('review.export', { tableId: table.id, format: fmt, docIds: visibleDocs().map(d => d.id) }).then(r => { downloadFile(r.filename, r.content, r.mime); toast(t(`Exported ${r.filename}`, `已导出 ${r.filename}`)); }).catch(e => toast(message(e))); };
-      tools.append(presetSel, mkBtn('btn rt-export-csv', 'CSV', () => doExport('csv')), mkBtn('btn rt-export-md', 'Markdown', () => doExport('markdown')));
+      const doExport = (fmt: ReviewExportFormat) => {
+        setExportMenu(false); if (!table) return;
+        void api('review.export', { tableId: table.id, format: fmt, docIds: visibleDocs().map(d => d.id) }).then(r => { downloadFile(r.filename, r.content, r.mime); toast(t(`Exported ${r.filename}`, `已导出 ${r.filename}`)); }).catch(e => toast(message(e)));
+      };
+      const exportWrap = el('div', 'rt-export-wrap'), exportBtn = mkBtn('btn rt-export-btn', researchText.exportLabel(), () => doExport('markdown'));
+      const exportToggle = el('button', 'btn rt-export-toggle'), exportMenu = el('div', 'rt-export-menu');
+      exportToggle.type = 'button'; exportToggle.ariaLabel = exportToggle.title = researchText.exportMenu();
+      exportToggle.setAttribute('aria-haspopup', 'menu'); exportToggle.setAttribute('aria-expanded', 'false');
+      exportToggle.append(icon('down', 14));
+      exportMenu.setAttribute('role', 'menu'); exportMenu.hidden = true;
+      for (const [fmt, lbl] of [['markdown', researchText.exportMd()], ['csv', researchText.exportCsv()]] as const) {
+        const it = mkBtn('rt-export-item', lbl, () => doExport(fmt)); it.setAttribute('role', 'menuitem'); it.dataset.format = fmt; exportMenu.append(it);
+      }
+      exportToggle.addEventListener('click', e => { e.stopPropagation(); setExportMenu(Boolean(exportMenu.hidden)); });
+      document.addEventListener('pointerdown', e => { if (!exportMenu.hidden && !(e.target instanceof Node && exportWrap.contains(e.target))) setExportMenu(false); }, { signal: events.signal });
+      exportMenuEl = exportMenu; exportToggleBtn = exportToggle;
+      exportWrap.append(exportBtn, exportToggle, exportMenu); tools.append(exportWrap);
       head.append(steps, toolsToggle, tools); subBarEl = el('div', 'rt-subbar'); top.append(head, subBarEl);
       splitEl = el('div', 'rt-split'); splitEl.dataset.inspectorOpen = 'false';
       const mainPane = el('div', 'rt-main-pane'); bodyEl = el('div', 'rt-body-scroll'); progressEl = el('div', 'rt-progress', statusMsg); progressEl.setAttribute('role', 'status'); mainPane.append(bodyEl);
       inspector = new ReviewTableInspector({
-        onClose: syncSplitAttr, onRetry: (docId, colId) => runBatch('extract', 'cell', { docId, colId, force: true }),
+        onClose: () => { selectedPaperId = null; syncSplitAttr(); syncGridSelection(); },
+        onRetry: (docId, colId) => runBatch('extract', 'cell', { docId, colId, force: true }),
         onSaveOverride: async (docId, colId, val, reason) => { try { await setManualCell(docId, colId, val, reason); toast(t('Saved manual override.', '已保存人工覆写。')); } catch (e) { toast(message(e)); } },
-        onJump: (docId, page, quote) => { void shell?.inspectInReader({ docId, page, ...(quote ? { quote } : {}) }).catch(e => toast(message(e))); }
+        onJump: (docId, page, quote) => { void shell?.inspectInReader({ docId, page, ...(quote ? { quote } : {}) }).catch(e => toast(message(e))); },
+        onPaperAction: runPaperAction, onAttachPaperHead: (elHead, doc) => shell?.paperFloatBar?.attach(elHead, { doc, inLibrary: true })
       });
-      colPicker = new ReviewColumnPicker(col => table ? saveTablePatch({ columns: [...table.columns, col] }) : Promise.resolve(false));
+      colPicker = new ReviewColumnPicker(
+        col => table ? saveTablePatch({ columns: [...table.columns, col] }) : Promise.resolve(false),
+        preset => saveTablePatch({ preset }, preset !== 'custom')
+      );
       splitEl.append(mainPane, inspector.backdrop, inspector.root); root.append(top, splitEl, colPicker.backdrop, colPicker.root); host.replaceChildren(root);
       try { await loadData(); } catch (e) { if (mounted && seq === mountSeq) { setStatus(message(e)); toast(message(e)); } }
       const openCtx = ctx.openContext();
       if (mounted && seq === mountSeq && openCtx?.docId && openCtx !== lastOpenCtx) { lastOpenCtx = openCtx; step = 'extraction'; renderAll(); void runBatch('extract', 'reextract', { docId: openCtx.docId, docIds: [openCtx.docId] }); }
     },
-    unmount() { mounted = false; ++mountSeq; abortCtrl?.abort(); abortCtrl = null; running = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = presetSel = progressEl = stopBtn = toolsToggleEl = null; },
-    saveState(): SavedReviewState { return { step, selected: selected ? { ...selected } : null, inspectorOpen: Boolean(inspector?.isOpen()), activeScreenDocId, scrollTop: bodyEl?.scrollTop ?? 0, scrollLeft: bodyEl?.querySelector('.rt-table-wrap')?.scrollLeft ?? 0 }; },
+    unmount() { mounted = false; ++mountSeq; events?.abort(); events = null; abortCtrl?.abort(); abortCtrl = null; running = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = progressEl = stopBtn = toolsToggleEl = exportMenuEl = exportToggleBtn = null; },
+    saveState(): SavedReviewState { return { step, selected: selected ? { ...selected } : null, selectedPaperId, inspectorOpen: Boolean(inspector?.isOpen()), activeScreenDocId, scrollTop: bodyEl?.scrollTop ?? 0, scrollLeft: bodyEl?.querySelector('.rt-table-wrap')?.scrollLeft ?? 0 }; },
     restoreState(raw) {
       const s = raw as SavedReviewState | undefined; if (!s || !mounted) return;
-      step = s.step ?? 'extraction'; selected = s.selected ? { ...s.selected } : null; activeScreenDocId = s.activeScreenDocId ?? ''; renderAll();
-      if (s.inspectorOpen && selected && hasCol(selected.colId)) openInspector(selected.docId, selected.colId);
+      step = s.step ?? 'extraction'; selected = s.selected ? { ...s.selected } : null; selectedPaperId = s.selectedPaperId ?? null; activeScreenDocId = s.activeScreenDocId ?? ''; renderAll();
+      if (s.inspectorOpen && selectedPaperId && docs.some(d => d.id === selectedPaperId)) openPaperDrawer(selectedPaperId);
+      else if (s.inspectorOpen && selected && hasCol(selected.colId)) openInspector(selected.docId, selected.colId);
       if (bodyEl) { bodyEl.scrollTop = s.scrollTop ?? 0; const tw = bodyEl.querySelector('.rt-table-wrap'); if (tw) tw.scrollLeft = s.scrollLeft ?? 0; }
     },
-    handleEscape() { return colPicker?.isOpen() ? (colPicker.close(), true) : inspector?.isOpen() ? (inspector.close(), true) : false; },
-    onDocumentMutated(docId, deleted) { if (!mounted) return; if (deleted && selected?.docId === docId) { inspector?.close(); selected = null; } void loadData(true).catch(() => undefined); }
+    handleEscape() {
+      if (exportMenuEl && !exportMenuEl.hidden) { setExportMenu(false); exportToggleBtn?.focus({ preventScroll: true }); return true; }
+      return colPicker?.isOpen() ? (colPicker.close(), true) : inspector?.isOpen() ? (inspector.close(), true) : false;
+    },
+    onDocumentMutated(docId, deleted) { if (!mounted) return; if (deleted && (selected?.docId === docId || selectedPaperId === docId)) { inspector?.close(); selected = null; selectedPaperId = null; } void loadData(true).catch(() => undefined); }
   };
 }

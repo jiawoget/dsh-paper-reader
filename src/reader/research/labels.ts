@@ -60,5 +60,31 @@ export const researchText = {
   ),
   ytdGrowthNote: () => t('Partial YTD year (YoY N/A)', '当年为截至目前 (YTD) 数据，暂无同比增速'),
   lowBaseTag: () => t('Low base (n < 10)', '低基数 (n < 10)'),
-  resetSeries: () => t('Reset series', '显示全部曲线')
+  resetSeries: () => t('Reset series', '显示全部曲线'),
+  screeningStep: () => t('1. Screening', '1. 文献筛选'),
+  extractionStep: () => t('2. Extraction', '2. 数据提取'),
+  screeningTip: () => t(
+    'Define inclusion criteria and screen papers as Yes, Maybe, or No before extraction.',
+    '设置纳入标准并将文献初筛为纳入、待定或排除，再进入数据提取。'
+  ),
+  extractionTip: () => t(
+    'Extract structured evidence across papers with verifiable quotes, or click any paper title for a quick summary.',
+    '按列提取多篇文献的结构化信息与可核验原文引句，点击任意论文标题可查看右侧概览。'
+  ),
+  exportLabel: () => t('Export', '导出'),
+  exportMenu: () => t('Export format', '选择导出格式'),
+  exportMd: () => t('Markdown (.md)', 'Markdown (.md)'),
+  exportCsv: () => t('CSV (.csv)', 'CSV (.csv)'),
+  templates: () => t('Templates', '列模板'),
+  presetGeneral: () => t('General', '通用研究'),
+  presetCsAi: () => t('CS / AI', 'CS / AI'),
+  presetPico: () => t('Clinical PICO', '临床 PICO'),
+  presetCustom: () => t('Custom', '自定义'),
+  paperSummary: () => t('Paper Summary', '论文概览'),
+  openInReader: () => t('Open in Reader', '在阅读器中打开'),
+  abstractHeading: () => t('Abstract', '摘要'),
+  tagsHeading: () => t('Tags', '标签'),
+  noAbstract: () => t('No abstract recorded for this paper.', '该文献暂无摘要信息。'),
+  paperQuickActions: () => t('Quick actions', '快捷操作'),
+  selectPaper: () => t('Select paper', '勾选文献')
 };
