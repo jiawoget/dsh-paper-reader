@@ -333,10 +333,10 @@ async function run(): Promise<void> {
       assert.ok(await ws.getAttribute('data-rail-collapsed') === 'true' && !(await ws.locator('.rt-inspector').isVisible()) && (await ws.locator('.rt-preset-select').count()) === 0 && (await ws.locator('.rt-step-item .re-info-btn').count()) === 2);
       assert.deepEqual((await ws.locator('.rt-col-label').allTextContents()).map(s => s.trim()), ['Research Question', 'Method', 'Key Findings', 'Limitations']);
       await ws.locator('.rt-step-item .re-info-btn').first().click();
-      assert.ok(await ws.evaluate(() => document.querySelector('.rt-step-item .re-info-btn')!.classList.contains('is-open') && document.querySelector('.rt-step-btn[data-step="extraction"]')!.getAttribute('aria-pressed') === 'true'));
+      assert.ok(await ws.evaluate(() => { const b = document.querySelector('.rt-step-item .re-info-btn')!; return b.classList.contains('is-open') && getComputedStyle(b, '::after').content !== 'none' && document.querySelector('.rt-step-btn[data-step="extraction"]')!.getAttribute('aria-pressed') === 'true'; }));
       await page.keyboard.press('Escape');
       assert.equal(await ws.locator('.rt-step-item .re-info-btn.is-open').count(), 0);
-      assert.ok((await ws.isVisible()) && (await ws.evaluate(() => document.activeElement === document.querySelector('.rt-step-item .re-info-btn'))));
+      assert.ok((await ws.isVisible()) && (await ws.evaluate(() => { const b = document.querySelector('.rt-step-item .re-info-btn')!; return document.activeElement === b && getComputedStyle(b, '::after').content === 'none'; })));
       await page.keyboard.press('Escape'); await ws.waitFor({ state: 'hidden' });
       await page.keyboard.press('Control+Shift+R'); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
       await ws.locator('.rt-paper-cell .rt-paper-btn[data-doc-id="pagedattention"]').click(); await ws.locator('.rt-inspector').waitFor({ state: 'visible' });

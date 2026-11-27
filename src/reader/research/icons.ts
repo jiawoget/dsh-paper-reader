@@ -44,8 +44,13 @@ const closeOpenTip = (): void => {
 };
 
 export function dismissInfoTip(): boolean {
-  if (!openTip) return false;
-  const b = openTip; closeOpenTip(); b.focus({ preventScroll: true }); return true;
+  const active = document.activeElement;
+  const focused = typeof HTMLButtonElement !== 'undefined' && active instanceof HTMLButtonElement && active.matches('.re-info-btn:focus-visible:not(.is-dismissed)') ? active : null;
+  const target = openTip ?? focused ?? document.querySelector?.<HTMLButtonElement>('.re-info-btn:hover:not(.is-dismissed)') ?? null;
+  if (!target) return false;
+  const hadOpen = openTip; closeOpenTip(); target.classList.add('is-dismissed');
+  if (hadOpen) hadOpen.focus({ preventScroll: true });
+  return true;
 }
 
 const syncTipShift = (btn: HTMLButtonElement): void => {
@@ -65,12 +70,14 @@ export function infoTip(text: string, label?: string): HTMLButtonElement {
   btn.type = 'button'; btn.dataset.tip = text; btn.setAttribute('aria-expanded', 'false');
   btn.ariaLabel = label ? `${label}: ${text}` : `${researchText.infoLabel()}: ${text}`;
   btn.append(researchIcon('info', 20));
-  btn.addEventListener('pointerenter', () => syncTipShift(btn));
+  btn.addEventListener('pointerenter', () => { btn.classList.remove('is-dismissed'); syncTipShift(btn); });
+  btn.addEventListener('pointerleave', () => { if (!btn.matches(':focus-visible')) btn.classList.remove('is-dismissed'); });
   btn.addEventListener('focus', () => syncTipShift(btn));
+  btn.addEventListener('blur', () => { if (!btn.matches(':hover')) btn.classList.remove('is-dismissed'); });
   btn.addEventListener('click', e => {
     e.stopPropagation(); const opening = openTip !== btn; closeOpenTip();
-    if (!opening) return;
-    syncTipShift(btn); openTip = btn; btn.classList.add('is-open'); btn.setAttribute('aria-expanded', 'true');
+    if (!opening) { btn.classList.add('is-dismissed'); return; }
+    btn.classList.remove('is-dismissed'); syncTipShift(btn); openTip = btn; btn.classList.add('is-open'); btn.setAttribute('aria-expanded', 'true');
   });
   return btn;
 }
