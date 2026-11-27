@@ -4,7 +4,7 @@ import { answerMarkdown } from '../answer-markdown.js';
 import { api, apiStream, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { infoTip } from './icons.js';
 import { researchViewName } from './labels.js';
-import { formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
+import { createDegradedInfoButton, dismissDegradedPopover, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
 import type { ResearchOpenContext, ResearchShellContext, ResearchViewModule } from './state.js';
 import { WatchlistDrawer } from './watchlist-drawer.js';
 
@@ -192,33 +192,33 @@ export function createDeepSearchView(): ResearchViewModule {
     if (!bodyEl) return;
     const wrap = el('div', 'ds-telemetry'), banner = el('div', 'ds-tel-banner'), kpis = el('div', 'ds-kpi-grid'), curveCard = el('section', 'ds-curve-card'), foot = el('div', 'ds-tel-actions');
     banner.append(el('span', 'ds-round-pill', t(`Round ${tel.round} / ${tel.totalRounds}`, `第 ${tel.round} / ${tel.totalRounds} 轮`)), el('p', 'ds-tel-query', query));
+    if (tel.degraded.length) banner.append(createDegradedInfoButton(tel.degraded, shell?.openSettings ? () => shell!.openSettings!('academic') : undefined));
     const msg = el('div', 'ds-tel-msg', tel.message || STAGE_LABELS[tel.stage]()); msg.setAttribute('role', 'status');
     for (const [key, lbl, val] of [['evaluated', t('Papers evaluated', '已评估文献'), String(tel.evaluated)], ['matched', t('Matches found', '高相关命中'), String(tel.matched)], ['stage', t('Current stage', '当前阶段'), STAGE_LABELS[tel.stage]()]] as const) {
       const c = el('div', 'ds-kpi'); c.dataset.kpi = key; c.append(el('span', 'ds-kpi-lbl', lbl), el('strong', 'ds-kpi-val', val)); kpis.append(c);
     }
     curveCard.append(el('h2', 'ds-curve-title', t('Discovery & Saturation Curve', '发现与饱和度曲线')), buildSaturationSvg(tel.curve, tel.totalRounds));
     wrap.append(banner, msg, kpis, curveCard);
-    if (tel.degraded.length) { const deg = el('div', 'ds-degraded', formatDegradedSources(tel.degraded)); deg.setAttribute('role', 'status'); wrap.append(deg); }
     foot.append(mkBtn('btn ds-stop-btn', t('Stop & keep partial results', '停止并保留已有结果'), stopAndKeepPartial)); wrap.append(foot); bodyEl.replaceChildren(wrap);
   };
 
   const renderResults = (focusSel?: string) => {
     if (!bodyEl || !result) return;
     const prevTop = bodyEl.scrollTop, res = result; cardSlots.clear(); const wrap = el('div', 'ds-results');
+    const mkDegraded = () => res.degraded.length ? [createDegradedInfoButton(res.degraded, shell?.openSettings ? () => shell!.openSettings!('academic') : undefined)] : [];
     if (res.aborted) {
       const pBar = el('div', 'ds-partial-banner'), btns = el('div', 'ds-partial-actions'); pBar.setAttribute('role', 'status');
       const txt = res.candidates.length ? t(`Stopped early: showing ${res.candidates.length} partial matches.`, `已提前停止，保留 ${res.candidates.length} 篇部分命中结果。`) : t('Stopped before any batch finished scoring.', '在首批文献完成评分前已停止。');
       btns.append(mkBtn('btn', t('Back to scope', '返回修改范围'), () => { mode = 'scoping'; render(); }), mkBtn('btn primary', t('Retry', '重试'), () => { void startSearch(false); }));
       pBar.append(el('span', '', txt), btns); wrap.append(pBar);
     }
-    if (res.degraded.length) { const deg = el('div', 'ds-degraded', formatDegradedSources(res.degraded)); deg.setAttribute('role', 'status'); wrap.append(deg); }
     if (!res.candidates.length) {
       const empty = el('div', 'ds-empty');
-      empty.append(el('h2', 'ds-empty-title', t('No matching papers found', '未找到匹配文献')), el('p', 'ds-empty-desc', t('Try broadening your question or removing restrictive criteria.', '可尝试放宽研究问题描述或减少限定条件。')), mkBtn('btn primary ds-broaden-btn', t('Broaden scope', '放宽检索范围'), () => { mode = 'scoping'; render(); }));
+      empty.append(el('h2', 'ds-empty-title', t('No matching papers found', '未找到匹配文献')), el('p', 'ds-empty-desc', t('Try broadening your question or removing restrictive criteria.', '可尝试放宽研究问题描述或减少限定条件。')), ...mkDegraded(), mkBtn('btn primary ds-broaden-btn', t('Broaden scope', '放宽检索范围'), () => { mode = 'scoping'; render(); }));
       wrap.append(empty); bodyEl.replaceChildren(wrap); return;
     }
     const ovCard = el('section', 'ds-overview-card'), ovHead = el('div', 'ds-ov-head'), ovMeta = el('div', 'ds-ov-meta'), ovBody = el('div', 'ds-overview-body');
-    ovMeta.append(el('span', 'ds-sat-pill', t(`${res.roundsCompleted} rounds · ${res.totalEvaluated} evaluated · ${res.candidates.length} matches`, `${res.roundsCompleted} 轮 · 评估 ${res.totalEvaluated} 篇 · 命中 ${res.candidates.length} 篇`)), mkBtn('btn ds-watch-search-btn', t('+ Watch this search', '+ 追踪此检索'), () => { void watchlist?.watchQuery(res.query); }));
+    ovMeta.append(el('span', 'ds-sat-pill', t(`${res.roundsCompleted} rounds · ${res.totalEvaluated} evaluated · ${res.candidates.length} matches`, `${res.roundsCompleted} 轮 · 评估 ${res.totalEvaluated} 篇 · 命中 ${res.candidates.length} 篇`)), ...mkDegraded(), mkBtn('btn ds-watch-search-btn', t('+ Watch this search', '+ 追踪此检索'), () => { void watchlist?.watchQuery(res.query); }));
     ovHead.append(el('h2', 'ds-ov-title', t('Executive Overview', '综述概览')), ovMeta);
     ovBody.dir = 'auto'; ovBody.innerHTML = answerMarkdown(res.overview, 0); linkOverviewCitations(ovBody, res.candidates.length, jumpToRank);
     ovCard.append(ovHead, ovBody, ...(res.saturationCurve.length ? [buildSaturationSvg(res.saturationCurve, res.roundsCompleted, true)] : []));
@@ -286,7 +286,7 @@ export function createDeepSearchView(): ResearchViewModule {
       view.append(top, bodyEl, watchlist.backdrop, watchlist.root); host.replaceChildren(view); render(); void watchlist.refresh();
     },
     unmount() {
-      mounted = false; abortActive();
+      mounted = false; abortActive(); dismissDegradedPopover(false);
       if (mode === 'telemetry') { if (tel.candidates.length) { result = buildPartialResult(); mode = 'results'; } else mode = 'scoping'; }
       watchlist?.unmount(); watchlist = undefined; cardSlots.clear();
     },
@@ -300,7 +300,7 @@ export function createDeepSearchView(): ResearchViewModule {
       expandedAbs.clear(); for (const id of s.expandedAbs ?? []) expandedAbs.add(id);
       render(); if (bodyEl) bodyEl.scrollTop = s.scrollTop ?? 0;
     },
-    handleEscape: () => watchlist?.isOpen() ? (watchlist.close(), true) : false,
+    handleEscape: () => dismissDegradedPopover() || (watchlist?.isOpen() ? (watchlist.close(), true) : false),
     onDocumentMutated(docId, deleted) { if (deleted) { syncCandidateInLibrary('', false, docId); watchlist?.syncPaperInLibrary('', false, docId); } }
   };
 }

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { computeCitationMapLayout, rankEarlierByCoCitation, reconstructInvertedAbstract } from '../src/shared/graph-layout.js';
+import { buildCitationGraphEdges, computeCitationMapLayout, rankEarlierByCoCitation, reconstructInvertedAbstract, timelineCitationScale } from '../src/shared/graph-layout.js';
 import type { GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from '../src/server/academic-graph.js';
 import { Library } from '../src/server/library.js';
@@ -129,4 +129,88 @@ test('graph.savePaper deduplicates abstract saves, tags doc_meta, upgrades on oa
   assert.deepEqual(second.doc.meta?.tags, ['glp-1', 'clinical']);
   const upgraded = await act('graph.savePaper', { paper, mode: 'oa-pdf', topicTag: 'glp-1' });
   assert.ok(upgraded.doc.id === first.doc.id && upgraded.doc.kind === 'pdf' && upgraded.upgraded === true);
+});
+
+test('buildCitationGraphEdges creates direct DAG edges, bibliographic coupling/co-citation edges, and fallback only for orphans', () => {
+  const mkNode = (id: string, isSeed = false): GraphNode => ({
+    id, openAlexId: id.startsWith('W') ? id : undefined, title: `Paper ${id}`, authors: ['A'], firstAuthor: 'A', lastAuthor: 'A',
+    year: 2023, citationCount: 50, source: 'openalex', isSeed
+  });
+  const nodes = [mkNode('W1', true), mkNode('W2'), mkNode('W3'), mkNode('W4'), mkNode('W5'), mkNode('ISO')];
+  const refs = new Map<string, string[]>([
+    ['W1', ['W2', 'W3']],
+    ['W2', ['W3', 'EXT1', 'EXT2', 'EXT3']],
+    ['W4', ['W2', 'W3', 'EXT1', 'EXT2', 'EXT3']],
+    ['W5', ['EXT1', 'EXT2', 'EXT3']]
+  ]);
+  const related = new Map<string, string[]>();
+  const fallbacks: GraphEdge[] = [
+    { source: 'W1', target: 'W5', kind: 'related' },
+    { source: 'W1', target: 'ISO', kind: 'related' }
+  ];
+  const edges = buildCitationGraphEdges(nodes, refs, related, fallbacks);
+  assert.ok(edges.some(e => e.source === 'W2' && e.target === 'W3' && e.kind === 'cites' && e.weight === 1));
+  assert.ok(edges.some(e => e.source === 'W4' && e.target === 'W2' && e.kind === 'cites'));
+  const coupling = edges.find(e => e.kind === 'related' && ((e.source === 'W2' && e.target === 'W5') || (e.source === 'W5' && e.target === 'W2')));
+  assert.ok(coupling && typeof coupling.weight === 'number' && coupling.weight > 0.2);
+  assert.ok(edges.some(e => e.source === 'W1' && e.target === 'ISO' && e.kind === 'related'));
+  assert.equal(edges.some(e => e.source === 'W1' && e.target === 'W5'), false);
+});
+
+test('exploreCitationGraph returns inter-paper citation edges in later mode and enriches S2 similar via one OA DOI batch', async () => {
+  const db = new DatabaseSync(':memory:');
+  ensureResearchSchema(db);
+  let doiBatchCalls = 0;
+  const fetchFn: typeof fetch = async input => {
+    const url = String(input);
+    if (url.includes('/works/W10?')) return jsonRes(makeOa('W10', 'Seed 10', 2022, 500, [], { doi: 'https://doi.org/10.1000/s10' }));
+    if (url.includes('filter=cites')) {
+      return jsonRes({ results: [makeOa('W11', 'Citing 11', 2023, 200, ['W10']), makeOa('W12', 'Citing 12', 2024, 150, ['W10', 'W11'])] });
+    }
+    if (url.includes('recommendations/v1/papers')) {
+      return jsonRes({
+        recommendedPapers: [
+          { paperId: 'S2A', title: 'S2 Paper A', year: 2023, citationCount: 90, externalIds: { DOI: '10.1000/a' }, authors: [{ name: 'A' }] },
+          { paperId: 'S2B', title: 'S2 Paper B', year: 2024, citationCount: 60, externalIds: { DOI: '10.1000/b' }, authors: [{ name: 'B' }] }
+        ]
+      });
+    }
+    if (url.includes('filter=doi')) {
+      doiBatchCalls++;
+      return jsonRes({
+        results: [
+          makeOa('W201', 'S2 Paper A', 2023, 90, [], { doi: 'https://doi.org/10.1000/a' }),
+          makeOa('W202', 'S2 Paper B', 2024, 60, ['W201'], { doi: 'https://doi.org/10.1000/b' })
+        ]
+      });
+    }
+    return jsonRes({ results: [] });
+  };
+  try {
+    const later = await exploreCitationGraph({ seeds: ['W10'], direction: 'later', limit: 25 }, { withDb: (_, run) => run(db), fetchFn });
+    assert.ok(later.edges.some(e => e.source === 'W12' && e.target === 'W11' && e.kind === 'cites'));
+    const sim = await exploreCitationGraph({ seeds: ['W10'], direction: 'similar', limit: 25 }, { withDb: (_, run) => run(db), fetchFn });
+    assert.equal(doiBatchCalls, 1);
+    assert.ok(sim.edges.some(e => e.source === 'S2B' && e.target === 'S2A' && e.kind === 'cites'));
+  } finally { db.close(); }
+});
+
+test('computeCitationMapLayout timeline mode orders Y by log10(citations + 1) with high-cited papers higher', () => {
+  const mk = (id: string, citationCount: number, year = 2023): GraphNode => ({
+    id, title: id, authors: ['A'], firstAuthor: 'A', lastAuthor: 'A', year, citationCount, source: 'openalex'
+  });
+  const nodes = [mk('tiny', 5), mk('low', 100), mk('mid', 1000), mk('high', 10000)];
+  const laid = computeCitationMapLayout(nodes, [], 'timeline', 800, 480);
+  const byId = new Map(laid.map(n => [n.id, n]));
+  assert.ok(byId.get('high')!.y < byId.get('mid')!.y);
+  assert.ok(byId.get('mid')!.y < byId.get('low')!.y);
+  assert.ok(byId.get('low')!.y < byId.get('tiny')!.y);
+  assert.deepEqual(timelineCitationScale(nodes).ticks, [0, 10, 100, 1000, 10000]);
+  assert.deepEqual(timelineCitationScale([mk('nan', Number.NaN), mk('inf', Number.POSITIVE_INFINITY)]), { maxLog: 1, ticks: [0, 10] });
+  const cohort = [mk('top30k', 30488, 2024), ...Array.from({ length: 19 }, (_, i) => mk(`c${i}`, 800 + i * 120, 2024)), mk('other23', 1200, 2023), mk('other25', 900, 2025)];
+  const padY = Math.min(44, Math.max(24, 446 * 0.08)), spanY = 446 - padY * 2, { maxLog } = timelineCitationScale(cohort);
+  const yOf = (c: number) => padY + (1 - Math.log10(c + 1) / maxLog) * spanY;
+  const placed = computeCitationMapLayout(cohort, [], 'timeline', 760, 446), pMap = new Map(placed.map(n => [n.id, n]));
+  for (const n of placed) assert.ok(Math.abs(n.y - yOf(n.citationCount ?? 0)) <= 16, `${n.id} drifted: ${n.y} vs ${yOf(n.citationCount ?? 0)}`);
+  assert.ok(pMap.get('top30k')!.y > yOf(100_000) && pMap.get('top30k')!.y < yOf(10_000) && pMap.get('c0')!.y < yOf(100));
 });

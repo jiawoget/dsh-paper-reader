@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { parseAcademicInput } from '../shared/academic-intake.js';
 import { extractArxivId } from '../shared/citation-export.js';
-import { rankEarlierByCoCitation, reconstructInvertedAbstract } from '../shared/graph-layout.js';
+import { buildCitationGraphEdges, rankEarlierByCoCitation, reconstructInvertedAbstract } from '../shared/graph-layout.js';
 import type { DocumentInfo, GraphDirection, GraphEdge, GraphExploreResult, GraphNode, GraphPaper, GraphSource } from '../shared/types.js';
 import { articleUrl } from '../shared/web-article.js';
 import { abstractDocId } from './abstract-library.js';
@@ -206,6 +206,12 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
   if (!resolvedSeeds.length) return { seeds: [], nodes: [], edges: [], degraded: [...degraded], fromCache: false };
   const seedNodes: GraphNode[] = resolvedSeeds.map(s => ({ ...attachLibraryMatch(s.paper, ctx.docs), isSeed: true, direction: 'seed' }));
   const budget = Math.max(1, limit - seedNodes.length), discovered: GraphNode[] = [], edges: GraphEdge[] = [];
+  const refsByNodeId = new Map<string, string[]>(), relatedByNodeId = new Map<string, string[]>();
+  const recordMeta = (id: string, w: ResolvedWork) => {
+    if (w.referencedIds.length) refsByNodeId.set(id, w.referencedIds);
+    if (w.relatedIds.length) relatedByNodeId.set(id, w.relatedIds);
+  };
+  for (const s of resolvedSeeds) recordMeta(s.paper.id, s);
   let fromCache = resolvedSeeds.every(s => s.fromCache);
   const negSet = new Set((params.negativeSeeds ?? []).flatMap(r => { const p = parseAcademicInput(r); return [r.trim().toLowerCase(), shortOaId(r)?.toLowerCase(), p?.kind === 'doi' ? p.doi.toLowerCase() : undefined, p?.kind === 'arxiv' ? p.id.toLowerCase() : undefined].filter((v): v is string => Boolean(v)); }));
   const pushDisc = (paper: GraphPaper, dir: GraphDirection, coCitations?: number) => {
@@ -217,8 +223,11 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
     const counts = new Map<string, number>();
     for (const s of resolvedSeeds) for (const refId of new Set(s.referencedIds)) if (!seedKeySet.has(refId)) { counts.set(refId, (counts.get(refId) ?? 0) + 1); edges.push({ source: s.paper.id, target: refId, kind: 'cites' }); }
     const batch = await fetchOpenAlexByIds([...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 100).map(([id]) => id), ctx, degraded);
+    const workById = new Map(batch.works.map(w => [w.paper.id, w]));
     fromCache = fromCache && batch.fromCache;
-    for (const paper of rankEarlierByCoCitation(batch.works.map(w => w.paper), counts, budget)) pushDisc(paper, 'earlier', counts.get(paper.id) ?? 1);
+    for (const paper of rankEarlierByCoCitation(batch.works.map(w => w.paper), counts, budget)) {
+      if (pushDisc(paper, 'earlier', counts.get(paper.id) ?? 1)) { const w = workById.get(paper.id); if (w) recordMeta(paper.id, w); }
+    }
   } else if (params.direction === 'later') {
     const oaIds = resolvedSeeds.map(s => s.paper.openAlexId).filter((v): v is string => Boolean(v));
     const res = oaIds.length ? await fetchJson('openalex', 'oa:cites:' + [...oaIds].sort().join('|'), oaUrl('/works', { filter: 'cites:' + oaIds.join('|'), sort: 'cited_by_count:desc', 'per-page': '50' }, ctx.settings), ctx, degraded, TTL_EXPLORE) : undefined;
@@ -226,6 +235,7 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
     for (const row of arrOf(isObject(res?.data) ? res.data.results : undefined)) {
       const w = parseOaWork(row);
       if (!w || !pushDisc(w.paper, 'later')) continue;
+      recordMeta(w.paper.id, w);
       const hits = resolvedSeeds.filter(s => s.paper.openAlexId && w.referencedIds.includes(s.paper.openAlexId));
       for (const t of hits.length ? hits : [resolvedSeeds[0]]) edges.push({ source: w.paper.id, target: t.paper.id, kind: 'cites' });
     }
@@ -240,7 +250,22 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
     if (discovered.length < budget) {
       const batch = await fetchOpenAlexByIds([...new Set(resolvedSeeds.flatMap(s => s.relatedIds).filter(id => !seedKeySet.has(id)))].slice(0, 50), ctx, degraded);
       fromCache = fromCache && batch.fromCache;
-      for (const w of batch.works) if (pushDisc(w.paper, 'similar')) edges.push({ source: (resolvedSeeds.find(s => s.relatedIds.includes(w.paper.id)) ?? resolvedSeeds[0]).paper.id, target: w.paper.id, kind: 'related' });
+      for (const w of batch.works) if (pushDisc(w.paper, 'similar')) { recordMeta(w.paper.id, w); edges.push({ source: (resolvedSeeds.find(s => s.relatedIds.includes(w.paper.id)) ?? resolvedSeeds[0]).paper.id, target: w.paper.id, kind: 'related' }); }
+    }
+    if (discovered.filter(d => refsByNodeId.has(d.id)).length < 3) {
+      const byDoi = new Map<string, GraphNode>();
+      for (const d of discovered) if (!refsByNodeId.has(d.id) && d.doi) byDoi.set(d.doi.toLowerCase(), d);
+      const dois = [...byDoi.keys()].slice(0, 50);
+      if (dois.length) {
+        const res = await fetchJson('openalex', 'oa:doi-batch:' + [...dois].sort().join('|'), oaUrl('/works', { filter: 'doi:' + dois.join('|'), 'per-page': String(dois.length) }, ctx.settings), ctx, degraded);
+        fromCache = fromCache && Boolean(res?.fromCache);
+        for (const row of arrOf(isObject(res?.data) ? res.data.results : undefined)) {
+          const w = parseOaWork(row), target = w?.paper.doi ? byDoi.get(w.paper.doi.toLowerCase()) : undefined;
+          if (!w || !target) continue;
+          if (!target.openAlexId && w.paper.openAlexId) target.openAlexId = w.paper.openAlexId;
+          recordMeta(target.id, w);
+        }
+      }
     }
   }
   if (!discovered.length && params.direction !== 'similar' && resolvedSeeds.some(s => s.paper.pmid)) {
@@ -249,8 +274,8 @@ export async function exploreCitationGraph(params: { seeds: string[]; direction:
     const listObj = isObject(res?.data) ? res.data[ep === 'references' ? 'referenceList' : 'citationList'] : undefined;
     for (const item of arrOf(isObject(listObj) ? listObj[ep === 'references' ? 'reference' : 'citation'] : undefined)) { const paper = parseEpmcItem(item); if (paper && pushDisc(paper, params.direction)) edges.push(params.direction === 'earlier' ? { source: pmidSeed.paper.id, target: paper.id, kind: 'cites' } : { source: paper.id, target: pmidSeed.paper.id, kind: 'cites' }); }
   }
-  const nodes = [...seedNodes, ...discovered].slice(0, limit), nodeIds = new Set(nodes.map(n => n.id));
-  return { seeds: seedNodes, nodes, edges: edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)), degraded: [...degraded], fromCache };
+  const nodes = [...seedNodes, ...discovered].slice(0, limit);
+  return { seeds: seedNodes, nodes, edges: buildCitationGraphEdges(nodes, refsByNodeId, relatedByNodeId, edges), degraded: [...degraded], fromCache };
 }
 export function readGraphPaperInput(raw: Input): GraphPaper {
   const title = single(raw.title, 'paper title', 250, true), authors = arrOf(raw.authors).map(a => str(a) ?? '').filter(Boolean).slice(0, 100);

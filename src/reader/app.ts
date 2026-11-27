@@ -125,6 +125,7 @@ class Reader implements ReaderPort {
     restorePosition: anchor => this.restoreReading(anchor),
     inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
     refreshNotebook: docId => { if (docId === this.doc.id) void this.refresh().catch(() => undefined); },
+    openSettings: tab => settingsDialog(this, tab ?? 'ai'),
     focusAfterCollapse: () => (byId('workspaceSwitch').querySelector<HTMLElement>('.rw-sw-research') ?? byId('library')).focus({ preventScroll: true })
   });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;

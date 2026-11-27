@@ -12,7 +12,7 @@ export interface ResearchShellContext {
   activeDocId: () => string; activeTopic: () => string; setActiveTopic: (tag: string) => void;
   openContext: () => ResearchOpenContext | undefined; openView: (view: ResearchViewId, ctx?: ResearchOpenContext) => void;
   inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void; refreshNotebook?: (docId: string) => void;
-  paperFloatBar?: PaperFloatBar;
+  paperFloatBar?: PaperFloatBar; openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void;
 }
 
 export interface ResearchViewModule {
@@ -24,6 +24,7 @@ export interface ResearchViewModule {
 export interface ResearchWorkspaceHost {
   activeDocId: () => string; prepareOpen: () => void; capturePosition: () => ReturnAnchor; restorePosition: (anchor: ReturnAnchor) => Promise<void>;
   inspectFromWorkspace: (target: InspectTarget, returnAnchor?: ReturnAnchor) => Promise<void>; focusAfterCollapse: () => void; refreshNotebook?: (docId: string) => void;
+  openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void;
 }
 
 const norm = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();

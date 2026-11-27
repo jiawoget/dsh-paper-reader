@@ -150,10 +150,10 @@ async function run(): Promise<void> {
       assert.ok((await ws.locator('.cm-row[data-node-id="W2"] .cm-row-title').boundingBox())!.height >= 24);
       const baseW2Fill = await ws.locator('.cm-node[data-node-id="W2"] .cm-node-circle').evaluate(el => getComputedStyle(el).fill);
       await ws.locator('.cm-row[data-node-id="W2"]').hover();
-      await page.waitForFunction(() => getComputedStyle(document.querySelector('.cm-node[data-node-id="W2"] .cm-node-circle')!).fill === 'rgb(217, 154, 0)');
-      assert.notEqual(baseW2Fill, 'rgb(217, 154, 0)');
+      await page.waitForFunction((prev: string) => Boolean(document.querySelector('.cm-node[data-node-id="W2"].is-highlighted .cm-node-circle') && getComputedStyle(document.querySelector('.cm-node[data-node-id="W2"] .cm-node-circle')!).fill !== prev), baseW2Fill);
+      assert.ok(await ws.evaluate(() => Boolean(document.querySelector('.cm-node[data-node-id="W1"].is-neighbor') && document.querySelector('.cm-node[data-node-id="WX0"].is-dimmed'))));
       await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Timeline', exact: true }).click();
-      assert.ok((await ws.locator('.cm-axis-label').count()) >= 2);
+      assert.ok((await ws.locator('.cm-axis-label').count()) >= 2 && (await ws.locator('.cm-axis-y-label').count()) >= 2);
       await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Last Author', exact: true }).click();
       assert.equal((await ws.locator('.cm-node[data-node-id="W2"] .cm-node-label').textContent())?.trim(), 'Re 2022');
       await ws.locator('.cm-list').evaluate(el => { el.scrollTop = 48; });
@@ -477,7 +477,7 @@ async function run(): Promise<void> {
       await zhPage.locator('.rw-nav-btn[data-view="citations"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cit-title, .cit-byline, .cit-doc-select, .cit-card-title, .cit-meta-text, .cit-ctx-text, .cit-rationale'), 'zh-CN Citations');
       await zhPage.locator('.rw-nav-btn[data-view="citation-map"]').click();
-      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-select'), 'zh-CN Citation Map');
+      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-pill, .cm-seed-picker, .cm-crumb, .cm-row-title, .cm-row-meta'), 'zh-CN Citation Map');
       await zhPage.locator('.rw-nav-btn[data-view="field-trends"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.ft-starter-chip, .ft-topic-name'), 'zh-CN Field Trends');
       await zhPage.locator('.rw-nav-btn[data-view="library-chat"]').click();
