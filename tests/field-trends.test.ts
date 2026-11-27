@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   computeCellYoyGrowth, computeCitationHeat, computeTrendGrowth, filterTrendTopics, sortTrendTopics, type TrendTopicRow
 } from '../src/shared/research-types.js';
+import { buildTrendChartModel, computeYScale, formatChartValue } from '../src/reader/research/field-trends-chart.js';
 import { matchLocalDocsForTopic, queryFieldTrends, queryTrendPapers, type TrendContext } from '../src/server/field-trends.js';
 import { Library } from '../src/server/library.js';
 import { ReaderStore } from '../src/server/reader-store.js';
@@ -180,4 +181,63 @@ test('trends.query local coverage matches doc_meta live on add/tag/delete, and t
 
   await assert.rejects(() => act('trends.query', { query: 'x', windowYears: 4 as 5 }), e => e instanceof ServiceError && e.status === 400);
   await assert.rejects(() => act('trends.papers', { query: 'x', topicId: 'T1', year: 1800 }), e => e instanceof ServiceError && e.status === 400);
+});
+
+test('Field Trends chart model: top-6 slicing, YTD dashed split, growth null-YTD + negative baseline, Y-scale & edge cases', () => {
+  const mkRow = (id: string, vols: number[], yoys: (number | null)[], heats: number[]): TrendTopicRow => ({
+    topicId: id, topicName: `Topic ${id}`, totalVolume: vols.reduce((a, b) => a + b, 0),
+    recent2yr: 50, prior2yr: 25, growth: 1, lowBase: false, citationHeat: heats[0] ?? 0, localCount: 0, localDocIds: [],
+    cells: [2023, 2024, 2025, 2026].slice(0, vols.length).map((year, i) => ({
+      year, volume: vols[i], isYtd: year === 2026, yoyGrowth: yoys[i] ?? null, lowBase: i === 0, citations: (heats[i] ?? 0) * 10, citationHeat: heats[i] ?? 0
+    }))
+  });
+  const eight = Array.from({ length: 8 }, (_, i) => mkRow(`T${i}`, [10 + i, 20 + i, 40 + i, 15 + i], [null, 0.5, 1.0, null], [5, 12, 35, 8]));
+  const volModel = buildTrendChartModel(eight, [2023, 2024, 2025, 2026], 2026, 'volume');
+  assert.equal(volModel.series.length, 6);
+  assert.equal(volModel.series[0].points.length, 4);
+  assert.ok(volModel.series[0].solidPath.startsWith('M ') && volModel.series[0].ytdPath.startsWith('M ') && volModel.series[0].areaPath.endsWith(' Z'));
+  assert.equal(volModel.series[0].solidPath.split(' L ').length, 3);
+  assert.equal(volModel.series[0].ytdPath.split(' L ').length, 2);
+  assert.equal(volModel.yScale.min, 0);
+  assert.ok(volModel.yScale.max >= 47 && !volModel.yScale.zeroLine);
+
+  const citeModel = buildTrendChartModel(eight.slice(0, 2), [2023, 2024, 2025, 2026], 2026, 'citations');
+  assert.ok(citeModel.series[0].ytdPath.startsWith('M ') && citeModel.yScale.max >= 35);
+  assert.equal(formatChartValue(1500, 'volume'), '1.5k');
+  assert.equal(formatChartValue(4.2, 'citations'), '4.2');
+  assert.equal(formatChartValue(null, 'growth', true), 'YTD*');
+  assert.equal(formatChartValue(0.25, 'growth', false, true), '+25%°');
+
+  const negRows = [mkRow('NEG', [100, 75, 120, 30], [0.1, -0.25, 0.6, null], [20, 15, 30, 5])];
+  const growthModel = buildTrendChartModel(negRows, [2023, 2024, 2025, 2026], 2026, 'growth');
+  assert.equal(growthModel.series[0].points.length, 3);
+  assert.equal(growthModel.series[0].ytdPath, '');
+  assert.ok(growthModel.yScale.zeroLine && growthModel.yScale.min < 0 && growthModel.yScale.max > 0);
+  assert.ok(growthModel.yScale.ticks.some(tk => tk.value === 0 && tk.label === '0%'));
+
+  const hiddenRescale = buildTrendChartModel(
+    [mkRow('BIG', [1000, 2000], [null, 1], [100, 200]), mkRow('SMALL', [10, 20], [null, 1], [1, 2])],
+    [2023, 2024], 2026, 'volume', { hiddenIds: new Set(['BIG']) }
+  );
+  assert.ok(hiddenRescale.yScale.max <= 40 && hiddenRescale.series[0].hidden && !hiddenRescale.series[1].hidden);
+
+  const emptyModel = buildTrendChartModel([], [], 2026, 'volume');
+  assert.deepEqual(emptyModel.series, []);
+  assert.deepEqual(emptyModel.yearXs, []);
+  const oneYr = buildTrendChartModel([mkRow('ONE', [Number.NaN], [Number.NaN], [Number.NaN])], [2023], 2026, 'volume');
+  assert.equal(oneYr.yearXs.length, 1);
+  assert.ok(Number.isFinite(oneYr.yearXs[0]) && Number.isFinite(oneYr.series[0].points[0].y));
+  assert.deepEqual(computeYScale(Number.NaN, Number.NaN, 'growth'), { min: 0, max: 1, ticks: [0, 0.5, 1], zeroLine: false });
+
+  const highGrowth = buildTrendChartModel([mkRow('SURGE', [10, 210, 8610], [null, 20, 40], [5, 10, 20])], [2023, 2024, 2025], 2026, 'growth');
+  const growthLabels = highGrowth.yScale.ticks.map(tk => tk.label);
+  assert.equal(new Set(growthLabels).size, growthLabels.length);
+  assert.ok(growthLabels.includes('+2k%') && growthLabels.includes('+4k%') && !growthLabels.includes('>+999%'));
+  assert.equal(formatChartValue(15, 'growth'), '+1.5k%');
+  assert.equal(formatChartValue(-20, 'growth'), '-2k%');
+
+  const smallVol1 = buildTrendChartModel([mkRow('V1', [1, 1], [null, 0], [1, 1])], [2023, 2024], 2026, 'volume');
+  assert.deepEqual(smallVol1.yScale.ticks.map(tk => tk.label), ['0', '1']);
+  const smallVol2 = buildTrendChartModel([mkRow('V2', [1, 2], [null, 1], [1, 2])], [2023, 2024], 2026, 'volume');
+  assert.deepEqual(smallVol2.yScale.ticks.map(tk => tk.label), ['0', '1', '2']);
 });
