@@ -121,6 +121,36 @@ test('PaperFloatBar stays hidden at rest, reveals 5 actions for external and 4 f
   } finally { restore(); }
 });
 
+test('PaperFloatBar outside placement never overlaps hovered row across wide, compact, and narrow viewports', () => {
+  const restore = installFakeDom();
+  try {
+    const host = document.createElement('section'); document.body.append(host);
+    const noop = () => undefined;
+    const bar = new PaperFloatBar(host, { onRead: noop, onAskAi: noop, onCitations: noop, onCitationMap: noop }, { placement: 'outside' });
+    Object.defineProperty(bar.root, 'offsetWidth', { get: () => bar.root.classList.contains('is-compact') ? 150 : 320 });
+    const row = document.createElement('div'), doc: DocumentInfo = { id: 'd1', title: 'P', kind: 'pdf', defaultPage: 1 };
+    host.append(row); bar.attach(row, { doc, inLibrary: true });
+    Object.assign(globalThis, { innerWidth: 1440, innerHeight: 900 });
+    Object.assign(row, { rect: { left: 387, right: 1053, top: 200, bottom: 256, width: 666, height: 56 } });
+    bar.showFor(row);
+    assert.equal(bar.root.classList.contains('is-compact'), false);
+    assert.equal(bar.root.style.left, '1061px'); assert.equal(bar.root.style.top, '210px');
+    Object.assign(globalThis, { innerWidth: 1024, innerHeight: 768 });
+    Object.assign(row, { rect: { left: 179, right: 845, top: 200, bottom: 256, width: 666, height: 56 } });
+    bar.showFor(row);
+    assert.equal(bar.root.classList.contains('is-compact'), true);
+    assert.equal(bar.root.style.left, '853px'); assert.equal(bar.root.style.top, '210px');
+    Object.assign(globalThis, { innerWidth: 800, innerHeight: 768 });
+    Object.assign(row, { rect: { left: 67, right: 733, top: 200, bottom: 256, width: 666, height: 56 } });
+    bar.showFor(row);
+    assert.equal(bar.root.style.top, '160px');
+    Object.assign(row, { rect: { left: 67, right: 733, top: 20, bottom: 76, width: 666, height: 56 } });
+    bar.showFor(row);
+    assert.equal(bar.root.style.top, '80px');
+    bar.destroy();
+  } finally { restore(); }
+});
+
 test('PaperFloatBar isolates busy target on mid-save hover and hides after busy when pointer leaves', async () => {
   const restore = installFakeDom();
   try {

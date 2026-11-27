@@ -51,7 +51,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
     onAskAi: async target => { if (target.doc) { await read(target.doc); app.openPaperChat?.(); } },
     onCitations: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citations', { docId: target.doc.id }); } },
     onCitationMap: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citation-map', { seedDocId: target.doc.id }); } }
-  });
+  }, { placement: 'outside' });
 
   let searchTimer = 0, searchSeq = 0;
   function renderHits(hits: LibrarySearchHit[]): void {
@@ -104,6 +104,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
       shown.sort((a, b) => sortBy === 'title' ? a.title.localeCompare(b.title)
         : sortBy === 'added' ? ((Date.parse(b.createdAt ?? '') || 0) - (Date.parse(a.createdAt ?? '') || 0)) || ((order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
         : ((b.meta?.lastOpenedAt ?? 0) - (a.meta?.lastOpenedAt ?? 0)) || ((order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)));
+      floatBar.hide();
       list.replaceChildren();
       status.textContent = shown.length ? '' : t('No matching documents.', '没有找到符合条件的文档。');
 
