@@ -5,13 +5,14 @@ import type { WatchlistEntry, WatchlistItem, WatchlistKind } from '../shared/dee
 import type { PaperCard } from '../shared/research-types.js';
 import type { DocPageRecord, GraphSource, TopicRecord } from '../shared/types.js';
 import { isObject, single, stringValue, type Input } from './service-types.js';
+import { deleteDocResourcesForDoc, ensureDocResourcesSchema } from './doc-resources-store.js';
 
 type Row = Record<string, SQLOutputValue>;
 interface PageFtsHit { docId: string; page: number; snippet: string; score: number }
 
 export function hasResearchSchema(db: DatabaseSync): boolean {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist','citation_stances')").get();
-  return Number(row?.n ?? 0) === 9;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist','citation_stances','doc_resources')").get();
+  return Number(row?.n ?? 0) === 10;
 }
 
 export function ensureResearchSchema(db: DatabaseSync): void {
@@ -24,6 +25,7 @@ export function ensureResearchSchema(db: DatabaseSync): void {
   db.exec("CREATE TABLE IF NOT EXISTS extraction_cells(table_id TEXT NOT NULL, doc_id TEXT NOT NULL, col_id TEXT NOT NULL, value TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', page INTEGER, reasoning TEXT NOT NULL DEFAULT '', verified INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, source_kind TEXT NOT NULL DEFAULT 'pdf', status TEXT NOT NULL DEFAULT 'done', updated_at INTEGER NOT NULL, PRIMARY KEY(table_id, doc_id, col_id)) STRICT");
   db.exec(`CREATE TABLE IF NOT EXISTS watchlist(id TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, query TEXT NOT NULL, doc_id TEXT, work_id TEXT, sources_json TEXT NOT NULL DEFAULT '["openalex","europepmc","arxiv"]', cursor_date TEXT NOT NULL, seen_keys_json TEXT NOT NULL DEFAULT '[]', unread_json TEXT NOT NULL DEFAULT '[]', last_checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT`);
   db.exec('CREATE TABLE IF NOT EXISTS citation_stances(target_key TEXT NOT NULL, direction TEXT NOT NULL, citing_key TEXT NOT NULL, doc_id TEXT, source TEXT NOT NULL, citing_doc_id TEXT, citing_page INTEGER, citing_title TEXT NOT NULL, citing_authors_json TEXT NOT NULL, citing_year INTEGER, citing_doi TEXT, citing_arxiv TEXT, citing_url TEXT, section TEXT NOT NULL, context TEXT NOT NULL, stance TEXT NOT NULL, rationale TEXT NOT NULL, is_influential INTEGER NOT NULL DEFAULT 0, is_self_citation INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(target_key, direction, citing_key)) STRICT');
+  ensureDocResourcesSchema(db);
 }
 
 export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
@@ -33,6 +35,7 @@ export function deleteResearchDocument(db: DatabaseSync, docId: string): void {
   db.prepare('DELETE FROM extraction_cells WHERE doc_id=?').run(docId);
   db.prepare('DELETE FROM watchlist WHERE doc_id=?').run(docId);
   db.prepare('DELETE FROM citation_stances WHERE doc_id=? OR citing_doc_id=?').run(docId, docId);
+  deleteDocResourcesForDoc(db, docId);
 }
 
 export function segmentFtsText(text: string): string {
