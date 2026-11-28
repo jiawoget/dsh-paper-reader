@@ -18,7 +18,7 @@ export interface ReviewTable {
   columns: ReviewColumn[]; strictCriterion: boolean; threshold: number; updatedAt: number;
 }
 export interface ReviewGetInput { tableId?: string }
-export interface ReviewGetResult { table: ReviewTable; cells: ExtractionCell[]; tables: ReviewTable[] }
+export interface ReviewGetResult { table: ReviewTable; cells: ExtractionCell[]; tables: ReviewTable[]; snippets?: Record<string, string> }
 export interface ReviewSaveTableInput {
   id?: string; name?: string; preset?: ReviewPresetId; columns?: ReviewColumn[];
   criteria?: ScreeningCriterion[]; strictCriterion?: boolean; threshold?: number;
@@ -31,6 +31,11 @@ export interface ReviewExtractInput {
 export interface ReviewBatchResult { tableId: string; cells: ExtractionCell[]; processedDocs: number; skippedDocs: number; failedDocs: number; aborted: boolean }
 export interface ReviewSetCellInput { tableId?: string; docId: string; colId: string; value: string; quote?: string; page?: number | null; reasoning?: string }
 export interface ReviewSetCellResult { cell: ExtractionCell; meta?: DocMeta }
+export interface ReviewBulkSetCellInput { tableId?: string; docIds: string[]; colId: string; value: string; reasoning?: string }
+export interface ReviewBulkSetCellResult { cells: ExtractionCell[]; updatedCount: number }
+export interface ReviewRerankInput { topic: string; docIds: string[]; questionModel?: QuestionModel | null }
+export interface ReviewRerankScore { docId: string; score: number; rationale?: string }
+export interface ReviewRerankResult { scores: ReviewRerankScore[]; degraded?: boolean }
 export interface ReviewExportInput { tableId?: string; format: ReviewExportFormat; docIds?: string[] }
 export interface ReviewExportResult { filename: string; mime: string; content: string }
 

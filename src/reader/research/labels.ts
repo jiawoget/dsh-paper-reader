@@ -162,5 +162,42 @@ export const researchText = {
   seedNode: () => t('Seed', '种子'),
   inLibraryNode: () => t('In library', '已在库'),
   yearRampLabel: () => t('Older → Newer', '较早 → 较新'),
-  pathFocusLabel: () => t('Path to seed', '溯源路径')
+  pathFocusLabel: () => t('Path to seed', '溯源路径'),
+  triageTopicPlaceholder: () => t('Filter by research topic or question…', '按研究主题或问题筛选…'),
+  triageTopicLabel: () => t('Filter by research topic', '按研究主题筛选'),
+  triageTagAll: () => t('All tags & topics', '全部标签与主题'),
+  triageTagLabel: () => t('Filter by tag or topic', '按标签或主题筛选'),
+  triageMatches: (n: number) => t(`Topic matches (${n})`, `主题匹配 (${n})`),
+  triageAllLibrary: (n: number) => t(`All library (${n})`, `全部文献 (${n})`),
+  triageAiRerank: () => t('AI Rerank', 'AI 重排'),
+  triageReranking: () => t('Reranking…', '正在重排…'),
+  triageRerankDegraded: () => t('AI Rerank unavailable. Configure a model in Connections.', 'AI 重排暂不可用，请在连接设置中配置模型。'),
+  triageRerankDone: (n: number) => t(`AI reranked ${n} paper${n === 1 ? '' : 's'}.`, `已完成 ${n} 篇文献 AI 重排。`),
+  triageIncludeTop: (n: number) => t(`Include top ${n}`, `纳入前 ${n} 篇`),
+  triageIncludeMatches: (n: number) => t(`Include matches (${n})`, `纳入匹配 (${n})`),
+  triageSelectVisible: () => t('Select visible', '全选当前页'),
+  triageSelectMatched: (n: number) => t(`Select matched (${n})`, `全选匹配 (${n})`),
+  triageClearSel: () => t('Clear', '清空选择'),
+  triageSelectedCount: (n: number) => t(`${n} selected`, `已选 ${n} 篇`),
+  triageIncludeN: (n: number) => t(`Include (${n})`, `纳入 (${n})`),
+  triageMaybeN: (n: number) => t(`Maybe (${n})`, `待定 (${n})`),
+  triageExcludeN: (n: number) => t(`Exclude (${n})`, `排除 (${n})`),
+  triageAiScreenN: (n: number) => t(`AI Screen Selected (${n})`, `AI 筛选已选 (${n})`),
+  triageExtractN: (n: number) => t(`Extract Selected (${n})`, `提取已选 (${n})`),
+  triageExportMdN: (n: number) => t(`Export MD (${n})`, `导出 MD (${n})`),
+  triageExportCsvN: (n: number) => t(`Export CSV (${n})`, `导出 CSV (${n})`),
+  triageMoveExcluded: () => t('Move to Excluded', '移至排除'),
+  triageIncludedToggle: (n: number) => t(`Included (${n})`, `已纳入 (${n})`),
+  triageAllToggle: (n: number) => t(`All (${n})`, `全部 (${n})`),
+  triageShowing: (shown: number, filtered: number, total: number) => shown === 0
+    ? t(`0 of ${total} papers`, `0 / ${total} 篇文献`)
+    : t(`Showing 1–${shown} of ${filtered} (${total} total)`, `显示 1–${shown} / ${filtered}（共 ${total} 篇）`),
+  triageShowMore: (step: number) => t(`Show more (+${step})`, `加载更多 (+${step})`),
+  triageBulkUpdated: (n: number) => t(`Updated ${n} paper${n === 1 ? '' : 's'}.`, `已更新 ${n} 篇文献。`),
+  triageNoMatches: () => t('No papers match the current topic or tag filter.', '当前主题或标签筛选下暂无匹配文献。'),
+  triageShowAll: () => t('Show all papers', '显示全部文献'),
+  triageRelTitle: (score: number, ai: boolean, rationale?: string) => {
+    const kind = ai ? t('AI relevance', 'AI 语义相关度') : t('Keyword relevance', '关键词相关度');
+    return rationale ? `${kind} ${score}% — ${rationale}` : `${kind} ${score}%`;
+  }
 };

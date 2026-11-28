@@ -1,40 +1,41 @@
 import { computeScreeningStatus, type ExtractionCell, type ReviewBatchResult, type ReviewDecision, type ReviewExportFormat, type ReviewExtractMode, type ReviewTable } from '../../shared/review-types.js';
-import type { DocumentInfo } from '../../shared/types.js';
+import type { DocumentInfo, TopicRecord } from '../../shared/types.js';
 import { api, apiStream, downloadFile, el, icon, message, readerLabel as t, toast } from '../ui.js';
 import { infoTip } from './icons.js';
 import { researchText } from './labels.js';
 import { isAbortError, mkBtn } from './paper-intake.js';
 import { cellBadgeInfo, coverageLabel, decisionLabel, ReviewColumnPicker, reviewColLabel, ReviewTableInspector, slugColumnId, type ReviewPaperAction } from './review-table-inspector.js';
+import { ReviewTriageBar, type ReviewTriageStep, type SavedTriageState } from './review-triage-bar.js';
 import type { ResearchOpenContext, ResearchShellContext, ResearchViewModule } from './state.js';
 
-type ReviewStep = 'screening' | 'extraction';
-interface SavedReviewState { step: ReviewStep; selected: { docId: string; colId: string } | null; selectedPaperId: string | null; inspectorOpen: boolean; activeScreenDocId: string; scrollTop: number; scrollLeft: number }
+interface SavedReviewState { step: ReviewTriageStep; selected: { docId: string; colId: string } | null; selectedPaperId: string | null; inspectorOpen: boolean; activeScreenDocId: string; scrollTop: number; scrollLeft: number; triage?: SavedTriageState }
 const cellKey = (docId: string, colId: string) => `${docId}\0${colId}`;
 const srcBadge = (doc: DocumentInfo) => el('span', `rt-src-badge ${doc.kind === 'abstract' ? 'is-abstract' : 'is-pdf'}`, coverageLabel(doc.kind));
 const miniBadge = (b: ReturnType<typeof cellBadgeInfo>) => { const s = el('span', `rt-cell-badge is-${b.kind}`, b.short); s.title = b.full; return s; };
 
 export function createReviewTableView(): ResearchViewModule {
-  let lastOpenCtx: ResearchOpenContext | undefined, mounted = false, mountSeq = 0, running = false, step: ReviewStep = 'extraction';
-  let shell: ResearchShellContext | undefined, table: ReviewTable | null = null, docs: DocumentInfo[] = [];
-  let cells = new Map<string, ExtractionCell>(), selected: { docId: string; colId: string } | null = null, selectedPaperId: string | null = null;
+  let lastOpenCtx: ResearchOpenContext | undefined, mounted = false, mountSeq = 0, running = false, bulkBusy = false, step: ReviewTriageStep = 'extraction';
+  let shell: ResearchShellContext | undefined, table: ReviewTable | null = null, docs: DocumentInfo[] = [], topics: TopicRecord[] = [], filteredIds: string[] = [];
+  let cells = new Map<string, ExtractionCell>(), snippets = new Map<string, string>(), selected: { docId: string; colId: string } | null = null, selectedPaperId: string | null = null;
   let activeScreenDocId = '', statusMsg = '', abortCtrl: AbortController | null = null, events: AbortController | null = null;
-  let splitEl: HTMLElement | null = null, topEl: HTMLElement | null = null, subBarEl: HTMLElement | null = null, bodyEl: HTMLElement | null = null;
+  let splitEl: HTMLElement | null = null, topEl: HTMLElement | null = null, subBarEl: HTMLElement | null = null, bodyEl: HTMLElement | null = null, contentEl: HTMLElement | null = null;
   let progressEl: HTMLElement | null = null, stopBtn: HTMLButtonElement | null = null, toolsToggleEl: HTMLButtonElement | null = null;
   let exportMenuEl: HTMLElement | null = null, exportToggleBtn: HTMLButtonElement | null = null;
-  let stepBtns = new Map<ReviewStep, HTMLButtonElement>(), actionBtns: HTMLButtonElement[] = [];
-  let inspector: ReviewTableInspector | null = null, colPicker: ReviewColumnPicker | null = null;
+  let stepBtns = new Map<ReviewTriageStep, HTMLButtonElement>(), actionBtns: HTMLButtonElement[] = [];
+  let inspector: ReviewTableInspector | null = null, colPicker: ReviewColumnPicker | null = null, triage: ReviewTriageBar | null = null;
 
   const visibleDocs = () => { const tag = shell?.activeTopic(), f = tag ? docs.filter(d => d.meta?.tags?.includes(tag)) : docs; return f.length ? f : docs; };
   const docCells = (docId: string) => { const m = new Map<string, ExtractionCell>(); for (const c of cells.values()) if (c.docId === docId) m.set(c.colId, c); return m; };
+  const docStatus = (docId: string) => computeScreeningStatus(table?.criteria ?? [], docCells(docId), Boolean(table?.strictCriterion), table?.threshold ?? 0.6);
   const mergeCells = (list: readonly ExtractionCell[]) => { for (const c of list) cells.set(cellKey(c.docId, c.colId), c); };
   const setStatus = (text: string) => { statusMsg = text; if (progressEl) progressEl.textContent = text; };
-  const setBody = (...nodes: Node[]) => { bodyEl?.replaceChildren(...(progressEl ? [progressEl] : []), ...nodes); };
+  const setBody = (...nodes: Node[]) => { contentEl?.replaceChildren(...nodes); };
   const setExportMenu = (open: boolean) => { if (exportMenuEl) exportMenuEl.hidden = !open; exportToggleBtn?.setAttribute('aria-expanded', String(open)); };
   const hasCol = (colId: string) => colId === '__screen__' || Boolean(table && (colId.startsWith('screen:') ? table.criteria.some(c => `screen:${c.id}` === colId) : table.columns.some(c => c.id === colId)));
   const syncRunning = () => {
-    if (stopBtn) stopBtn.hidden = !running; for (const b of actionBtns) b.disabled = running;
-    for (const host of [subBarEl, bodyEl]) for (const b of host?.querySelectorAll<HTMLButtonElement>('.rt-add-col-btn, .rt-add-col-m, .rt-col-del, .rt-cell-retry, .rt-crit-req, .rt-crit-del, .rt-crit-add, .rt-strict-btn') ?? []) b.disabled = running;
-    inspector?.setBusy(running);
+    if (stopBtn) stopBtn.hidden = !running; for (const b of actionBtns) b.disabled = running || bulkBusy;
+    for (const host of [subBarEl, contentEl]) for (const b of host?.querySelectorAll<HTMLButtonElement>('.rt-add-col-btn, .rt-add-col-m, .rt-col-del, .rt-cell-retry, .rt-crit-req, .rt-crit-del, .rt-crit-add, .rt-strict-btn') ?? []) b.disabled = running || bulkBusy;
+    inspector?.setBusy(running || bulkBusy); triage?.setBusy(running || bulkBusy);
   };
   const syncSplitAttr = () => { if (splitEl) splitEl.dataset.inspectorOpen = String(Boolean(inspector?.isOpen())); };
   const colLabelFor = (colId: string) => colId === '__screen__' ? { label: t('Overall Screening', '综合筛选结论'), isScreening: true }
@@ -56,47 +57,49 @@ export function createReviewTableView(): ResearchViewModule {
   const openInspector = (docId: string, colId: string) => {
     const doc = docs.find(d => d.id === docId); if (!doc || !inspector) return;
     selectedPaperId = null; selected = { docId, colId }; const meta = colLabelFor(colId);
-    inspector.show({ doc, colId, colLabel: meta.label, isScreening: meta.isScreening, cell: cells.get(cellKey(docId, colId)) });
-    syncSplitAttr(); syncGridSelection();
+    inspector.show({ doc, colId, colLabel: meta.label, isScreening: meta.isScreening, cell: cells.get(cellKey(docId, colId)) }); syncSplitAttr(); syncGridSelection();
   };
   const openPaperDrawer = (docId: string) => {
     const doc = docs.find(d => d.id === docId); if (!doc || !inspector) return;
-    selected = null; selectedPaperId = docId;
-    inspector.showPaper(doc, docs); syncSplitAttr(); syncGridSelection();
+    selected = null; selectedPaperId = docId; inspector.showPaper(doc, docs); syncSplitAttr(); syncGridSelection();
   };
   const paperBtn = (doc: DocumentInfo) => {
     const btn = el('button', 'rt-paper-btn'), m = [doc.authors, doc.year].filter(Boolean).join(' · ');
-    btn.type = 'button'; btn.dataset.docId = doc.id; btn.title = researchText.paperSummary();
-    btn.setAttribute('aria-pressed', String(selectedPaperId === doc.id));
+    btn.type = 'button'; btn.dataset.docId = doc.id; btn.title = researchText.paperSummary(); btn.setAttribute('aria-pressed', String(selectedPaperId === doc.id));
     btn.append(el('span', 'rt-paper-title', doc.paperTitle || doc.title), ...(m ? [el('span', 'rt-paper-meta', m)] : []));
-    btn.addEventListener('click', () => openPaperDrawer(doc.id));
-    return btn;
+    btn.addEventListener('click', () => openPaperDrawer(doc.id)); return btn;
   };
   const syncInspector = () => {
     if (!inspector?.isOpen()) return;
-    if (selectedPaperId) {
-      if (!docs.some(d => d.id === selectedPaperId)) { inspector.close(); selectedPaperId = null; }
-      else openPaperDrawer(selectedPaperId);
-    } else if (selected) {
-      if (!docs.some(d => d.id === selected!.docId) || !hasCol(selected.colId)) { inspector.close(); selected = null; }
-      else openInspector(selected.docId, selected.colId);
-    }
+    if (selectedPaperId) { if (!docs.some(d => d.id === selectedPaperId)) { inspector.close(); selectedPaperId = null; } else openPaperDrawer(selectedPaperId); }
+    else if (selected) { if (!docs.some(d => d.id === selected!.docId) || !hasCol(selected.colId)) { inspector.close(); selected = null; } else openInspector(selected.docId, selected.colId); }
   };
   const partitionDocs = (list: readonly DocumentInfo[]) => {
     const included: { doc: DocumentInfo; status: ReturnType<typeof computeScreeningStatus> }[] = [], excluded: typeof included = [];
-    for (const doc of list) { const status = computeScreeningStatus(table?.criteria ?? [], docCells(doc.id), Boolean(table?.strictCriterion), table?.threshold ?? 0.6); (status.included ? included : excluded).push({ doc, status }); }
+    for (const doc of list) { const status = docStatus(doc.id); (status.included ? included : excluded).push({ doc, status }); }
     return { included, excluded };
   };
-  const reloadCells = async () => { if (!table) return; const seq = mountSeq, got = await api('review.get', { tableId: table.id }); if (mounted && seq === mountSeq) { table = got.table; cells = new Map(got.cells.map(c => [cellKey(c.docId, c.colId), c])); } };
+  const doExport = (fmt: ReviewExportFormat, customIds?: string[]) => {
+    setExportMenu(false); if (!table) return;
+    const ids = customIds ?? filteredIds; if (!ids.length) { toast(researchText.triageNoMatches()); return; }
+    void api('review.export', { tableId: table.id, format: fmt, docIds: ids }).then(r => { downloadFile(r.filename, r.content, r.mime); toast(t(`Exported ${r.filename}`, `已导出 ${r.filename}`)); }).catch(e => toast(message(e)));
+  };
+  const reloadCells = async () => { if (!table) return; const seq = mountSeq, got = await api('review.get', { tableId: table.id }); if (mounted && seq === mountSeq) { table = got.table; cells = new Map(got.cells.map(c => [cellKey(c.docId, c.colId), c])); if (got.snippets) snippets = new Map(Object.entries(got.snippets)); } };
 
   async function loadData(keepStatus = false): Promise<void> {
-    const seq = mountSeq, [libRes, revRes] = await Promise.all([api('library.list', {}), api('review.get', table ? { tableId: table.id } : {})]);
+    const seq = mountSeq, [libRes, revRes, topRes] = await Promise.all([api('library.list', {}), api('review.get', table ? { tableId: table.id } : {}), api('topics.list', {}).catch(() => ({ topics: [] }))]);
     if (!mounted || seq !== mountSeq) return;
-    docs = libRes.docs; table = revRes.table; cells = new Map(revRes.cells.map(c => [cellKey(c.docId, c.colId), c]));
-    if (!keepStatus) setStatus(''); renderAll(); syncInspector();
+    docs = libRes.docs; table = revRes.table; topics = topRes.topics; cells = new Map(revRes.cells.map(c => [cellKey(c.docId, c.colId), c])); snippets = new Map(Object.entries(revRes.snippets ?? {}));
+    triage?.syncTags(docs, topics); if (!keepStatus) setStatus(''); renderAll(); syncInspector();
+  }
+  async function bulkSetDecision(docIds: string[], decision: ReviewDecision): Promise<void> {
+    if (!table || !docIds.length || running || bulkBusy) return; const seq = mountSeq; bulkBusy = true; syncRunning();
+    try { const res = await api('review.bulkSetCell', { tableId: table.id, docIds, colId: '__screen__', value: decision }); if (!mounted || seq !== mountSeq) return; mergeCells(res.cells); triage?.clearSelection(); renderBody(); syncInspector(); toast(researchText.triageBulkUpdated(res.updatedCount)); }
+    catch (e) { if (mounted && seq === mountSeq) toast(message(e)); }
+    finally { bulkBusy = false; if (mounted && seq === mountSeq) syncRunning(); }
   }
   async function saveTablePatch(patch: Partial<Pick<ReviewTable, 'preset' | 'columns' | 'criteria' | 'strictCriterion' | 'threshold'>>, reload = false): Promise<boolean> {
-    if (!table || running) return false; const seq = mountSeq;
+    if (!table || running || bulkBusy) return false; const seq = mountSeq;
     try {
       table = (await api('review.saveTable', { id: table.id, ...patch })).table; if (!mounted || seq !== mountSeq) return false;
       if (reload) { await reloadCells(); if (!mounted || seq !== mountSeq) return false; }
@@ -109,9 +112,9 @@ export function createReviewTableView(): ResearchViewModule {
     cells.set(cellKey(docId, colId), res.cell); if (colId.startsWith('screen:')) await reloadCells(); if (mounted && seq === mountSeq) { renderBody(); syncInspector(); }
   }
   async function runBatch(kind: 'screen' | 'extract', mode: ReviewExtractMode = 'all', extra: { docId?: string; colId?: string; docIds?: string[]; force?: boolean } = {}): Promise<void> {
-    if (!table || running) return;
-    const list = extra.docIds ?? visibleDocs().map(d => d.id);
-    if (!list.length) { toast(t('No papers in library to process.', '文献库中暂无可处理的文献。')); return; }
+    if (!table || running || bulkBusy) return;
+    const list = extra.docIds ?? (extra.docId ? [extra.docId] : filteredIds);
+    if (!list.length) { toast(docs.length ? researchText.triageNoMatches() : t('No papers in library to process.', '文献库中暂无可处理的文献。')); return; }
     if (kind === 'screen' && !table.criteria.length) { if (topEl) { topEl.dataset.toolsOpen = 'true'; toolsToggleEl?.setAttribute('aria-expanded', 'true'); } toast(t('Add at least one screening criterion first.', '请先添加至少一条筛选条件。')); return; }
     const seq = mountSeq, ctrl = new AbortController(); running = true; abortCtrl = ctrl; colPicker?.close(); syncRunning();
     setStatus(kind === 'screen' ? t(`Screening 0 / ${list.length} papers…`, `正在筛选 0 / ${list.length} 篇…`) : t('Extracting…', '正在提取…'));
@@ -139,11 +142,12 @@ export function createReviewTableView(): ResearchViewModule {
     } finally { if (abortCtrl === ctrl) { abortCtrl = null; running = false; if (mounted) syncRunning(); } }
   }
   async function saveAndNext(): Promise<void> {
-    if (!table) return;
-    const seq = mountSeq, p = partitionDocs(visibleDocs()), ordered = [...p.included, ...p.excluded]; if (!ordered.length) return;
+    if (!table || running || bulkBusy) return;
+    const seq = mountSeq, scoped = () => { const byId = new Map(visibleDocs().map(d => [d.id, d])); return filteredIds.map(id => byId.get(id)).filter((d): d is DocumentInfo => Boolean(d)); };
+    const p = partitionDocs(scoped()), ordered = [...p.included, ...p.excluded]; if (!ordered.length) return;
     const cur = ordered.find(x => x.doc.id === activeScreenDocId) ?? ordered.find(x => !x.status.manualOverride) ?? ordered[0];
     if (!cur.status.manualOverride) await setManualCell(cur.doc.id, '__screen__', cur.status.decision); if (!mounted || seq !== mountSeq) return;
-    const r = partitionDocs(visibleDocs()), all = [...r.included, ...r.excluded], idx = all.findIndex(x => x.doc.id === cur.doc.id);
+    const r = partitionDocs(scoped()), all = [...r.included, ...r.excluded], idx = all.findIndex(x => x.doc.id === cur.doc.id);
     const next = [...all.slice(idx + 1), ...all.slice(0, Math.max(0, idx))].find(x => x.doc.id !== cur.doc.id && !x.status.manualOverride);
     if (!next) { activeScreenDocId = ''; renderBody(); toast(t('All papers reviewed.', '已审阅全部文献。')); return; }
     activeScreenDocId = next.doc.id; renderBody();
@@ -186,23 +190,27 @@ export function createReviewTableView(): ResearchViewModule {
 
   function renderScreening(): void {
     if (!bodyEl || !table) return;
-    const list = visibleDocs();
-    if (!list.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to start screening.', '请先向文献库导入论文以开始筛选。'))); return; }
+    const all = visibleDocs(), view = triage?.computeView(all, 'screening', d => docStatus(d.id).included, snippets);
+    filteredIds = view ? view.filtered.map(d => d.id) : all.map(d => d.id);
+    if (!all.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to start screening.', '请先向文献库导入论文以开始筛选。'))); return; }
+    const list = view ? view.pageItems : all;
+    if (!list.length) { if (triage) setBody(triage.makeEmptyNode()); return; }
     const { included, excluded } = partitionDocs(list), wrap = el('div', 'rt-screen-wrap');
+    triage?.setVisibleOrder([...included.map(x => x.doc.id), ...excluded.map(x => x.doc.id)]);
     if (!activeScreenDocId || !list.some(d => d.id === activeScreenDocId)) activeScreenDocId = [...included, ...excluded].find(x => !x.status.manualOverride)?.doc.id ?? list[0].id;
     const buildPart = (part: 'included' | 'excluded', title: string, items: typeof included) => {
       const sec = el('section', 'rt-part'); sec.dataset.part = part; sec.append(el('h3', 'rt-part-head', `${title} (${items.length})`));
       if (!items.length) { sec.append(el('p', 'rt-part-empty', t('None', '暂无'))); return sec; }
       for (const { doc, status } of items) {
-        const row = el('article', 'rt-srow'), head = el('div', 'rt-srow-head'), info = el('div', 'rt-srow-info'), badges = el('div', 'rt-srow-badges'), decs = el('div', 'rt-dec-group');
+        const row = el('article', 'rt-srow'), head = el('div', 'rt-srow-head'), info = el('div', 'rt-srow-info'), badges = el('div', 'rt-srow-badges'), decs = el('div', 'rt-dec-group'), rel = triage?.makeRelevancePill(doc.id);
         row.dataset.docId = doc.id; row.classList.toggle('is-active', doc.id === activeScreenDocId);
-        badges.append(srcBadge(doc), el('span', `rt-dec-pill is-${status.decision}`, `${decisionLabel(status.decision)}${status.manualOverride ? ' ✎' : table!.criteria.length ? ` · ${Math.round(status.score * 100)}%` : ''}`));
+        badges.append(srcBadge(doc), ...(rel ? [rel] : []), el('span', `rt-dec-pill is-${status.decision}`, `${decisionLabel(status.decision)}${status.manualOverride ? ' ✎' : table!.criteria.length ? ` · ${Math.round(status.score * 100)}%` : ''}`));
         info.append(paperBtn(doc), badges); decs.setAttribute('role', 'group'); decs.ariaLabel = t('Screening decision', '筛选结论');
         for (const d of ['yes', 'maybe', 'no'] as const) {
           const b = mkBtn(`btn rt-dec-btn is-${d}`, decisionLabel(d), () => { activeScreenDocId = doc.id; void setManualCell(doc.id, '__screen__', d).catch(e => toast(message(e))); });
           b.dataset.decision = d; b.setAttribute('aria-pressed', String(status.decision === d)); decs.append(b);
         }
-        head.append(info, decs); row.append(head);
+        head.append(...(triage ? [triage.makeCheckbox(doc.id)] : []), info, decs); row.append(head);
         if (table!.criteria.length) {
           const crRow = el('div', 'rt-scrit-cells');
           for (const cr of table!.criteria) {
@@ -213,8 +221,7 @@ export function createReviewTableView(): ResearchViewModule {
           }
           row.append(crRow);
         }
-        sec.append(row);
-        shell?.paperFloatBar?.attach(row, { doc, inLibrary: true });
+        sec.append(row); shell?.paperFloatBar?.attach(row, { doc, inLibrary: true });
       }
       return sec;
     };
@@ -223,11 +230,15 @@ export function createReviewTableView(): ResearchViewModule {
 
   function renderExtraction(): void {
     if (!bodyEl || !table) return;
-    const list = visibleDocs(), cols = table.columns;
-    if (!list.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to extract structured columns.', '请先向文献库导入论文以提取结构化表格。'))); return; }
+    const all = visibleDocs(), cols = table.columns, view = triage?.computeView(all, 'extraction', d => docStatus(d.id).included, snippets);
+    filteredIds = view ? view.filtered.map(d => d.id) : all.map(d => d.id);
+    if (!all.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to extract structured columns.', '请先向文献库导入论文以提取结构化表格。'))); return; }
+    const list = view ? view.pageItems : all;
+    if (!list.length) { if (triage) setBody(triage.makeEmptyNode()); return; }
     const tableWrap = el('div', 'rt-table-wrap'), grid = el('table', 'rt-grid'), thead = el('thead'), hr = el('tr'), tbody = el('tbody'), cards = el('div', 'rt-mobile-cards');
     grid.setAttribute('role', 'grid'); grid.setAttribute('aria-label', t('Extraction Matrix', '文献提取矩阵')); hr.setAttribute('role', 'row');
-    const paperTh = el('th', 'rt-col-paper', t('Paper', '文献')); paperTh.setAttribute('role', 'columnheader'); hr.append(paperTh);
+    const paperTh = el('th', 'rt-col-paper'), pHead = el('div', 'rt-paper-head');
+    pHead.append(...(triage ? [triage.makeHeaderCheckbox()] : []), el('span', '', t('Paper', '文献'))); paperTh.setAttribute('role', 'columnheader'); paperTh.append(pHead); hr.append(paperTh);
     for (const col of cols) {
       const th = el('th', 'rt-col-dyn'), inner = el('div', 'rt-col-head'), colLbl = reviewColLabel(col); th.setAttribute('role', 'columnheader'); inner.append(el('span', 'rt-col-label', colLbl));
       if (cols.length > 1) { const del = mkBtn('rt-col-del', '×', () => { void saveTablePatch({ columns: cols.filter(c => c.id !== col.id) }, true); }); del.ariaLabel = t(`Remove column ${colLbl}`, `移除列 ${colLbl}`); inner.append(del); }
@@ -236,8 +247,13 @@ export function createReviewTableView(): ResearchViewModule {
     const addTh = el('th', 'rt-col-add'); addTh.setAttribute('role', 'columnheader'); addTh.append(mkBtn('btn rt-add-col-btn', t('+ Add Column', '+ 添加列'), () => colPicker?.open(cols.map(c => c.id), table!.preset))); hr.append(addTh); thead.append(hr);
     for (let r = 0; r < list.length; r++) {
       const doc = list[r], tr = el('tr'), pCell = el('th', 'rt-paper-cell'), card = el('article', 'rt-mcard'), cHead = el('div', 'rt-mcard-head');
+      const rel = triage?.makeRelevancePill(doc.id), pRow = el('div', 'rt-paper-row'), pMain = el('div', 'rt-paper-main'), pBadges = el('div', 'rt-paper-badges');
+      const mTop = el('div', 'rt-mcard-top'), mBadges = el('div', 'rt-paper-badges');
       tr.setAttribute('role', 'row'); tr.dataset.docId = card.dataset.docId = doc.id; pCell.scope = 'row'; pCell.setAttribute('role', 'rowheader');
-      pCell.append(paperBtn(doc), srcBadge(doc)); tr.append(pCell); cHead.append(paperBtn(doc), srcBadge(doc)); card.append(cHead);
+      pBadges.append(srcBadge(doc), ...(rel ? [rel] : [])); pMain.append(paperBtn(doc), pBadges);
+      pRow.append(...(triage ? [triage.makeCheckbox(doc.id)] : []), pMain); pCell.append(pRow); tr.append(pCell);
+      mBadges.append(srcBadge(doc), ...(rel ? [rel.cloneNode(true)] : [])); mTop.append(...(triage ? [triage.makeCheckbox(doc.id)] : []), paperBtn(doc));
+      cHead.append(mTop, mBadges); card.append(cHead);
       for (let c = 0; c < cols.length; c++) {
         const col = cols[c], cell = cells.get(cellKey(doc.id, col.id)), badge = cellBadgeInfo(cell), valText = cell?.status === 'error' ? t('Failed', '失败') : (cell?.value || '—');
         const td = el('td', 'rt-cell-td'), btn = mkBtn('rt-cell', '', () => openInspector(doc.id, col.id));
@@ -249,8 +265,7 @@ export function createReviewTableView(): ResearchViewModule {
         mRow.append(el('span', 'rt-mcard-k', reviewColLabel(col)), el('span', 'rt-mcard-v', valText), ...(badge.short ? [miniBadge(badge)] : [])); card.append(mRow);
       }
       tr.append(el('td', 'rt-cell-filler')); tbody.append(tr); cards.append(card);
-      shell?.paperFloatBar?.attach(tr, { doc, inLibrary: true });
-      shell?.paperFloatBar?.attach(card, { doc, inLibrary: true });
+      shell?.paperFloatBar?.attach(tr, { doc, inLibrary: true }); shell?.paperFloatBar?.attach(card, { doc, inLibrary: true });
     }
     grid.addEventListener('keydown', e => {
       const dirs: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
@@ -265,10 +280,8 @@ export function createReviewTableView(): ResearchViewModule {
   const renderBody = () => { if (step === 'screening') renderScreening(); else renderExtraction(); syncRunning(); };
   const renderAll = () => { for (const [k, b] of stepBtns) b.setAttribute('aria-pressed', String(k === step)); renderSubBar(); renderBody(); syncSplitAttr(); };
   const runPaperAction = (action: ReviewPaperAction, doc: DocumentInfo) => {
-    if (action === 'read') void shell?.inspectInReader({ docId: doc.id, page: 1 }).catch(e => toast(message(e)));
-    else if (action === 'ask-ai') void shell?.inspectInReader({ docId: doc.id, page: 1, openChat: true }).catch(e => toast(message(e)));
-    else if (action === 'citations') shell?.openView('citations', { docId: doc.id });
-    else shell?.openView('citation-map', { seedDocId: doc.id });
+    if (action === 'read' || action === 'ask-ai') void shell?.inspectInReader({ docId: doc.id, page: 1, ...(action === 'ask-ai' ? { openChat: true } : {}) }).catch(e => toast(message(e)));
+    else shell?.openView(action === 'citations' ? 'citations' : 'citation-map', action === 'citations' ? { docId: doc.id } : { seedDocId: doc.id });
   };
   return {
     id: 'review-table',
@@ -277,31 +290,31 @@ export function createReviewTableView(): ResearchViewModule {
       const root = el('section', 'rt-view'), top = el('header', 'rt-top'), head = el('div', 'rt-head'), steps = el('div', 'rt-steps'), tools = el('div', 'rt-head-tools');
       topEl = top; steps.setAttribute('role', 'group'); steps.ariaLabel = t('Review steps', '筛选与提取步骤');
       for (const [id, lbl, tip] of [['screening', researchText.screeningStep(), researchText.screeningTip()], ['extraction', researchText.extractionStep(), researchText.extractionTip()]] as const) {
-        const item = el('div', 'rt-step-item'), b = mkBtn('btn rt-step-btn', lbl, () => { if (step !== id) { step = id; selected = null; selectedPaperId = null; inspector?.close(); renderAll(); } });
+        const item = el('div', 'rt-step-item'), b = mkBtn('btn rt-step-btn', lbl, () => { if (step !== id) { step = id; selected = null; selectedPaperId = null; triage?.clearSelection(); inspector?.close(); renderAll(); } });
         b.dataset.step = id; stepBtns.set(id, b); item.append(b, infoTip(tip, lbl)); steps.append(item);
       }
       const toolsToggle = mkBtn('btn rt-tools-toggle', t('Tools', '工具'), () => { const open = top.dataset.toolsOpen === 'true'; top.dataset.toolsOpen = String(!open); toolsToggle.setAttribute('aria-expanded', String(!open)); setExportMenu(false); });
       toolsToggleEl = toolsToggle; toolsToggle.setAttribute('aria-expanded', 'false');
-      const doExport = (fmt: ReviewExportFormat) => {
-        setExportMenu(false); if (!table) return;
-        void api('review.export', { tableId: table.id, format: fmt, docIds: visibleDocs().map(d => d.id) }).then(r => { downloadFile(r.filename, r.content, r.mime); toast(t(`Exported ${r.filename}`, `已导出 ${r.filename}`)); }).catch(e => toast(message(e)));
-      };
       const exportWrap = el('div', 'rt-export-wrap'), exportBtn = mkBtn('btn rt-export-btn', researchText.exportLabel(), () => doExport('markdown'));
       const exportToggle = el('button', 'btn rt-export-toggle'), exportMenu = el('div', 'rt-export-menu');
-      exportToggle.type = 'button'; exportToggle.ariaLabel = exportToggle.title = researchText.exportMenu();
-      exportToggle.setAttribute('aria-haspopup', 'menu'); exportToggle.setAttribute('aria-expanded', 'false');
-      exportToggle.append(icon('down', 14));
+      exportToggle.type = 'button'; exportToggle.ariaLabel = exportToggle.title = researchText.exportMenu(); exportToggle.setAttribute('aria-haspopup', 'menu'); exportToggle.setAttribute('aria-expanded', 'false'); exportToggle.append(icon('down', 14));
       exportMenu.setAttribute('role', 'menu'); exportMenu.hidden = true;
       for (const [fmt, lbl] of [['markdown', researchText.exportMd()], ['csv', researchText.exportCsv()]] as const) {
         const it = mkBtn('rt-export-item', lbl, () => doExport(fmt)); it.setAttribute('role', 'menuitem'); it.dataset.format = fmt; exportMenu.append(it);
       }
       exportToggle.addEventListener('click', e => { e.stopPropagation(); setExportMenu(Boolean(exportMenu.hidden)); });
       document.addEventListener('pointerdown', e => { if (!exportMenu.hidden && !(e.target instanceof Node && exportWrap.contains(e.target))) setExportMenu(false); }, { signal: events.signal });
-      exportMenuEl = exportMenu; exportToggleBtn = exportToggle;
-      exportWrap.append(exportBtn, exportToggle, exportMenu); tools.append(exportWrap);
+      exportMenuEl = exportMenu; exportToggleBtn = exportToggle; exportWrap.append(exportBtn, exportToggle, exportMenu); tools.append(exportWrap);
       head.append(steps, toolsToggle, tools); subBarEl = el('div', 'rt-subbar'); top.append(head, subBarEl);
       splitEl = el('div', 'rt-split'); splitEl.dataset.inspectorOpen = 'false';
-      const mainPane = el('div', 'rt-main-pane'); bodyEl = el('div', 'rt-body-scroll'); progressEl = el('div', 'rt-progress', statusMsg); progressEl.setAttribute('role', 'status'); mainPane.append(bodyEl);
+      const mainPane = el('div', 'rt-main-pane'); bodyEl = el('div', 'rt-body-scroll'); contentEl = el('div', 'rt-content');
+      progressEl = el('div', 'rt-progress', statusMsg); progressEl.setAttribute('role', 'status');
+      triage = new ReviewTriageBar({
+        onChange: () => renderBody(), onBulkDecision: (ids, dec) => bulkSetDecision(ids, dec),
+        onBulkScreen: ids => runBatch('screen', 'all', { docIds: ids }), onBulkExtract: ids => runBatch('extract', 'all', { docIds: ids }),
+        onBulkExport: (ids, fmt) => doExport(fmt, ids), onRerank: (topic, ids, signal) => api('review.rerank', { topic, docIds: ids }, false, signal)
+      });
+      triage.bindHost(contentEl); bodyEl.append(progressEl, triage.barEl, triage.bulkEl, contentEl, triage.pagerEl); mainPane.append(bodyEl);
       inspector = new ReviewTableInspector({
         onClose: () => { selectedPaperId = null; syncSplitAttr(); syncGridSelection(); },
         onRetry: (docId, colId) => runBatch('extract', 'cell', { docId, colId, force: true }),
@@ -309,20 +322,17 @@ export function createReviewTableView(): ResearchViewModule {
         onJump: (docId, page, quote) => { void shell?.inspectInReader({ docId, page, ...(quote ? { quote } : {}) }).catch(e => toast(message(e))); },
         onPaperAction: runPaperAction, onAttachPaperHead: (elHead, doc) => shell?.paperFloatBar?.attach(elHead, { doc, inLibrary: true })
       });
-      colPicker = new ReviewColumnPicker(
-        col => table ? saveTablePatch({ columns: [...table.columns, col] }) : Promise.resolve(false),
-        preset => saveTablePatch({ preset }, preset !== 'custom')
-      );
+      colPicker = new ReviewColumnPicker(col => table ? saveTablePatch({ columns: [...table.columns, col] }) : Promise.resolve(false), preset => saveTablePatch({ preset }, preset !== 'custom'));
       splitEl.append(mainPane, inspector.backdrop, inspector.root); root.append(top, splitEl, colPicker.backdrop, colPicker.root); host.replaceChildren(root);
       try { await loadData(); } catch (e) { if (mounted && seq === mountSeq) { setStatus(message(e)); toast(message(e)); } }
       const openCtx = ctx.openContext();
       if (mounted && seq === mountSeq && openCtx?.docId && openCtx !== lastOpenCtx) { lastOpenCtx = openCtx; step = 'extraction'; renderAll(); void runBatch('extract', 'reextract', { docId: openCtx.docId, docIds: [openCtx.docId] }); }
     },
-    unmount() { mounted = false; ++mountSeq; events?.abort(); events = null; abortCtrl?.abort(); abortCtrl = null; running = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = progressEl = stopBtn = toolsToggleEl = exportMenuEl = exportToggleBtn = null; },
-    saveState(): SavedReviewState { return { step, selected: selected ? { ...selected } : null, selectedPaperId, inspectorOpen: Boolean(inspector?.isOpen()), activeScreenDocId, scrollTop: bodyEl?.scrollTop ?? 0, scrollLeft: bodyEl?.querySelector('.rt-table-wrap')?.scrollLeft ?? 0 }; },
+    unmount() { mounted = false; ++mountSeq; events?.abort(); events = null; abortCtrl?.abort(); abortCtrl = null; triage?.abort(); triage = null; running = false; bulkBusy = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = contentEl = progressEl = stopBtn = toolsToggleEl = exportMenuEl = exportToggleBtn = null; },
+    saveState(): SavedReviewState { return { step, selected: selected ? { ...selected } : null, selectedPaperId, inspectorOpen: Boolean(inspector?.isOpen()), activeScreenDocId, scrollTop: bodyEl?.scrollTop ?? 0, scrollLeft: bodyEl?.querySelector('.rt-table-wrap')?.scrollLeft ?? 0, triage: triage?.saveState() }; },
     restoreState(raw) {
       const s = raw as SavedReviewState | undefined; if (!s || !mounted) return;
-      step = s.step ?? 'extraction'; selected = s.selected ? { ...s.selected } : null; selectedPaperId = s.selectedPaperId ?? null; activeScreenDocId = s.activeScreenDocId ?? ''; renderAll();
+      step = s.step ?? 'extraction'; selected = s.selected ? { ...s.selected } : null; selectedPaperId = s.selectedPaperId ?? null; activeScreenDocId = s.activeScreenDocId ?? ''; triage?.restoreState(s.triage); renderAll();
       if (s.inspectorOpen && selectedPaperId && docs.some(d => d.id === selectedPaperId)) openPaperDrawer(selectedPaperId);
       else if (s.inspectorOpen && selected && hasCol(selected.colId)) openInspector(selected.docId, selected.colId);
       if (bodyEl) { bodyEl.scrollTop = s.scrollTop ?? 0; const tw = bodyEl.querySelector('.rt-table-wrap'); if (tw) tw.scrollLeft = s.scrollLeft ?? 0; }

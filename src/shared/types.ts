@@ -9,8 +9,9 @@ import type {
   TrendPapersInput, TrendPapersResult, TrendQueryInput, TrendQueryResult
 } from './research-types.js';
 import type {
-  ReviewBatchResult, ReviewExportInput, ReviewExportResult, ReviewExtractInput, ReviewGetInput, ReviewGetResult,
-  ReviewSaveTableInput, ReviewSaveTableResult, ReviewScreenInput, ReviewSetCellInput, ReviewSetCellResult
+  ReviewBatchResult, ReviewBulkSetCellInput, ReviewBulkSetCellResult, ReviewExportInput, ReviewExportResult, ReviewExtractInput,
+  ReviewGetInput, ReviewGetResult, ReviewRerankInput, ReviewRerankResult, ReviewSaveTableInput, ReviewSaveTableResult,
+  ReviewScreenInput, ReviewSetCellInput, ReviewSetCellResult
 } from './review-types.js';
 import type {
   DeepSearchClarifyInput, DeepSearchClarifyResult, DeepSearchResult, DeepSearchRunInput,
@@ -229,6 +230,8 @@ export interface Operations {
   'review.screen': [ReviewScreenInput, ReviewBatchResult];
   'review.extract': [ReviewExtractInput, ReviewBatchResult];
   'review.setCell': [ReviewSetCellInput, ReviewSetCellResult];
+  'review.bulkSetCell': [ReviewBulkSetCellInput, ReviewBulkSetCellResult];
+  'review.rerank': [ReviewRerankInput, ReviewRerankResult];
   'review.export': [ReviewExportInput, ReviewExportResult];
   'deepSearch.clarify': [DeepSearchClarifyInput, DeepSearchClarifyResult];
   'deepSearch.run': [DeepSearchRunInput, DeepSearchResult];
