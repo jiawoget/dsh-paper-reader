@@ -12,8 +12,9 @@ export type GraphViewMode = 'network' | 'timeline';
 
 interface NodeRef { node: PositionedGraphNode; group: SVGGElement; label: SVGTextElement; anchor: 'start' | 'middle' | 'end'; lx: number }
 interface EdgeRef { el: SVGLineElement; source: string; target: string; kind: GraphEdge['kind']; pairKey: string }
-interface HaloRef { clusterId: string; group: SVGGElement }
+interface HaloRef { clusterId: string; group: SVGGElement; label: SVGTextElement; hull: ClusterHull }
 const SVG_NS = 'http://www.w3.org/2000/svg', VIEW_W = 760, VIEW_H = 480, MIN_ZOOM = 0.5, MAX_ZOOM = 3.5;
+const textBoxW = (s: string, min = 44): number => Math.max(min, [...s].reduce((w, ch) => w + (ch.charCodeAt(0) > 127 ? 11.5 : 7), 10));
 
 function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] {
   const node = document.createElementNS(SVG_NS, tag);
@@ -50,8 +51,10 @@ export class CitationMapSvg {
     this.svg.append(defs, this.haloLayer, this.axisLayer, this.edgeLayer, this.nodeLayer);
     this.bindPanZoom();
     const legend = el('div', 'cm-legend'); legend.setAttribute('aria-hidden', 'true');
-    for (const [cls, text] of [['is-seed', researchText.seedNode()], ['is-lib', researchText.inLibraryNode()], ['is-disc', researchText.yearRampLabel()], ['is-accent', researchText.pathFocusLabel()]] as const) {
-      const item = el('span', 'cm-legend-item'); item.append(el('i', `cm-dot ${cls}`), text); legend.append(item);
+    for (const [cls, text] of [['is-seed', researchText.seedNode()], ['is-lib', researchText.inLibraryNode()], ['is-ramp', researchText.yearRampLabel()], ['is-accent', researchText.pathFocusLabel()]] as const) {
+      const item = el('span', 'cm-legend-item');
+      item.append(...(cls === 'is-ramp' ? [el('i', 'cm-dot is-old'), el('i', 'cm-dot is-disc')] : [el('i', `cm-dot ${cls}`)]), text);
+      legend.append(item);
     }
     this.root.append(this.svg, legend);
   }
@@ -70,7 +73,7 @@ export class CitationMapSvg {
       if (!this.pan || this.pan.id !== e.pointerId) return;
       const dx = e.clientX - this.pan.sx, dy = e.clientY - this.pan.sy;
       if (!this.pan.moved && Math.hypot(dx, dy) < 5) return;
-      if (!this.pan.moved) { this.pan.moved = true; this.svg.classList.add('is-panning'); this.svg.setPointerCapture(e.pointerId); }
+      if (!this.pan.moved) { this.pan.moved = true; this.svg.classList.add('is-panning'); try { this.svg.setPointerCapture(e.pointerId); } catch {} }
       const rect = this.svg.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
       this.vb.x = this.pan.vx - (dx / rect.width) * this.vb.w; this.vb.y = this.pan.vy - (dy / rect.height) * this.vb.h;
@@ -78,7 +81,7 @@ export class CitationMapSvg {
     });
     const endPan = (e: PointerEvent) => {
       if (!this.pan || this.pan.id !== e.pointerId) return;
-      if (this.pan.moved) { this.suppressClickUntil = Date.now() + 80; this.svg.classList.remove('is-panning'); if (this.svg.hasPointerCapture(e.pointerId)) this.svg.releasePointerCapture(e.pointerId); }
+      if (this.pan.moved) { this.suppressClickUntil = Date.now() + 80; this.svg.classList.remove('is-panning'); try { if (this.svg.hasPointerCapture(e.pointerId)) this.svg.releasePointerCapture(e.pointerId); } catch {} }
       this.pan = null;
     };
     this.svg.addEventListener('pointerup', endPan); this.svg.addEventListener('pointercancel', endPan);
@@ -98,14 +101,14 @@ export class CitationMapSvg {
   }
   zoomIn(): void { this.zoomBy(1.25); }
   zoomOut(): void { this.zoomBy(0.8); }
-  fitView(): void { this.vb = { x: 0, y: 0, w: VIEW_W, h: VIEW_H }; this.applyViewBox(); }
+  fitView(): void { this.pan = null; this.svg.classList.remove('is-panning'); this.vb = { x: 0, y: 0, w: VIEW_W, h: VIEW_H }; this.applyViewBox(); }
 
   private renderHalos(hulls: readonly ClusterHull[]): void {
     for (const h of hulls) {
       const g = svgEl('g', { class: 'cm-halo', 'data-cluster-id': h.clusterId, 'data-color': h.colorIndex });
       const lbl = svgEl('text', { class: 'cm-halo-label', x: h.labelX, y: h.labelY, 'text-anchor': 'middle' }); lbl.textContent = h.label;
       g.append(svgEl('ellipse', { class: 'cm-halo-bg', cx: h.cx, cy: h.cy, rx: h.rx, ry: h.ry }), lbl);
-      this.haloLayer.append(g); this.haloEls.push({ clusterId: h.clusterId, group: g });
+      this.haloLayer.append(g); this.haloEls.push({ clusterId: h.clusterId, group: g, label: lbl, hull: h });
     }
   }
 
@@ -154,11 +157,11 @@ export class CitationMapSvg {
         x2: (b.x - (dx / dist) * eOff).toFixed(1), y2: (b.y - (dy / dist) * eOff).toFixed(1)
       };
       if (edge.kind === 'cites') attrs['marker-end'] = 'url(#cm-arrow)';
-      else if (typeof edge.weight === 'number') attrs['stroke-width'] = (0.9 + Math.min(1, Math.max(0, edge.weight)) * 1.1).toFixed(2);
+      else if (typeof edge.weight === 'number' && Number.isFinite(edge.weight)) attrs['stroke-width'] = (0.9 + Math.min(1, Math.max(0, edge.weight)) * 1.1).toFixed(2);
       const line = svgEl('line', attrs); this.edgeLayer.append(line); this.edgeEls.push({ el: line, source: edge.source, target: edge.target, kind: edge.kind, pairKey: pk });
     }
     for (const item of placed) {
-      const ratio = item.year !== undefined && hiY > loY ? clamp((item.year - loY) / (hiY - loY), 0, 1) : 0.5;
+      const ratio = typeof item.year === 'number' && Number.isFinite(item.year) && hiY > loY ? clamp((item.year - loY) / (hiY - loY), 0, 1) : 0.5;
       const g = svgEl('g', {
         class: `cm-node${item.isSeed ? ' is-seed' : ''}${item.id === selectedId ? ' is-selected' : ''}`,
         tabindex: 0, role: 'button', 'data-node-id': item.id, 'data-kind': item.inLibrary ? 'library' : 'discovery',
@@ -182,36 +185,48 @@ export class CitationMapSvg {
   }
 
   private declutterLabels(): void {
-    const boxes: [number, number, number, number][] = [];
-    const circles = [...this.refs.values()].map(({ node: n }) => ({ id: n.id, x1: n.x - n.radius - 2, y1: n.y - n.radius - 2, x2: n.x + n.radius + 2, y2: n.y + n.radius + 2 }));
-    const ordered = [...this.refs.values()].sort((a, b) => Number(Boolean(b.node.isSeed)) - Number(Boolean(a.node.isSeed)) || Number(Boolean(b.node.inLibrary)) - Number(Boolean(a.node.inLibrary)) || (b.node.citationCount ?? 0) - (a.node.citationCount ?? 0));
-    for (const ref of ordered) {
-      const w = Math.max(44, (ref.label.textContent?.length ?? 8) * 6.8 + 8), ly = ref.node.y + ref.node.radius + 14;
+    type Box = readonly [number, number, number, number];
+    const boxes: Box[] = [], ov = (a: Box, b: Box) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+    const nodeBox = (ref: NodeRef): Box => {
+      const w = textBoxW(ref.label.textContent ?? '', 44), ly = ref.node.y + ref.node.radius + 14;
       const x1 = ref.anchor === 'start' ? ref.node.x + ref.lx : ref.anchor === 'end' ? ref.node.x + ref.lx - w : ref.node.x + ref.lx - w / 2;
-      const y1 = ly - 12, x2 = x1 + w, y2 = ly + 3;
-      const hit = !ref.node.isSeed && (boxes.some(b => x1 < b[2] && x2 > b[0] && y1 < b[3] && y2 > b[1]) || circles.some(c => c.id !== ref.node.id && x1 < c.x2 && x2 > c.x1 && y1 < c.y2 && y2 > c.y1));
+      return [x1, ly - 12, x1 + w, ly + 4];
+    };
+    const circles = [...this.refs.values()].map(({ node: n }) => ({ id: n.id, box: [n.x - n.radius - 2, n.y - n.radius - 2, n.x + n.radius + 2, n.y + n.radius + 2] as Box }));
+    const ordered = [...this.refs.values()].sort((a, b) => Number(Boolean(b.node.isSeed)) - Number(Boolean(a.node.isSeed)) || Number(Boolean(b.node.inLibrary)) - Number(Boolean(a.node.inLibrary)) || (b.node.citationCount ?? 0) - (a.node.citationCount ?? 0));
+    for (const ref of ordered) if (ref.node.isSeed) { ref.label.classList.remove('is-muted'); boxes.push(nodeBox(ref)); }
+    for (const h of this.haloEls) {
+      const w = textBoxW(h.hull.label, 52), lx = clamp(h.hull.labelX, w / 2 + 6, VIEW_W - w / 2 - 6);
+      const cands = [h.hull.labelY, h.hull.labelY - 18, h.hull.labelY + 18, h.hull.cy + h.hull.ry - 6, h.hull.cy - h.hull.ry + 14].map(y => clamp(y, 15, VIEW_H - 10));
+      const ly = cands.find(y => !boxes.some(b => ov([lx - w / 2, y - 12, lx + w / 2, y + 4], b))) ?? cands[0];
+      h.label.setAttribute('x', lx.toFixed(1)); h.label.setAttribute('y', ly.toFixed(1));
+      boxes.push([lx - w / 2, ly - 12, lx + w / 2, ly + 4]);
+    }
+    for (const ref of ordered) {
+      if (ref.node.isSeed) continue;
+      const box = nodeBox(ref);
+      const hit = boxes.some(b => ov(box, b)) || circles.some(c => c.id !== ref.node.id && ov(box, c.box));
       ref.label.classList.toggle('is-muted', hit);
-      if (!hit) boxes.push([x1, y1, x2, y2]);
+      if (!hit) boxes.push(box);
     }
   }
 
   private syncVisualState(): void {
-    const activeId = this.hoveredId, active = Boolean(activeId), cf = this.clusterFilter, neighbors = new Set<string>();
+    const activeId = this.hoveredId ?? this.selectedId, active = Boolean(activeId), cf = this.clusterFilter, neighbors = new Set<string>();
     if (activeId) for (const e of this.edgeEls) { if (e.source === activeId) neighbors.add(e.target); else if (e.target === activeId) neighbors.add(e.source); }
-    const pathTarget = activeId ?? this.selectedId;
-    const path = pathTarget ? computeShortestPathToSeed(this.currentNodes, this.currentEdges, pathTarget) : { nodeIds: new Set<string>(), edgeKeys: new Set<string>() };
+    const path = activeId ? computeShortestPathToSeed(this.currentNodes, this.currentEdges, activeId) : { nodeIds: new Set<string>(), edgeKeys: new Set<string>() };
     const hasPath = path.nodeIds.size > 1;
     for (const [id, ref] of this.refs) {
       const isSelf = id === activeId, isNbr = active && !isSelf && neighbors.has(id), onPath = hasPath && path.nodeIds.has(id);
       ref.group.classList.toggle('is-highlighted', isSelf); ref.group.classList.toggle('is-neighbor', isNbr);
       ref.group.classList.toggle('is-seed-path', onPath); ref.group.classList.toggle('is-selected', id === this.selectedId);
-      ref.group.classList.toggle('is-dimmed', active ? (!isSelf && !isNbr && !onPath) : Boolean(cf && ref.node.clusterId !== cf));
+      ref.group.classList.toggle('is-dimmed', active ? (!isSelf && !isNbr && !onPath) : Boolean(cf && ref.node.clusterId !== cf && !onPath));
     }
     for (const edge of this.edgeEls) {
       const hit = active && (edge.source === activeId || edge.target === activeId), onPath = hasPath && path.edgeKeys.has(edge.pairKey);
       const sameCluster = !cf || (this.refs.get(edge.source)?.node.clusterId === cf && this.refs.get(edge.target)?.node.clusterId === cf);
       edge.el.classList.toggle('is-highlighted', hit); edge.el.classList.toggle('is-seed-path', onPath);
-      edge.el.classList.toggle('is-dimmed', active ? (!hit && !onPath) : Boolean(cf && !sameCluster));
+      edge.el.classList.toggle('is-dimmed', active ? (!hit && !onPath) : Boolean(cf && !sameCluster && !onPath));
       if (edge.kind === 'cites') edge.el.setAttribute('marker-end', hit || onPath ? 'url(#cm-arrow-hi)' : 'url(#cm-arrow)');
     }
     const activeCluster = activeId ? this.refs.get(activeId)?.node.clusterId : null;

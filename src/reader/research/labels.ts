@@ -150,6 +150,6 @@ export const researchText = {
   clustersLabel: () => t('Topic clusters', '主题聚类'),
   seedNode: () => t('Seed', '种子'),
   inLibraryNode: () => t('In library', '已在库'),
-  yearRampLabel: () => t('Older → Newer', '越深越新'),
+  yearRampLabel: () => t('Older → Newer', '较早 → 较新'),
   pathFocusLabel: () => t('Path to seed', '溯源路径')
 };

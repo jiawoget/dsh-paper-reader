@@ -8,12 +8,14 @@ const STOP = new Set('the and for with from into over under via using based towa
 const SHORT_KEEP = new Set(['kv', 'ai', 'rl', 'qa', 'lm', '3d', '2d', 'ir', 'ml', 'dl', 'io', 'os']);
 const ACRONYMS = new Set(['kv', 'llm', 'llms', 'gpu', 'gpus', 'cpu', 'rag', 'rlhf', 'nlp', 'vlm', 'moe', 'lora', 'ai', 'rl', 'qa', 'lm', '3d', '2d', 'sft', 'dpo', 'ppo', 'mlp', 'cnn', 'rnn', 'gnn', 'vit', 'nerf', 'cuda', 'fp8', 'int4', 'int8']);
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
-const fmtTok = (tok: string): string => ACRONYMS.has(tok) ? tok.toUpperCase() : tok.includes('-') ? tok.split('-').map(fmtTok).join('-') : tok[0].toUpperCase() + tok.slice(1);
+const capLabel = (s: string, max = 24): string => (s.length > max ? s.slice(0, max - 1).trimEnd() + '…' : s);
+const edgeW = (e: GraphEdge, def = 0.55): number => clamp(typeof e.weight === 'number' && Number.isFinite(e.weight) ? e.weight : (e.kind === 'cites' ? 1 : def), 0.15, 1);
+const fmtTok = (tok: string): string => !tok ? '' : ACRONYMS.has(tok) ? tok.toUpperCase() : tok.includes('-') ? tok.split('-').map(fmtTok).filter(Boolean).join('-') : tok[0].toUpperCase() + tok.slice(1);
 
 function tokenize(text: string): string[] {
   const out: string[] = [];
   for (const w of text.toLowerCase().replace(/[^a-z0-9\p{Script=Han}-]+/gu, ' ').split(/\s+/)) {
-    const c = w.replace(/^-+|-+$/g, '');
+    const c = w.replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (!c || /^\d+$/.test(c) || STOP.has(c) || (c.length < 3 && !SHORT_KEEP.has(c) && !/\p{Script=Han}/u.test(c))) continue;
     out.push(c);
   }
@@ -39,15 +41,16 @@ export function extractClusterLabel(clusterNodes: readonly GraphNode[], allNodes
     .sort((a, b) => b.score - a.score || a.term.localeCompare(b.term)).map(x => x.term);
   for (const top of ranked) {
     const words = top.split(' ');
-    let label = words.map(fmtTok).join(' ');
-    if (words.length === 1) {
+    let label = words.map(fmtTok).filter(Boolean).join(' ');
+    if (words.length === 1 && label.length < 18) {
       const sec = ranked.find(r => !r.includes(' ') && r !== top && !top.includes(r) && !r.includes(top));
-      if (sec) label = `${fmtTok(top)} ${fmtTok(sec)}`;
+      if (sec) label = `${label} ${fmtTok(sec)}`;
     }
-    if (!avoid?.has(label.toLowerCase())) return label;
+    const capped = capLabel(label);
+    if (capped && !avoid?.has(capped.toLowerCase())) return capped;
   }
   const fb = clusterNodes[0]?.title.split(/\s+/).filter(Boolean).slice(0, 2).join(' ') || 'Topic';
-  return fb.length > 22 ? fb.slice(0, 21) + '…' : fb;
+  return capLabel(fb);
 }
 
 export function detectCitationClusters(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): CitationCluster[] {
@@ -55,7 +58,7 @@ export function detectCitationClusters(nodes: readonly GraphNode[], edges: reado
   const sorted = [...nodes].sort((a, b) => a.id.localeCompare(b.id)), byId = new Map(sorted.map(n => [n.id, n]));
   const adj = new Map<string, Map<string, number>>(sorted.map(n => [n.id, new Map()]));
   const add = (u: string, v: string, w: number) => { if (u !== v && adj.has(u) && adj.has(v)) { adj.get(u)!.set(v, (adj.get(u)!.get(v) ?? 0) + w); adj.get(v)!.set(u, (adj.get(v)!.get(u) ?? 0) + w); } };
-  for (const e of edges) add(e.source, e.target, clamp(e.weight ?? (e.kind === 'cites' ? 1 : 0.55), 0.15, 1));
+  for (const e of edges) add(e.source, e.target, edgeW(e));
   const toks = new Map(sorted.map(n => [n.id, new Set([...tokenize(n.title), ...(n.topic ? tokenize(n.topic) : [])])]));
   for (let i = 0; i < sorted.length; i++) {
     const a = toks.get(sorted[i].id)!;
@@ -111,12 +114,12 @@ export function detectCitationClusters(nodes: readonly GraphNode[], edges: reado
 }
 
 export function computeShortestPathToSeed(nodes: readonly GraphNode[], edges: readonly GraphEdge[], targetId: string): { nodeIds: Set<string>; edgeKeys: Set<string> } {
-  const seeds = new Set(nodes.filter(n => n.isSeed).map(n => n.id));
-  if (!targetId || !nodes.some(n => n.id === targetId)) return { nodeIds: new Set(), edgeKeys: new Set() };
+  const nodeSet = new Set(nodes.map(n => n.id)), seeds = new Set(nodes.filter(n => n.isSeed).map(n => n.id));
+  if (!targetId || !nodeSet.has(targetId)) return { nodeIds: new Set(), edgeKeys: new Set() };
   if (seeds.has(targetId) || !seeds.size) return { nodeIds: new Set([targetId]), edgeKeys: new Set() };
   const adj = new Map<string, string[]>();
   for (const e of edges) {
-    if (e.source === e.target) continue;
+    if (e.source === e.target || !nodeSet.has(e.source) || !nodeSet.has(e.target)) continue;
     (adj.get(e.source) ?? (adj.set(e.source, []), adj.get(e.source)!)).push(e.target);
     (adj.get(e.target) ?? (adj.set(e.target, []), adj.get(e.target)!)).push(e.source);
   }
@@ -136,7 +139,7 @@ export function computeShortestPathToSeed(nodes: readonly GraphNode[], edges: re
 export function selectBackboneEdges(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): Set<string> {
   const seeds = new Set(nodes.filter(n => n.isSeed).map(n => n.id)), keep = new Set<string>();
   const inc = new Map<string, { key: string; w: number; c: number; other: string }[]>();
-  const push = (u: string, v: string, e: GraphEdge, key: string) => { (inc.get(u) ?? (inc.set(u, []), inc.get(u)!)).push({ key, w: e.weight ?? (e.kind === 'cites' ? 1 : 0.5), c: e.kind === 'cites' ? 1 : 0, other: v }); };
+  const push = (u: string, v: string, e: GraphEdge, key: string) => { (inc.get(u) ?? (inc.set(u, []), inc.get(u)!)).push({ key, w: edgeW(e, 0.5), c: e.kind === 'cites' ? 1 : 0, other: v }); };
   for (const e of edges) {
     if (e.source === e.target) continue;
     const key = edgePairKey(e.source, e.target);

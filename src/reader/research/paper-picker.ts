@@ -55,13 +55,13 @@ export class PaperPicker {
     this.currentWrap = el('div', 'pp-current-wrap'); this.countEl = el('div', 'pp-count');
     this.listEl = el('div', opts.listClass ?? 'pp-list'); this.listEl.setAttribute('role', 'listbox');
     this.root.append(this.searchInput, this.currentWrap, this.countEl, this.listEl);
-    this.searchInput.addEventListener('input', () => { this.activeIdx = -1; this.render(); this.scheduleExternal(); });
+    this.searchInput.addEventListener('input', () => { this.activeIdx = -1; this.scheduleExternal(); this.render(); });
     this.searchInput.addEventListener('keydown', e => {
       if (e.isComposing) return;
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.opts.onClose?.(true); }
       else if (e.key === 'ArrowDown' && this.optionBtns.length) { e.preventDefault(); this.moveFocus(1); }
       else if (e.key === 'ArrowUp' && this.optionBtns.length) { e.preventDefault(); this.moveFocus(-1); }
-      else if (e.key === 'Enter' && this.optionBtns.length) { e.preventDefault(); (this.optionBtns[this.activeIdx] ?? this.optionBtns[0])?.click(); }
+      else if (e.key === 'Enter') { e.preventDefault(); (this.optionBtns[this.activeIdx] ?? this.optionBtns[0])?.click(); }
     });
   }
 
@@ -70,7 +70,7 @@ export class PaperPicker {
     this.abortExternal(); this.extItems = [];
     const q = this.searchInput.value.trim();
     if (!this.opts.externalSearch || q.length < 2) return;
-    const seq = this.extSeq; this.extLoading = true; this.render();
+    const seq = this.extSeq; this.extLoading = true;
     this.extTimer = setTimeout(() => {
       this.extCtrl = new AbortController();
       void this.opts.externalSearch!(q, this.extCtrl.signal).then(items => {

@@ -202,7 +202,7 @@ export function computeCitationMapLayout(
   }
 
   const edgeSpecs = edges
-    .map(e => [idIndex.get(e.source), idIndex.get(e.target), clamp(e.weight ?? (e.kind === 'cites' ? 1 : 0.6), 0.15, 1)] as const)
+    .map(e => [idIndex.get(e.source), idIndex.get(e.target), clamp(typeof e.weight === 'number' && Number.isFinite(e.weight) ? e.weight : (e.kind === 'cites' ? 1 : 0.6), 0.15, 1)] as const)
     .filter((p): p is readonly [number, number, number] => p[0] !== undefined && p[1] !== undefined && p[0] !== p[1]);
   const cell = Math.sqrt((spanX * spanY) / Math.max(1, items.length)), idealEdge = Math.hypot(spanX, spanY) * 0.34;
   const sepX = Math.min(82, Math.max(32, cell * 1.05)), sepY = Math.min(44, Math.max(20, cell * 0.56));

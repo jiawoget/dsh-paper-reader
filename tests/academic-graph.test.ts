@@ -354,4 +354,11 @@ test('citation clustering, labels, shortest path to seed, backbone edges, hulls,
   }));
   const all = filterLibraryPapers(docs, ''), hit = filterLibraryPapers(docs, 'quantum quantization');
   assert.ok(all.total === 520 && all.matched === 520 && all.items.length === PAPER_PICKER_VISIBLE_CAP && hit.matched === 1 && hit.items[0]?.id === 'doc-412');
+  const enDash = [mk('E1', 'Vision--Language Pre--Training', 100, 2024, true), mk('E2', 'Self--Supervised End--to--End Vision--Language', 50, 2025)];
+  assert.ok(detectCitationClusters(enDash, [{ source: 'E1', target: 'E2', kind: 'related', weight: Number.NaN }])[0]!.label.length <= 24);
+  const cjk = [mk('Z1', '基于分层注意力机制的超大规模语言模型推理加速与显存压缩方法研究', 10, 2025), mk('Z2', '大语言模型推理加速与量化技术综述', 12, 2025)];
+  const longEn = [mk('L1', 'Electroencephalography Representations Optimization', 10, 2025), mk('L2', 'Electroencephalography Representations Decoding', 12, 2025)];
+  assert.ok(extractClusterLabel(cjk, cjk).length <= 24 && extractClusterLabel(longEn, longEn).length <= 24);
+  const ph = computeShortestPathToSeed([mk('S', 'Seed', 10, 2023, true), mk('T', 'Target', 5, 2024)], [{ source: 'S', target: 'PHANTOM', kind: 'cites' }, { source: 'PHANTOM', target: 'T', kind: 'cites' }], 'T');
+  assert.deepEqual([...ph.nodeIds], ['T']);
 });
