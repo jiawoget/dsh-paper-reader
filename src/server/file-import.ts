@@ -1,9 +1,10 @@
 import path from 'node:path';
 import type { DocMetadata, DocumentInfo, OpenDocument } from '../shared/types.js';
 import { decodeHtml } from './academic-intake.js';
-import { importLocalArticle } from './book-import.js';
+import { importLocalArticle, importShardedBook } from './book-import.js';
 import { fail, PDF_LIMIT, type Library } from './library.js';
 import { cleanFilenameTitle, parseMarkdownArticle } from './markdown-article.js';
+import { parseDocxBuffer, parsePptxBuffer } from './ooxml-parser.js';
 import { extractDocumentPages } from './pdf-text.js';
 import { HTML_LIMIT } from './public-resource.js';
 import type { ReaderStore } from './reader-store.js';
@@ -17,7 +18,10 @@ interface FormatHandler {
   run: (deps: LocalImportDeps, input: LocalFileInput, filename: string) => Promise<{ opened: OpenDocument; pdfBytes?: Buffer }>;
 }
 
-const UNSUPPORTED_MESSAGE = 'Unsupported file type. Choose a PDF, Markdown (.md), or HTML (.html) file.';
+const UNSUPPORTED_MESSAGE = 'Unsupported file type. Choose a PDF, PPTX, DOCX, Markdown (.md), or HTML (.html) file.';
+const LEGACY_PPT_MESSAGE = 'Legacy binary .ppt files are not supported directly. Save or export as .pptx or PDF, then import again. / 暂不支持旧版二进制 .ppt 格式，请另存或导出为 .pptx 或 PDF 后再导入。';
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PDF_MAGIC = Buffer.from('%PDF-');
 const hasPdfPrefix = (bytes: Buffer): boolean => {
   const start = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
@@ -54,7 +58,21 @@ const FORMAT_HANDLERS: Record<string, FormatHandler> = {
   '.md': mdHandler,
   '.markdown': mdHandler,
   '.html': htmlHandler,
-  '.htm': htmlHandler
+  '.htm': htmlHandler,
+  '.pptx': {
+    limit: HTML_LIMIT,
+    async run({ library }, input, filename) {
+      const parsed = parsePptxBuffer(input.bytes, filename);
+      return { opened: await importShardedBook(library, { title: parsed.title, ...(parsed.authors ? { authors: parsed.authors } : {}), sharded: parsed.sharded, media: parsed.media }) };
+    }
+  },
+  '.docx': {
+    limit: HTML_LIMIT,
+    async run({ library }, input, filename) {
+      const parsed = parseDocxBuffer(input.bytes, filename);
+      return { opened: await importLocalArticle(library, parsed.article, parsed.media) };
+    }
+  }
 };
 
 export function resolveImportFilename(headers: Headers, params: URLSearchParams): string {
@@ -67,11 +85,13 @@ function resolveExtension(filename: string, contentType?: string): string {
   const ext = path.extname(filename.trim()).toLowerCase();
   if (ext) return ext;
   const mime = (contentType || '').split(';')[0].trim().toLowerCase();
-  return mime === 'application/pdf' ? '.pdf' : mime === 'text/markdown' || mime === 'text/x-markdown' ? '.md' : mime === 'text/html' || mime === 'application/xhtml+xml' ? '.html' : '';
+  return mime === 'application/pdf' ? '.pdf' : mime === PPTX_MIME ? '.pptx' : mime === DOCX_MIME ? '.docx' : mime === 'application/vnd.ms-powerpoint' ? '.ppt'
+    : mime === 'text/markdown' || mime === 'text/x-markdown' ? '.md' : mime === 'text/html' || mime === 'application/xhtml+xml' ? '.html' : '';
 }
 
 function getHandler(filename: string, contentType?: string): { ext: string; handler: FormatHandler } {
   const ext = resolveExtension(filename, contentType);
+  if (ext === '.ppt') fail(LEGACY_PPT_MESSAGE, 415);
   const handler = Object.hasOwn(FORMAT_HANDLERS, ext) ? FORMAT_HANDLERS[ext] : undefined;
   if (!handler) fail(UNSUPPORTED_MESSAGE, 415);
   return { ext, handler };

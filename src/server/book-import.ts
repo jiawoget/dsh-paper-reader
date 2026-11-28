@@ -7,13 +7,26 @@ import { articleUrl, type ArticleLayout, type WebArticle } from '../shared/web-a
 import { readArticleLayout } from './article-layout.js';
 import { fail, hash, isRecord, writeOnce, type Library } from './library.js';
 import { sanitizeDocMeta } from './library-meta.js';
+import type { LocalMediaAsset } from './ooxml-parser.js';
 
 interface ShardedBookInput extends DocMetadata {
   url?: string; title: string; sharded: ShardedBook; identityKey?: string; defaultPage?: number; fragment?: string;
+  media?: ReadonlyMap<string, LocalMediaAsset>;
 }
 
 const MAX_SHARDED_CHARS = 16_000_000;
 const cleanDocTitle = (raw: string): string => raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
+
+async function writeLocalMedia(dir: string, layout: ArticleLayout, media?: ReadonlyMap<string, LocalMediaAsset>): Promise<void> {
+  if (!media?.size) return;
+  let madeDir = false;
+  for (const [anchor, block] of Object.entries(layout)) {
+    const asset = block.kind === 'image' && block.image ? media.get(block.image.url) : undefined;
+    if (!asset) continue;
+    if (!madeDir) { await mkdir(dir, { recursive: true }); madeDir = true; }
+    await writeOnce(path.join(dir, anchor), Buffer.concat([Buffer.from(asset.mime + '\n', 'ascii'), asset.bytes]));
+  }
+}
 
 function checkPreShardLayout(raw: unknown, count: number): ArticleLayout {
   if (!isRecord(raw)) fail('Invalid article layout.');
@@ -30,7 +43,8 @@ export async function importShardedBook(library: Library, input: ShardedBookInpu
   const cleanTitle = cleanDocTitle(input.title);
   const parsedUrl = input.url ? articleUrl(input.url) : undefined;
   const safeUrl = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : undefined;
-  const identity = input.identityKey ?? JSON.stringify([safeUrl ?? '', cleanTitle, sharded.sections.map(s => [s.slug, s.paragraphs])]);
+  const mediaKeys = input.media?.size ? [...input.media.keys()].sort() : undefined;
+  const identity = input.identityKey ?? JSON.stringify([safeUrl ?? '', cleanTitle, sharded.sections.map(s => [s.slug, s.paragraphs]), ...(mediaKeys ? [mediaKeys] : [])]);
   const id = 'book-' + hash(identity);
   const documentsDir = path.join(library.root, 'documents'), sectionsDir = path.join(documentsDir, 'book-sections', id);
   await mkdir(sectionsDir, { recursive: true });
@@ -39,8 +53,10 @@ export async function importShardedBook(library: Library, input: ShardedBookInpu
     if (!bookSlug(section.slug) || !section.paragraphs.length) fail('Invalid sharded book section.');
     return { slug: section.slug, paragraphs: section.paragraphs, articleLayout: readArticleLayout(section.articleLayout, section.paragraphs) };
   });
-  for (const section of prepared) {
+  for (let i = 0; i < prepared.length; i++) {
+    const section = prepared[i];
     await writeOnce(path.join(sectionsDir, hash(section.slug) + '.json'), JSON.stringify({ paragraphs: section.paragraphs, articleLayout: section.articleLayout }));
+    await writeLocalMedia(path.join(library.root, 'article-images', id, String(i + 1)), section.articleLayout, input.media);
   }
 
   const book: BookInfo = {
@@ -81,20 +97,23 @@ export async function importShardedWebArticle(library: Library, input: Record<st
   return importShardedBook(library, { ...sanitizeDocMeta(input), url: baseHref, title, sharded, ...(fragment ? { fragment } : {}) });
 }
 
-export async function importLocalArticle(library: Library, article: WebArticle): Promise<OpenDocument> {
+export async function importLocalArticle(library: Library, article: WebArticle, media?: ReadonlyMap<string, LocalMediaAsset>): Promise<OpenDocument> {
   let chars = 0;
   for (const p of article.paragraphs) chars += p.length;
   if (!article.paragraphs.length || chars > MAX_SHARDED_CHARS) fail('The document is empty or too long.');
   const cleanTitle = cleanDocTitle(article.title);
   const meta = sanitizeDocMeta({ ...article });
   if (shouldShardArticle(article)) {
-    return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: '', title: cleanTitle }) });
+    return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: '', title: cleanTitle }), ...(media ? { media } : {}) });
   }
-  const id = 'web-' + hash(JSON.stringify(['local', cleanTitle, article.paragraphs]));
+  const mediaKeys = media?.size ? [...media.keys()].sort() : undefined;
+  const id = 'web-' + hash(JSON.stringify(['local', cleanTitle, article.paragraphs, ...(mediaKeys ? [mediaKeys] : [])]));
   const documentsDir = path.join(library.root, 'documents');
   await mkdir(documentsDir, { recursive: true });
   if (article.articleLayout) {
-    await writeOnce(path.join(documentsDir, id + '.layout.json'), JSON.stringify(readArticleLayout(article.articleLayout, article.paragraphs)));
+    const layout = readArticleLayout(article.articleLayout, article.paragraphs);
+    await writeOnce(path.join(documentsDir, id + '.layout.json'), JSON.stringify(layout));
+    await writeLocalMedia(path.join(library.root, 'article-images', id), layout, media);
   }
   const record: DocumentInfo = {
     id, kind: 'web', title: cleanTitle, ...meta,

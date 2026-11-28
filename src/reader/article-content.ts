@@ -1,5 +1,6 @@
 import { render as renderMath } from 'katex';
 import { articleUrl, type ArticleBlock } from '../shared/web-article.js';
+import { researchText } from './research/labels.js';
 import { readerLabel as label } from './ui.js';
 
 export function unchangedArticleBlock(kind?: ArticleBlock['kind']): boolean {
@@ -15,8 +16,13 @@ interface SourceActions {
 export function articleContent(owner: Document, format: ArticleBlock | undefined, text: string, actions: SourceActions): HTMLElement {
   const kind = format?.kind;
   const element = owner.createElement(kind && /^h[1-6]$/.test(kind) ? kind : kind === 'pre' ? 'pre' : kind === 'quote' ? 'blockquote' :
-    kind === 'caption' ? 'figcaption' : kind === 'image' ? 'figure' : kind === 'table' ? 'div' : 'p');
+    kind === 'caption' ? 'figcaption' : kind === 'image' ? 'figure' : kind === 'table' ? 'div' : kind === 'notes' ? 'aside' : 'p');
   if (kind) element.dataset.kind = kind;
+  if (kind === 'notes') {
+    const noteLabel = researchText.speakerNotes();
+    element.dataset.label = noteLabel;
+    element.setAttribute('aria-label', noteLabel);
+  }
   if (kind === 'image' && format?.image) {
     const image = owner.createElement('img');
     image.alt = format.image.alt;

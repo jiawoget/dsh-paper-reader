@@ -305,7 +305,7 @@ export class Library {
       const metadata = await this.get(id);
       const doc = book ? await this.readSection(metadata, page, true) : metadata;
       const url = doc.articleLayout?.[anchor]?.image?.url;
-      if (!url) fail('This illustration is not part of the saved article.', 404);
+      if (!url || !articleUrl(url)) fail('This illustration is not part of the saved article.', 404);
       const picture = await download(url);
       if (!pictureType.test(picture.type) || !picture.bytes.length) fail('The website did not return an illustration.', 415);
       await mkdir(directory, { recursive: true });
