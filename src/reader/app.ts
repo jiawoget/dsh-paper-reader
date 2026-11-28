@@ -19,6 +19,7 @@ import { bundledPdfUrl, loadPdfView } from './pdf-loader.js';
 import { collectionsDialog } from './collections-dialog.js';
 import { notesPanel, readingPackBar } from './notes-panel.js';
 import { referencePanel } from './reference-panel.js';
+import { broadcastDocTags, closeTagPopover } from './tag-picker.js';
 import { settingsDialog } from './settings-dialog.js';
 import { installShortcuts } from './shortcuts.js';
 import { libraryDialog } from './library-dialog.js';
@@ -128,7 +129,7 @@ class Reader implements ReaderPort {
   });
   private readonly research = new ResearchWorkspace({
     activeDocId: () => this.doc.id,
-    prepareOpen: () => { this.card.close(); this.closeMenu(); this.cancelCapture(false); this.cancelPin(); this.marks.closePageEditor(); },
+    prepareOpen: () => { closeTagPopover(); this.card.close(); this.closeMenu(); this.cancelCapture(false); this.cancelPin(); this.marks.closePageEditor(); },
     capturePosition: () => this.readingPosition(true),
     restorePosition: anchor => this.restoreReading(anchor),
     inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
@@ -136,6 +137,8 @@ class Reader implements ReaderPort {
     openSettings: tab => settingsDialog(this, tab ?? 'ai'),
     arxivFormat: () => this.state.settings.arxivFormat ?? 'html',
     createModelPicker: () => questionModelButton(this), currentQuestionModel: () => this.state.settings.questionModel,
+    aiConfigured: () => this.state.settings.aiMode !== 'unconfigured',
+    syncActiveDocMeta: (docId, meta) => { if (this.doc.id === docId) { this.doc.meta = meta; broadcastDocTags(docId, meta); } },
     focusAfterCollapse: () => (byId('workspaceSwitch').querySelector<HTMLElement>('.rw-sw-research') ?? byId('library')).focus({ preventScroll: true })
   });
   private menuPin!: HTMLButtonElement; private menuRead!: HTMLButtonElement;
@@ -330,7 +333,7 @@ class Reader implements ReaderPort {
   }
   repaintNotes():void {
     const body=byId('railBody');
-    const contents=this.tab==='contents';
+    const contents=this.tab==='contents'; if(this.tab!=='reference')closeTagPopover();
     this.desk.setContents(contents);
     byId('contentsPanel').hidden=!contents;
     body.hidden=contents;
@@ -377,7 +380,7 @@ class Reader implements ReaderPort {
     this.cancelPin();this.marks.closePageEditor();
     const readingLink=Boolean(anchor && !options?.fromContents && !outlineLocation(anchor));
     if(readingLink)this.desk.dismissDrawer();
-    this.card.close();
+    closeTagPopover(); this.card.close();
     if(readingLink || id!==this.loadedId || options?.forceReload) {
       this.readingText=false;
       this.updatePageFormat();
@@ -770,6 +773,7 @@ class Reader implements ReaderPort {
     void this.restoreReading(initial).catch(error=>toast(message(error)));
   }
   openResearchWorkspace(view?: ResearchViewId, ctx?: ResearchOpenContext): void { this.research.open(view, ctx); }
+  notifyDocumentMutated(docId: string, deleted?: boolean): void { this.research.notifyDocumentMutated(docId, deleted); }
   openPaperChat(): void { this.chat.open(); }
   private toggleResearchWorkspace(): void { if (this.research.isOpen()) void this.research.collapse(); else this.research.open(); }
   private async inspectFromWorkspace(target: InspectTarget, returnAnchor?: ReturnAnchor): Promise<void> {

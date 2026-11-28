@@ -1,11 +1,13 @@
 import { LIBRARY_PAGE_SIZE, slicePage } from '../shared/library-relevance.js';
 import { openStaxLocation } from '../shared/openstax.js';
+import { collectLibraryTags, isInternalTag, mergeTags, normalizeTag } from '../shared/tags.js';
 import type { DocStatus, DocumentInfo, LibrarySearchHit, LibrarySearchKind, TopicRecord } from '../shared/types.js';
 import { abstractOnlyLabel } from './abstract-view.js';
 import { localBookPlace } from './book-position.js';
 import { LibraryBulkController } from './library-bulk.js';
 import { researchText } from './research/labels.js';
 import { PaperFloatBar } from './research/paper-float-bar.js';
+import { broadcastDocTags, closeTagPopover, isTagPopoverOpen, mountTagPicker } from './tag-picker.js';
 import { api, button, byId, el, icon, message, readerLabel as t, toast, type ReaderPort } from './ui.js';
 
 const nextStatus: Record<DocStatus, DocStatus> = { unread: 'reading', reading: 'done', done: 'unread' };
@@ -54,23 +56,30 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
   let pageLimit = LIBRARY_PAGE_SIZE, allDocs: DocumentInfo[] = [], allTopics: TopicRecord[] = [];
   let rerender: (() => void) | null = null;
   let syncTags: (() => void) | null = null;
+  const applyBulkTag = async (docIds: string[], tag: string, mode: 'add' | 'remove') => {
+    const clean = normalizeTag(tag);
+    if (!clean || isInternalTag(clean)) return;
+    const res = await api('library.bulkTriage', mode === 'add' ? { docIds, addTags: [clean] } : { docIds, removeTags: [clean] });
+    const idSet = new Set(docIds);
+    for (const doc of allDocs) {
+      if (!idSet.has(doc.id)) continue;
+      const prev = doc.meta ?? { status: 'unread', starred: false, tags: [] };
+      const nextMeta = { ...prev, tags: mergeTags(prev.tags, mode === 'add' ? { add: [clean] } : { remove: [clean] }) };
+      doc.meta = nextMeta;
+      if (app.doc.id === doc.id) app.doc.meta = nextMeta;
+      broadcastDocTags(doc.id, nextMeta);
+    }
+    syncTags?.(); rerender?.();
+    if (docIds[0]) app.notifyDocumentMutated?.(docIds[0]);
+    toast(mode === 'add' ? researchText.libraryBulkTagged(res.updated, clean) : researchText.libraryBulkUntagged(res.updated, clean));
+  };
   const bulk = new LibraryBulkController({
     onShowMore: () => { pageLimit += LIBRARY_PAGE_SIZE; rerender?.(); },
     onSelectionChange: () => floatBar.hide(),
-    onAddTag: async (docIds, tag) => {
-      const clean = tag.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
-      if (!clean) return;
-      const res = await api('library.bulkTriage', { docIds, addTags: [clean] });
-      const idSet = new Set(docIds), key = clean.toLocaleLowerCase();
-      for (const doc of allDocs) {
-        if (!idSet.has(doc.id)) continue;
-        const meta = doc.meta ?? { status: 'unread', starred: false, tags: [] };
-        if (!meta.tags.some(existing => existing.toLocaleLowerCase() === key) && meta.tags.length < 20) meta.tags = [...meta.tags, clean];
-        doc.meta = meta;
-      }
-      syncTags?.(); rerender?.();
-      toast(researchText.libraryBulkTagged(res.updated, clean));
-    },
+    onAddTag: (docIds, tag) => applyBulkTag(docIds, tag, 'add'),
+    onRemoveTag: (docIds, tag) => applyBulkTag(docIds, tag, 'remove'),
+    getTagStats: () => collectLibraryTags(allDocs, allTopics),
+    getSelectedTagCounts: docIds => { const ids = new Set(docIds); return collectLibraryTags(allDocs.filter(d => ids.has(d.id))); },
     onOpenReview: () => { closeDialog(); app.openResearchWorkspace?.('review-table'); },
     onDelete: async docIds => {
       const res = await api('library.bulkDelete', { docIds });
@@ -91,7 +100,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
     onAskAi: async target => { if (target.doc) { await read(target.doc); app.openPaperChat?.(); } },
     onCitations: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citations', { docId: target.doc.id }); } },
     onCitationMap: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citation-map', { seedDocId: target.doc.id }); } }
-  }, { placement: 'outside', isSuppressed: () => bulk.hasSelection() });
+  }, { placement: 'outside', isSuppressed: () => bulk.hasSelection() || isTagPopoverOpen() });
 
   let searchTimer = 0, searchSeq = 0;
   let pendingCounts: Record<string, number> = {};
@@ -138,25 +147,17 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
       const key = doc.title.toLocaleLowerCase(), group = editions.get(key);
       if (group) group.push(doc); else editions.set(key, [doc]);
     }
-    let editingId = '', editingMode: '' | 'rename' | 'tags' = '', confirmingId = '', focusDeleteId = '';
+    let editingId = '', confirmingId = '', focusDeleteId = '';
 
     function syncTagOptions(): void {
-      const prev = tagSelect.value, map = new Map<string, string>(), seen = new Set<string>();
-      for (const tp of allTopics) {
-        const tag = tp.tag || tp.name, key = tag.toLocaleLowerCase();
-        if (tag && !seen.has(key)) { seen.add(key); map.set(tag, tp.name && tp.name !== tag ? `${tp.name} (#${tag})` : tag); }
-      }
-      for (const doc of allDocs) {
-        for (const tag of doc.meta?.tags ?? []) {
-          const key = tag.toLocaleLowerCase();
-          if (tag && !/^screen:/i.test(tag) && !seen.has(key)) { seen.add(key); map.set(tag, tag); }
-        }
-      }
+      const prev = tagSelect.value, stats = collectLibraryTags(allDocs, allTopics);
+      const sorted = [...stats].sort((a, b) => (a.label ?? a.tag).localeCompare(b.label ?? b.tag));
       tagSelect.replaceChildren(
         new Option(researchText.triageTagAll(), ''),
-        ...[...map.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([v, l]) => new Option(l, v))
+        ...sorted.map(s => new Option(s.label ?? s.tag, s.tag))
       );
-      tagSelect.value = map.has(prev) ? prev : '';
+      const match = sorted.find(s => s.tag.toLocaleLowerCase() === prev.toLocaleLowerCase());
+      tagSelect.value = match ? match.tag : '';
     }
     syncTags = syncTagOptions;
     syncTagOptions();
@@ -179,23 +180,19 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
       status.textContent = shown.length ? '' : t('No matching documents.', '没有找到符合条件的文档。');
 
       for (const doc of page.items) {
-        if (editingId === doc.id && editingMode) {
-          const isTags = editingMode === 'tags', form = el('form', 'library-rename'), input = el('input', 'search');
-          input.value = isTags ? (doc.meta?.tags ?? []).join(', ') : doc.title; input.maxLength = isTags ? 400 : 250;
-          if (!isTags) input.required = true;
-          input.ariaLabel = input.placeholder = isTags ? t('Tags (comma-separated)', '标签（用逗号分隔）') : t('Document title', '文档标题');
+        if (editingId === doc.id) {
+          const form = el('form', 'library-rename'), input = el('input', 'search');
+          input.value = doc.title; input.maxLength = 250; input.required = true;
+          input.ariaLabel = input.placeholder = t('Document title', '文档标题');
           const save = el('button', 'btn primary', t('Save', '保存')); save.type = 'submit';
-          const cancel = button(t('Cancel', '取消'), () => { editingId = ''; editingMode = ''; render(); });
+          const cancel = button(t('Cancel', '取消'), () => { editingId = ''; render(); });
           form.onsubmit = async event => {
             event.preventDefault(); save.disabled = true;
             try {
-              if (isTags) { doc.meta = (await api('library.triage', { docId: doc.id, tags: input.value.split(/[,，]/).map(s => s.trim()).filter(Boolean) })).meta; syncTagOptions(); }
-              else {
-                const title = input.value.trim(); if (!title) { save.disabled = false; return; }
-                const { doc: updated } = await api('library.rename', { id: doc.id, title });
-                doc.title = updated.title; if (app.doc.id === doc.id) { app.doc.title = updated.title; byId('docTitle').textContent = updated.title; }
-              }
-              editingId = ''; editingMode = ''; render();
+              const title = input.value.trim(); if (!title) { save.disabled = false; return; }
+              const { doc: updated } = await api('library.rename', { id: doc.id, title });
+              doc.title = updated.title; if (app.doc.id === doc.id) { app.doc.title = updated.title; byId('docTitle').textContent = updated.title; }
+              editingId = ''; render();
             } catch (error) { toast(message(error)); save.disabled = false; }
           };
           form.append(input, save, cancel); list.append(form); input.focus(); input.select(); continue;
@@ -231,13 +228,19 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           heading.append(badge);
         }
         text.append(heading, el('small', '', details.join(' · ')));
-        if (doc.meta?.tags.length) {
-          const tagRow = el('span', 'library-tags');
-          for (const tag of doc.meta.tags) tagRow.append(el('span', 'library-tag', tag));
-          text.append(tagRow);
-        }
         row.append(icon(doc.book ? 'book' : doc.kind === 'pdf' || doc.kind === 'abstract' || !doc.url ? 'note' : 'globe', 18), text);
         if (doc.id === app.doc.id) { row.setAttribute('aria-current', 'true'); row.append(el('small', 'library-current', t('Open', '正在阅读'))); }
+        const main = el('div', 'library-doc-main'), rowTags = el('div', 'library-row-tags');
+        mountTagPicker(rowTags, {
+          doc, compact: true, getTaxonomy: () => collectLibraryTags(allDocs, allTopics),
+          aiConfigured: app.state.settings.aiMode !== 'unconfigured',
+          onMetaUpdated: meta => {
+            doc.meta = meta; if (app.doc.id === doc.id) app.doc.meta = meta;
+            syncTagOptions(); app.notifyDocumentMutated?.(doc.id);
+            if (tagSelect.value && !meta.tags.some(t => t.toLocaleLowerCase() === tagSelect.value.toLocaleLowerCase())) render();
+          }
+        });
+        main.append(row, rowTags);
 
         const wrap = el('div', 'library-device-item'), actions = el('div', 'library-item-actions'), check = bulk.makeCheckbox(doc.id);
         wrap.dataset.docId = doc.id;
@@ -252,24 +255,22 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           }, 'btn library-delete-confirm');
           delBtn.ariaLabel = delBtn.title = t('Confirm delete', '确认删除');
           const cancelBtn = button(t('Cancel', '取消'), () => { confirmingId = ''; focusDeleteId = doc.id; render(); });
-          actions.append(delBtn, cancelBtn); wrap.append(check, row, actions); list.append(wrap); cancelBtn.focus({ preventScroll: true }); continue;
+          actions.append(delBtn, cancelBtn); wrap.append(check, main, actions); list.append(wrap); cancelBtn.focus({ preventScroll: true }); continue;
         }
         const starred = Boolean(doc.meta?.starred), curStatus: DocStatus = doc.meta?.status ?? 'unread';
         const starBtn = button('', async () => { doc.meta = (await api('library.triage', { docId: doc.id, starred: !starred })).meta; render(); }, 'icon-btn library-star', 'star');
         starBtn.setAttribute('aria-pressed', String(starred)); starBtn.ariaLabel = starBtn.title = starred ? t('Remove star', '取消星标') : t('Star document', '标星文档');
         const statusBtn = button(statusText(curStatus), async () => { doc.meta = (await api('library.triage', { docId: doc.id, status: nextStatus[curStatus] })).meta; render(); }, 'btn library-status-btn');
         statusBtn.dataset.status = curStatus; statusBtn.ariaLabel = statusBtn.title = t('Reading status: ' + statusText(curStatus), '阅读状态：' + statusText(curStatus));
-        const tagBtn = button('', () => { confirmingId = ''; editingId = doc.id; editingMode = 'tags'; render(); }, 'icon-btn', 'tag');
-        tagBtn.ariaLabel = tagBtn.title = t('Edit tags', '编辑标签');
-        actions.append(starBtn, statusBtn, tagBtn);
+        actions.append(starBtn, statusBtn);
         if (doc.id !== 'pagedattention') {
-          const renameBtn = button('', () => { confirmingId = ''; editingId = doc.id; editingMode = 'rename'; render(); }, 'icon-btn', 'edit');
+          const renameBtn = button('', () => { confirmingId = ''; editingId = doc.id; render(); }, 'icon-btn', 'edit');
           renameBtn.ariaLabel = renameBtn.title = t('Rename document', '重命名文档');
           const delBtn = button('', () => { confirmingId = doc.id; render(); }, 'icon-btn', 'trash');
           delBtn.ariaLabel = delBtn.title = t('Delete document', '删除文档');
-          actions.append(renameBtn, delBtn); wrap.append(check, row, actions); list.append(wrap);
+          actions.append(renameBtn, delBtn); wrap.append(check, main, actions); list.append(wrap);
           if (focusDeleteId === doc.id) { focusDeleteId = ''; delBtn.focus({ preventScroll: true }); }
-        } else { wrap.append(check, row, actions); list.append(wrap); }
+        } else { wrap.append(check, main, actions); list.append(wrap); }
         floatBar.attach(wrap, { doc, inLibrary: true });
       }
       bulk.updateView(new Set(allDocs.map(d => d.id)), page.items.map(d => d.id), shown.map(d => d.id), allDocs.length, page.hasMore);
@@ -279,5 +280,5 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
     for (const select of [statusSelect, typeSelect, tagSelect, sortSelect]) select.addEventListener('change', () => { pageLimit = LIBRARY_PAGE_SIZE; render(); });
     render();
   }).catch(error => { status.textContent = message(error); });
-  return () => floatBar.destroy();
+  return () => { closeTagPopover(); floatBar.destroy(); };
 }

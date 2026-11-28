@@ -153,7 +153,7 @@ export class PaperFloatBar {
   private bindEvents(): void {
     const signal = this.ac.signal;
     const staysInside = (next: EventTarget | null) => next instanceof Node && (this.root.contains(next) || Boolean(this.activeItem?.contains(next)));
-    const isCheck = (node: EventTarget | null) => node instanceof Element && Boolean(node.closest('input[type="checkbox"], .library-check-wrap, .rt-check-wrap, .lc-doc-check-wrap'));
+    const isCheck = (node: EventTarget | null) => node instanceof Element && Boolean(node.closest('input[type="checkbox"], .library-check-wrap, .rt-check-wrap, .lc-doc-check-wrap, .tp-root, .tp-popover'));
     this.host.addEventListener('pointerover', e => {
       if ((e as PointerEvent).pointerType === 'touch') return;
       if (e.target instanceof Node && this.root.contains(e.target)) { this.cancelHide(); return; }
@@ -188,7 +188,8 @@ export class PaperFloatBar {
       }
     }, { signal });
     this.host.addEventListener('scroll', () => { if (!this.root.hidden) this.hide(); }, { capture: true, passive: true, signal });
-    document.addEventListener('pointerdown', e => { if (!this.root.hidden && !staysInside(e.target)) this.hide(); }, { signal });
+    document.addEventListener('pointerdown', e => { if (!this.root.hidden && (!staysInside(e.target) || isCheck(e.target))) this.hide(); }, { signal });
+    document.addEventListener('tp:open', () => { if (!this.root.hidden) this.hide(); }, { signal });
     window.addEventListener('resize', () => { if (!this.root.hidden) this.hide(); }, { passive: true, signal });
   }
 }

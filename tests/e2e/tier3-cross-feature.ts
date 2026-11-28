@@ -242,6 +242,14 @@ try {
           await page.keyboard.press('Escape');
           await page.keyboard.press('m'); assert.equal(await page.locator('#annotationsTab').getAttribute('aria-selected'), 'true');
           await page.keyboard.press('r'); assert.equal(await page.locator('#refsTab').getAttribute('aria-selected'), 'true');
+          await page.locator('.ref-tags-host .tp-trigger').click();
+          await page.locator('.tp-popover .tp-input').fill('reader-ref-tag');
+          await page.locator('.tp-popover .tp-input').press('Enter');
+          await page.locator('.ref-tags-host .tp-chip', { hasText: 'reader-ref-tag' }).waitFor({ state: 'visible' });
+          await page.keyboard.press('Escape');
+          await page.locator('.tp-popover').waitFor({ state: 'detached' });
+          assert.equal(await page.locator('#reader').getAttribute('data-notebook-open'), 'true');
+          await page.locator('#paperScroll').focus();
           await page.keyboard.press('r'); assert.equal(await page.locator('#reader').getAttribute('data-notebook-open'), 'false');
           await page.keyboard.press('s'); await page.locator('.pdf-capture-surface').waitFor({ state: 'visible' });
           await page.keyboard.press('Escape'); await page.locator('.pdf-capture-surface').waitFor({ state: 'hidden' });
@@ -262,9 +270,28 @@ try {
           await webItem.getByRole('button', { name: 'Remove star', exact: true }).waitFor();
           await webItem.locator('.library-status-btn').click();
           await webItem.locator('.library-status-btn[data-status="done"]').waitFor();
-          await webItem.getByRole('button', { name: 'Edit tags', exact: true }).click();
-          await dlg.locator('.library-rename input').fill('systems, ml'); await dlg.locator('.library-rename button[type="submit"]').click();
-          await webItem.locator('.library-tag').filter({ hasText: 'systems' }).waitFor();
+          await webItem.locator('.tp-trigger').click();
+          const tpPop = dlg.locator('.tp-popover');
+          await tpPop.waitFor({ state: 'visible' });
+          await tpPop.locator('.tp-input').fill('systems'); await tpPop.locator('.tp-input').press('Enter');
+          await webItem.locator('.library-tag', { hasText: 'systems' }).waitFor({ state: 'visible' });
+          await tpPop.locator('.tp-input').fill('ml'); await tpPop.locator('.tp-input').press('Enter');
+          await webItem.locator('.library-tag', { hasText: 'ml' }).waitFor({ state: 'visible' });
+          await page.keyboard.press('Escape'); await tpPop.waitFor({ state: 'detached' });
+          assert.equal(await dlg.isVisible(), true);
+          await dlg.locator('.library-tag-filter').selectOption('systems'); assert.equal(await dlg.locator('.library-device-item').count(), 1);
+          await dlg.locator('.library-tag-filter').selectOption('');
+
+          const rowChecks = dlg.locator('.library-device-item .library-check');
+          await rowChecks.nth(0).click(); await rowChecks.nth(1).click();
+          await dlg.locator('.library-bulk-tag-btn').click();
+          await dlg.locator('.library-bulk-chip[data-tag="systems"]').click();
+          await until(async () => (await dlg.locator('.library-device-item .library-tag', { hasText: 'systems' }).count()) === 2, 'Bulk chip add did not apply to both rows');
+          await dlg.locator('.library-bulk-mode-btn[data-mode="remove"]').click();
+          await dlg.locator('.library-bulk-chip[data-tag="systems"]').click();
+          await until(async () => (await dlg.locator('.library-device-item .library-tag', { hasText: 'systems' }).count()) === 0, 'Bulk chip remove did not clear tag');
+          await dlg.locator('.library-bulk-tag-cancel').click();
+          await dlg.locator('.library-bulk-clear').click();
           await dlg.getByLabel('Filter by status').selectOption('starred'); assert.equal(await dlg.locator('.library-device-item').count(), 1);
           await dlg.getByLabel('Filter by status').selectOption('all');
           await dlg.getByLabel('Filter by type').selectOption('web'); assert.equal(await dlg.locator('.library-device-item').count(), 1);
@@ -281,7 +308,19 @@ try {
           await page.locator('#rail .cm-content').click(); await page.keyboard.type('glmr');
           assert.equal(await dlg.isVisible(), false);
           await page.locator('#closeRail').click();
-          console.log('PASS W3-2: Library triage, cross-library jump, PDF+Web progress restore, g/l/m/r/s shortcuts, tooltips & 2-col ? modal.');
+          await page.getByRole('button', { name: 'Research', exact: true }).click();
+          await page.locator('.rw-nav-btn[data-view="review-table"]').click();
+          await page.locator('.rt-paper-btn').first().click();
+          await page.locator('.rt-insp-tags .tp-trigger').click();
+          await page.locator('.tp-popover .tp-input').fill('review-cat');
+          await page.locator('.tp-popover .tp-input').press('Enter');
+          await page.locator('.rt-insp-tags .tp-chip', { hasText: 'review-cat' }).waitFor({ state: 'visible' });
+          await page.keyboard.press('Escape');
+          await page.locator('.tp-popover').waitFor({ state: 'detached' });
+          await page.locator('.rt-tag-filter').selectOption('review-cat');
+          assert.equal(await page.locator('.rt-grid .rt-paper-btn').count(), 1);
+          await page.locator('.rw-collapse-btn').click();
+          console.log('PASS W3-2: Library triage, cross-surface TagPicker, bulk tag chips, cross-library jump, shortcuts & ? modal.');
         } finally { await ctx.close(); }
       }
     } finally {

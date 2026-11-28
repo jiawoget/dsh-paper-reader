@@ -34,6 +34,7 @@ export interface ReaderPort {
   exchangeDeleted?(thread: string, requestId: string): void;
   regionDiscussionClosed?(explicit: boolean): void;
   openResearchWorkspace?(view?: ResearchViewId, ctx?: ResearchOpenContext): void;
+  notifyDocumentMutated?(docId: string, deleted?: boolean): void;
   openPaperChat?(): void;
   notebook?: NotebookSnapshot;
   notebookError?: string;
@@ -42,6 +43,7 @@ export interface ReaderPort {
 export function readerLabel(english: string, chinese: string): string {
   return /^zh(?:-|$)/i.test(navigator.language) ? chinese : english;
 }
+export const removeLabel = (): string => readerLabel('Remove', '移除');
 export const undoLabel = () => readerLabel('Undo', '撤销');
 
 export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -73,7 +75,6 @@ const paths = {
   folder:'M3 6h7l2 2h9v12H3z', popout:'M13 3h8v8M21 3 10 14M9 6H4v14h15v-5',
   keyboard:'M3 6h18v12H3zM7 10h.1M11 10h.1M15 10h.1M17 10h.1M7 14h10',
   trash:'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
-  tag:'M20 13 11 22 2 13V4h9zM7 9h.01',
   search:'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14m9 16-4.35-4.35', up:'m6 14 6-6 6 6', down:'m6 10 6 6 6-6'
 } as const;
 export type Glyph = keyof typeof paths;

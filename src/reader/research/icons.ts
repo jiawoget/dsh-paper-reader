@@ -2,7 +2,7 @@ import { el } from '../ui.js';
 import { researchText, type ResearchViewId } from './labels.js';
 
 export type ResearchIconName =
-  | 'railToggle' | 'close' | 'search'
+  | 'railToggle' | 'close' | 'search' | 'tag' | 'plus'
   | 'read' | 'research' | 'ask-ai' | 'save' | 'info'
   | 'code' | 'talk' | 'slides' | 'dataset' | 'link'
   | ResearchViewId;
@@ -11,6 +11,8 @@ const RESEARCH_ICON_PATHS: Record<ResearchIconName, string> = {
   railToggle: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1M9 5v14',
   close: 'M6 6l12 12M18 6L6 18',
   search: 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13m8.5 15-3.9-3.9',
+  tag: 'M20 13 11.5 21.5a1.5 1.5 0 0 1-2.1 0L3.5 15.6V4.5h11.1L20 10.9a1.5 1.5 0 0 1 0 2.1M8.5 9.5h.01',
+  plus: 'M12 5v14M5 12h14',
   read: 'M4 6.5C6.5 5 9.5 5.5 12 7c2.5-1.5 5.5-2 8-.5V18c-2.5-1.5-5.5-1-8 .5-2.5-1.5-5.5-2-8-.5zM12 7v11.5',
   research: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18m3.6 5.4-2.1 5.1-5.1 2.1 2.1-5.1z',
   'ask-ai': 'M12 4.5l1.6 4.4 4.4 1.6-4.4 1.6L12 16.5l-1.6-4.4L6 10.5l4.4-1.6zM17.5 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z',

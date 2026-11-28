@@ -3982,6 +3982,112 @@ function deleteAnnotation(db, input) {
   return true;
 }
 
+// src/shared/tags.ts
+var MAX_DOC_TAGS = 20;
+var MAX_TAG_LEN = 40;
+var STOPWORDS = new Set(
+  "the and for with from that this into over under through using via based paper study method methods approach approaches results result analysis towards toward large novel new efficient effective fast high low multi deep model models learning data work works propose proposed show shows achieve achieves improve improves across between without within their these those such more most than also only when where while which what have been were will would could should can are was not our its per all any one two use used abstract section figure table benchmark evaluation you your who how why".split(" ")
+);
+var isInternalTag = (tag) => /^screen:/i.test(tag);
+var normalizeTag = (raw) => raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_TAG_LEN);
+function normalizeTagList(raw) {
+  const seen = /* @__PURE__ */ new Set(), out = [];
+  for (const item of raw) {
+    const clean3 = normalizeTag(item), key2 = clean3.toLocaleLowerCase();
+    if (!clean3 || seen.has(key2)) continue;
+    seen.add(key2);
+    out.push(clean3);
+    if (out.length >= MAX_DOC_TAGS) break;
+  }
+  return out;
+}
+function mergeTags(current, opts) {
+  const removeKeys = new Set((opts.remove ?? []).map((t) => normalizeTag(t).toLocaleLowerCase()).filter(Boolean));
+  return normalizeTagList([...current.filter((t) => !removeKeys.has(normalizeTag(t).toLocaleLowerCase())), ...opts.add ?? []]);
+}
+function collectLibraryTags(docs, topics) {
+  const counts = /* @__PURE__ */ new Map();
+  const touch = (raw) => {
+    const clean3 = normalizeTag(raw);
+    if (!clean3 || isInternalTag(clean3)) return null;
+    const key2 = clean3.toLocaleLowerCase();
+    let entry = counts.get(key2);
+    if (!entry) {
+      entry = { count: 0, variants: /* @__PURE__ */ new Map() };
+      counts.set(key2, entry);
+    }
+    return { clean: clean3, key: key2, entry };
+  };
+  for (const tp of topics ?? []) {
+    const hit = touch(tp.tag || tp.name);
+    if (!hit) continue;
+    hit.entry.preferred = hit.clean;
+    if (tp.name && tp.name !== hit.clean) hit.entry.label = `${tp.name} (#${hit.clean})`;
+  }
+  for (const doc of docs) {
+    const seenDoc = /* @__PURE__ */ new Set();
+    for (const raw of doc.meta?.tags ?? []) {
+      const hit = touch(raw);
+      if (!hit || seenDoc.has(hit.key)) continue;
+      seenDoc.add(hit.key);
+      hit.entry.count++;
+      hit.entry.variants.set(hit.clean, (hit.entry.variants.get(hit.clean) ?? 0) + 1);
+    }
+  }
+  const out = [];
+  for (const e of counts.values()) {
+    let tag = e.preferred ?? "", best = -1;
+    if (!tag) {
+      for (const [s, n] of e.variants) if (n > best || n === best && s.localeCompare(tag) < 0) {
+        tag = s;
+        best = n;
+      }
+    }
+    if (tag) out.push({ tag, count: e.count, ...e.label ? { label: e.label } : {} });
+  }
+  return out.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+}
+function suggestOfflineTags(doc, taxonomy, limit = 4) {
+  const existing = new Set((doc.meta?.tags ?? []).map((t) => normalizeTag(t).toLocaleLowerCase()).filter(Boolean));
+  const titleRaw = [doc.paperTitle, doc.title].filter(Boolean).join(" "), bodyRaw = [doc.abstract, doc.venue].filter(Boolean).join(" ");
+  const titleLow = titleRaw.toLocaleLowerCase(), bodyLow = bodyRaw.toLocaleLowerCase(), matchedTax = [];
+  for (const stat2 of taxonomy) {
+    const clean3 = normalizeTag(stat2.tag), key2 = clean3.toLocaleLowerCase();
+    if (!clean3 || isInternalTag(clean3) || existing.has(key2)) continue;
+    let score = (titleLow.includes(key2) ? 3 : 0) + (bodyLow.includes(key2) ? 1.5 : 0);
+    if (!score) {
+      const parts = key2.split(/[\s/_-]+/).filter((p) => p.length >= 3 || /[\u4e00-\u9fff]{2,}/.test(p));
+      if (parts.length > 1) {
+        const th = parts.filter((p) => titleLow.includes(p)).length, bh = parts.filter((p) => bodyLow.includes(p)).length;
+        score = th === parts.length ? 2.5 : bh === parts.length ? 1.25 : th > 0 ? th / parts.length * 1.2 : 0;
+      }
+    }
+    if (score > 0) matchedTax.push({ tag: clean3, score: score * (1 + Math.log2(stat2.count + 1) * 0.25), count: stat2.count });
+  }
+  const out = [], push = (tag) => {
+    const k = tag.toLocaleLowerCase();
+    if (!tag || isInternalTag(tag) || existing.has(k)) return false;
+    existing.add(k);
+    out.push(tag);
+    return out.length >= limit;
+  };
+  for (const item of matchedTax.sort((a, b) => b.score - a.score || b.count - a.count || a.tag.localeCompare(b.tag))) if (push(item.tag)) return out;
+  const kw = /* @__PURE__ */ new Map();
+  const scan = (text2, weight) => {
+    for (const raw of text2.match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Za-z][A-Za-z0-9]{2,27}|[\u4e00-\u9fff]{2,6}/g) ?? []) {
+      const low = raw.toLocaleLowerCase();
+      if (low.length < 3 && !/[\u4e00-\u9fff]{2,}/.test(low) || STOPWORDS.has(low) || /^\d+$/.test(low) || existing.has(low)) continue;
+      const bonus = raw.includes("-") ? 1.4 : /^[A-Z0-9]{2,6}$/.test(raw) ? 1.25 : 1, cur = kw.get(low), label = normalizeTag(/^[A-Z0-9-]{2,8}$/.test(raw) ? raw : low);
+      if (cur) cur.score += weight * bonus;
+      else if (label) kw.set(low, { label, score: weight * bonus });
+    }
+  };
+  scan(titleRaw, 3);
+  scan(bodyRaw, 1);
+  for (const { label } of [...kw.values()].sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))) if (push(label)) break;
+  return out;
+}
+
 // src/server/doc-meta.ts
 var docMetaSchema = `CREATE TABLE IF NOT EXISTS doc_meta(
   docId TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'unread', starred INTEGER NOT NULL DEFAULT 0,
@@ -4053,30 +4159,20 @@ function saveDocProgress(db, input) {
     ...nextScroll !== void 0 && { scrollFraction: nextScroll }
   });
 }
-function sanitizeTags(raw) {
+function sanitizeTags(raw, allowInternal = true) {
   if (!Array.isArray(raw) || raw.length > 50 || !raw.every((item) => typeof item === "string")) throw new ServiceError(400, "Tags must be an array of strings.");
-  const seen = /* @__PURE__ */ new Set(), tags = [];
-  for (const item of raw) {
-    const clean3 = item.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
-    const key2 = clean3.toLocaleLowerCase();
-    if (!clean3 || seen.has(key2)) continue;
-    seen.add(key2);
-    tags.push(clean3);
-    if (tags.length >= 20) break;
-  }
-  return tags;
+  return allowInternal ? normalizeTagList(raw) : normalizeTagList(raw).filter((tag) => !isInternalTag(tag));
 }
 function updateDocTriage(db, input) {
   const docId = single(input.docId, "document ID", 512, true);
   if (input.status !== void 0 && !isStatus(input.status)) throw new ServiceError(400, "Choose unread, reading, or done.");
   if (input.starred !== void 0 && typeof input.starred !== "boolean") throw new ServiceError(400, "Starred must be a boolean.");
+  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags, false);
+  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags, false);
   const prev = listDocMeta(db, docId).get(docId) ?? { status: "unread", starred: false, tags: [] };
-  return upsertMeta(db, docId, {
-    ...prev,
-    status: input.status ?? prev.status,
-    starred: input.starred ?? prev.starred,
-    tags: input.tags === void 0 ? prev.tags : sanitizeTags(input.tags)
-  });
+  let tags = input.tags === void 0 ? prev.tags : sanitizeTags(input.tags);
+  if (addTags?.length || removeTags?.length) tags = mergeTags(tags, { remove: removeTags, add: addTags });
+  return upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
 }
 function readBulkDocIds(raw, required = true) {
   if (!Array.isArray(raw) || required && !raw.length || raw.length > 5e3) {
@@ -4088,33 +4184,58 @@ function bulkUpdateDocTriage(db, input, validIds) {
   const docIds = readBulkDocIds(input.docIds, true);
   if (input.status !== void 0 && !isStatus(input.status)) throw new ServiceError(400, "Choose unread, reading, or done.");
   if (input.starred !== void 0 && typeof input.starred !== "boolean") throw new ServiceError(400, "Starred must be a boolean.");
-  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags);
-  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags);
+  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags, false);
+  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags, false);
   if (input.status === void 0 && input.starred === void 0 && addTags === void 0 && removeTags === void 0) {
     throw new ServiceError(400, "Provide tags, status, or starred to update.");
   }
-  const removeKeys = new Set((removeTags ?? []).map((tag) => tag.toLocaleLowerCase()));
   const targets = docIds.filter((id) => validIds.has(id));
   if (!targets.length) return { updated: 0 };
   const existing = listDocMeta(db);
   for (const docId of targets) {
     const prev = existing.get(docId) ?? { status: "unread", starred: false, tags: [] };
-    let tags = prev.tags;
-    if (removeKeys.size || addTags?.length) {
-      const kept = prev.tags.filter((tag) => !removeKeys.has(tag.toLocaleLowerCase()));
-      const seen = new Set(kept.map((tag) => tag.toLocaleLowerCase()));
-      tags = [...kept];
-      for (const tag of addTags ?? []) {
-        const key2 = tag.toLocaleLowerCase();
-        if (!seen.has(key2) && tags.length < 20) {
-          seen.add(key2);
-          tags.push(tag);
-        }
-      }
-    }
+    const tags = removeTags?.length || addTags?.length ? mergeTags(prev.tags, { remove: removeTags, add: addTags }) : prev.tags;
     upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
   }
   return { updated: targets.length };
+}
+var TAG_SUGGEST_SYSTEM = 'Suggest 2 to 4 concise topical tags (1-3 words each) for this academic paper. Prefer matching tags from existingTags first before inventing new tags. Never repeat currentTags and never use "screen:" prefixes. Return ONLY valid JSON shaped as {"tags":["tag1","tag2"]}.';
+function parseSuggestedTags(raw, currentKeys) {
+  const match = raw.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim().match(/\{[\s\S]*\}/);
+  if (!match) return [];
+  const parsed = JSON.parse(match[0]);
+  if (typeof parsed !== "object" || parsed === null || !("tags" in parsed) || !Array.isArray(parsed.tags)) return [];
+  return normalizeTagList(parsed.tags.filter((v) => typeof v === "string")).filter((tag) => !isInternalTag(tag) && !currentKeys.has(tag.toLocaleLowerCase())).slice(0, 4);
+}
+async function suggestDocTags(input, deps, options) {
+  const docId = single(input.docId, "document ID", 512, true);
+  const [doc, docs] = await Promise.all([deps.library.get(docId), deps.library.list()]);
+  const { metas, topics, firstPage } = deps.store.withDb(false, (db) => ({
+    metas: listDocMeta(db),
+    topics: listTopics(db),
+    firstPage: doc.abstract ? "" : getDocPages(db, doc.id)[0]?.text ?? ""
+  }));
+  const taxonomy = collectLibraryTags(docs.map((d) => {
+    const m = metas.get(d.id);
+    return m ? { ...d, meta: m } : d;
+  }), topics);
+  const excerpt = (doc.abstract || doc.paragraphs?.slice(0, 4).join(" ") || firstPage || "").replace(/\s+/g, " ").trim().slice(0, 1400);
+  const docMeta = metas.get(doc.id), docWithExcerpt = { ...doc, meta: docMeta, abstract: excerpt };
+  const currentKeys = new Set((docMeta?.tags ?? []).map((t) => t.toLocaleLowerCase()));
+  try {
+    const res = await deps.model.completeText(deps.store.settings(), TAG_SUGGEST_SYSTEM, {
+      title: doc.paperTitle || doc.title,
+      venue: doc.venue ?? "",
+      excerpt,
+      currentTags: docMeta?.tags ?? [],
+      existingTags: taxonomy.slice(0, 40).map((t) => t.tag)
+    }, { signal: options?.signal });
+    const aiTags = parseSuggestedTags(res.text, currentKeys);
+    if (aiTags.length) return { tags: aiTags, source: "ai" };
+  } catch (error) {
+    if (options?.signal?.aborted || error instanceof ServiceError && error.status === 499) throw error;
+  }
+  return { tags: suggestOfflineTags(docWithExcerpt, taxonomy, 4), source: "offline" };
 }
 async function bulkDeleteDocuments(library, rawDocIds) {
   const docIds = readBulkDocIds(rawDocIds, true), deletedIds = [], skippedIds = [];
@@ -5515,8 +5636,8 @@ function filterTrendTopics(rows, blindSpotsOnly) {
 
 // src/server/field-trends.ts
 var TTL_TRENDS = 216e5;
-var STOPWORDS = /* @__PURE__ */ new Set(["and", "the", "for", "with", "from", "into", "via", "of", "in", "on", "to", "by", "at", "an", "or", "using", "based"]);
-var sigTokens = (text2) => [...new Set(normTitle(text2).split(" ").filter((t) => t.length >= 3 && !STOPWORDS.has(t)))];
+var STOPWORDS2 = /* @__PURE__ */ new Set(["and", "the", "for", "with", "from", "into", "via", "of", "in", "on", "to", "by", "at", "an", "or", "using", "based"]);
+var sigTokens = (text2) => [...new Set(normTitle(text2).split(" ").filter((t) => t.length >= 3 && !STOPWORDS2.has(t)))];
 function matchLocalDocsForTopic(topicId, topicName, docs, pageSnippets) {
   const cleanName = topicName.replace(/\s*\(Europe PMC \/ PubMed\)$/i, "").trim();
   const idLow = topicId.trim().toLowerCase(), normName = normTitle(cleanName), nameTokens = sigTokens(cleanName);
@@ -5525,7 +5646,7 @@ function matchLocalDocsForTopic(topicId, topicName, docs, pageSnippets) {
     const tagHit = (doc.meta?.tags ?? []).some((raw) => {
       const low = raw.trim().toLowerCase(), normTag = normTitle(raw);
       if (!low || !normTag) return false;
-      if (low === idLow || normTag === normName || normTag.length >= 3 && !STOPWORDS.has(normTag) && (" " + normName + " ").includes(" " + normTag + " ")) return true;
+      if (low === idLow || normTag === normName || normTag.length >= 3 && !STOPWORDS2.has(normTag) && (" " + normName + " ").includes(" " + normTag + " ")) return true;
       const tks = sigTokens(raw);
       return tks.length > 0 && tks.every((t) => nameTokenSet.has(t));
     });
@@ -9904,6 +10025,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       const validIds = new Set((await documents.list()).map((d) => d.id));
       return database.withDb(true, (db) => bulkUpdateDocTriage(db, input, validIds));
     },
+    "library.suggestTags": (input, options) => suggestDocTags(input, { store: database, library: documents, model }, options),
     "library.search": async (input) => {
       const query = single(input.query, "search query", 256);
       return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };

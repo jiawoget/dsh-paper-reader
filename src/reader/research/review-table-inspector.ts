@@ -1,7 +1,9 @@
 import { REVIEW_PRESET_IDS, SUGGESTED_REVIEW_COLUMNS, type ExtractionCell, type ReviewColumn, type ReviewColumnType, type ReviewDecision, type ReviewPresetId } from '../../shared/review-types.js';
-import type { DocumentInfo } from '../../shared/types.js';
+import { collectLibraryTags } from '../../shared/tags.js';
+import type { DocMeta, DocumentInfo, TopicRecord } from '../../shared/types.js';
 import { abstractOnlyLabel } from '../abstract-view.js';
 import { mountDocResourcesPanel } from '../doc-resources-panel.js';
+import { closeTagPopover, mountTagPicker } from '../tag-picker.js';
 import { el, readerLabel as t } from '../ui.js';
 import { researchIcon, type ResearchIconName } from './icons.js';
 import { researchText, researchViewName } from './labels.js';
@@ -13,6 +15,7 @@ interface InspectorCallbacks {
   onClose: () => void; onSaveOverride: (docId: string, colId: string, value: string, reasoning?: string) => Promise<void>;
   onRetry: (docId: string, colId: string) => Promise<void>; onJump: (docId: string, page: number, quote?: string) => void;
   onPaperAction?: (action: ReviewPaperAction, doc: DocumentInfo) => void; onAttachPaperHead?: (el: HTMLElement, doc: DocumentInfo) => void;
+  aiConfigured?: () => boolean; onTagsUpdated?: (docId: string, meta: DocMeta) => void;
 }
 const COL_ZH: Readonly<Record<string, string>> = {
   research_question: '研究问题', method: '方法', key_findings: '核心发现', datasets: '数据集', key_metrics: '核心指标', main_result: '主要结果', limitations: '局限性',
@@ -117,8 +120,9 @@ export class ReviewTableInspector {
 
   isOpen(): boolean { return (this.target !== null || this.paperDoc !== null) && !this.root.hidden; }
   setBusy(busy: boolean): void { this.busy = busy; this.saveBtn.disabled = this.retryBtn.disabled = busy; }
-  close(): void { if (!this.target && !this.paperDoc && this.root.hidden) return; this.target = null; this.paperDoc = null; this.backdrop.hidden = this.root.hidden = true; this.cb.onClose(); }
+  close(): void { closeTagPopover(); if (!this.target && !this.paperDoc && this.root.hidden) return; this.target = null; this.paperDoc = null; this.backdrop.hidden = this.root.hidden = true; this.cb.onClose(); }
   show(target: InspectorTarget): void {
+    closeTagPopover();
     this.target = target; this.paperDoc = null; this.backdrop.hidden = this.root.hidden = false;
     this.cellBody.hidden = this.cellFoot.hidden = false; this.paperBody.hidden = this.paperFoot.hidden = true;
     this.root.setAttribute('aria-label', t('Evidence Inspector', 'Evidence 证据核验'));
@@ -136,16 +140,19 @@ export class ReviewTableInspector {
     this.jumpBtn.textContent = doc.kind === 'abstract' ? t('Open Abstract ↗', '打开摘要 ↗') : t(`Jump to p. ${cell?.page ?? 1} ↗`, `跳原文第 ${cell?.page ?? 1} 页 ↗`);
     this.retryBtn.hidden = isScreening; this.setBusy(this.busy); this.cb.onAttachPaperHead?.(this.headEl, doc);
   }
-  showPaper(doc: DocumentInfo, docs?: readonly DocumentInfo[]): void {
-    this.target = null; this.paperDoc = doc; this.backdrop.hidden = this.root.hidden = false;
+  showPaper(doc: DocumentInfo, docs?: readonly DocumentInfo[], topics?: readonly TopicRecord[]): void {
+    closeTagPopover(); this.target = null; this.paperDoc = doc; this.backdrop.hidden = this.root.hidden = false;
     this.cellBody.hidden = this.cellFoot.hidden = true; this.paperBody.hidden = this.paperFoot.hidden = false;
     this.root.setAttribute('aria-label', researchText.paperSummary());
     this.titleEl.textContent = doc.paperTitle || doc.title;
     const meta = [doc.authors, doc.venue, doc.year].filter(Boolean).join(' · ');
     this.subEl.replaceChildren(...(meta ? [el('span', 'rt-insp-meta', meta)] : []), el('span', `rt-src-badge ${doc.kind === 'abstract' ? 'is-abstract' : 'is-pdf'}`, coverageLabel(doc.kind)));
-    const tags = doc.meta?.tags?.filter(Boolean) ?? [];
-    this.paperTagsSec.hidden = !tags.length;
-    this.paperTagsEl.replaceChildren(...tags.map(tag => el('span', 'rt-insp-tag', tag)));
+    this.paperTagsSec.hidden = false;
+    mountTagPicker(this.paperTagsEl, {
+      doc, compact: true, getTaxonomy: () => collectLibraryTags(docs ?? [doc], topics),
+      aiConfigured: this.cb.aiConfigured?.(),
+      onMetaUpdated: next => this.cb.onTagsUpdated?.(doc.id, next)
+    });
     mountDocResourcesPanel(this.paperResSec, { docId: doc.id, docs, onOpenDoc: id => this.cb.onJump(id, 1) });
     this.paperAbsEl.textContent = doc.abstract?.trim() || researchText.noAbstract();
     this.cb.onAttachPaperHead?.(this.headEl, doc);

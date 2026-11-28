@@ -449,7 +449,7 @@ async function linkedResources({ context, host, pane }: ReaderSession): Promise<
   }).then(r => (r.doc as { id: string }).id)));
   await Promise.all([
     post('topics.save', { name: 'Scale Topic', tag: 'scale-topic' }), post('library.bulkTriage', { docIds: scaleIds.slice(0, 6), addTags: ['scale-topic'] }),
-    post('library.bulkTriage', { docIds: scaleIds.slice(10, 13), starred: true }), post('library.bulkTriage', { docIds: scaleIds.slice(20, 22), addTags: ['screen:yes'] })
+    post('library.bulkTriage', { docIds: scaleIds.slice(10, 13), starred: true }), ...scaleIds.slice(20, 22).map(docId => post('library.triage', { docId, tags: ['screen:yes'] }))
   ]);
   await pane.locator('.rw-collapse-btn').click(); await pane.locator('#library').click();
   const dlg = pane.getByRole('dialog'), libChecks = dlg.locator('.library-device-item .library-check');

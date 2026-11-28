@@ -1,5 +1,5 @@
 import type { DocResourceKind } from '../../shared/doc-resources.js';
-import { readerLabel as t } from '../ui.js';
+import { readerLabel as t, removeLabel } from '../ui.js';
 
 export const RESEARCH_VIEWS = [
   { id: 'deep-search', en: 'Deep Search', zh: '深度检索', dense: false },
@@ -215,6 +215,22 @@ export const researchText = {
   libraryDeleteN: (n: number) => t(`Delete (${n})`, `删除 (${n})`),
   libraryConfirmDeleteN: (n: number) => t(`Confirm delete (${n})`, `确认删除 (${n})`),
   libraryBulkTagged: (n: number, tag: string) => t(`Tagged ${n} paper${n === 1 ? '' : 's'} with "${tag}".`, `已为 ${n} 篇文献添加标签“${tag}”。`),
+  libraryBulkUntagged: (n: number, tag: string) => t(`Removed "${tag}" from ${n} paper${n === 1 ? '' : 's'}.`, `已从 ${n} 篇文献移除标签“${tag}”。`),
+  libraryAddMode: () => t('Add', '添加'),
+  libraryRemoveMode: removeLabel,
+  libraryBulkNoTags: () => t('No tags on selected papers.', '所选文献暂无标签。'),
+  tagAddBtn: () => t('+ Tag', '+ 标签'),
+  tagManageLabel: () => t('Manage tags', '管理标签'),
+  tagRemoveLabel: (tag: string) => t(`Remove tag ${tag}`, `移除标签 ${tag}`),
+  tagSearchPlaceholder: () => t('Add or create tag…', '输入或新建标签…'),
+  tagCreate: (tag: string) => t(`Create "${tag}"`, `新建“${tag}”`),
+  tagAiSuggest: () => t('AI Suggest', 'AI 推荐'),
+  tagAiSuggesting: () => t('Suggesting…', '推荐中…'),
+  tagSuggestedHeading: () => t('Suggested', '推荐标签'),
+  tagLibraryHeading: () => t('Library tags', '已有标签'),
+  tagNoMatches: () => t('No matching tags.', '无匹配标签。'),
+  tagMoreHidden: (n: number) => t(`+${n} more — type to filter`, `还有 ${n} 个 — 输入关键词筛选`),
+  tagLimitReached: () => t('Maximum 20 tags per paper.', '每篇文献最多添加 20 个标签。'),
   libraryBulkDeleted: (deleted: number, skipped: number) => deleted > 0 && skipped > 0
     ? t(`Deleted ${deleted} paper${deleted === 1 ? '' : 's'} (${skipped} protected/skipped).`, `已删除 ${deleted} 篇文献（跳过 ${skipped} 篇受保护或已移除文献）。`)
     : deleted > 0 ? t(`Deleted ${deleted} paper${deleted === 1 ? '' : 's'}.`, `已删除 ${deleted} 篇文献。`)

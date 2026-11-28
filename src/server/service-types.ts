@@ -186,6 +186,7 @@ export interface ServiceResults {
   'library.progress.save': Operations['library.progress.save'][1];
   'library.triage': Operations['library.triage'][1];
   'library.bulkTriage': Operations['library.bulkTriage'][1];
+  'library.suggestTags': Operations['library.suggestTags'][1];
   'library.search': Operations['library.search'][1];
   'pages.index': Operations['pages.index'][1];
   'pages.search': Operations['pages.search'][1];

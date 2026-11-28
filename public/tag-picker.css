@@ -1,0 +1,59 @@
+.ref-tags-host .tp-root { margin: 12px 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.tp-root, .tp-sec { display: grid; gap: 8px; min-width: 0; }
+.tp-head { margin: 0; font-size: 12px; font-weight: 650; color: var(--muted); }
+.tp-inline, .tp-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.tp-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; min-height: 24px; padding: 0 4px 0 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-sunken); color: var(--desk-ink); font-size: 12px; line-height: 1.4;
+}
+.tp-chip:is(:hover, :focus-within) { border-color: var(--purple); background: var(--lavender); }
+.tp-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tp-chip-del {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 24px; min-height: 24px; padding: 0; border: 0;
+  border-radius: var(--radius-pill); background: transparent; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0;
+}
+.tp-chip:is(:hover, :focus-within) .tp-chip-del, .tp-chip-del:focus-visible { opacity: 1; }
+.tp-chip-del:is(:hover, :focus-visible) { color: var(--danger); background: var(--danger-bg); }
+.tp-trigger {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 28px; min-width: 28px; padding: 4px 8px; border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-pill); background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; white-space: nowrap;
+}
+.tp-trigger:is(:hover, :focus-visible), .tp-trigger[aria-expanded="true"] { border-style: solid; border-color: var(--purple); background: var(--lavender); color: var(--purple); }
+.tp-popover {
+  position: fixed; z-index: 40; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 12px; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); color: var(--desk-ink); font-family: var(--font-sans); font-size: 13px;
+  box-shadow: var(--shadow-popover); scrollbar-width: thin;
+}
+.tp-pop-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tp-input {
+  flex: 1 1 120px; min-width: 0; min-height: 36px; padding: 4px 12px; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--desk-ink); font: inherit; font-size: 13px;
+}
+.tp-ai-btn { display: inline-flex; align-items: center; gap: 4px; flex: none; min-height: 36px; padding: 4px 12px; border-radius: var(--radius-sm); font-size: 12px; white-space: nowrap; }
+.tp-create-slot[hidden], .tp-sec[hidden] { display: none; }
+.tp-create-btn {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px; padding: 4px 12px; border: 1px solid var(--purple);
+  border-radius: var(--radius-sm); background: var(--lavender); color: var(--purple); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tp-sec-lbl { font-size: 11px; font-weight: 650; color: var(--muted); }
+.tp-opt, .tp-sug-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 28px; min-width: 28px; padding: 4px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-sunken); color: var(--desk-ink); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tp-opt:is(:hover, :focus-visible), .tp-sug-chip:is(:hover, :focus-visible), .tp-opt[aria-pressed="true"] {
+  border-color: var(--purple); background: var(--lavender); color: var(--purple);
+}
+.tp-opt[aria-pressed="true"] { font-weight: 600; }
+.tp-opt-cnt { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tp-opt[aria-pressed="true"] .tp-opt-cnt { color: inherit; opacity: 0.8; }
+.tp-hint { margin: 0; font-size: 12px; color: var(--muted); }
+@media (pointer: coarse), (max-width: 700px) {
+  .tp-trigger, .tp-chip-del, .tp-opt, .tp-sug-chip, .tp-ai-btn, .tp-create-btn, .tp-input { min-height: 44px; min-width: 44px; }
+  .tp-chip-del { opacity: 1; }
+  .tp-popover { max-width: calc(100vw - 24px); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-theme-switching]) :is(.tp-chip, .tp-chip-del, .tp-trigger, .tp-opt, .tp-sug-chip, .tp-create-btn) {
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease;
+  }
+}
