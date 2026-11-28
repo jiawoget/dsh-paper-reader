@@ -1,6 +1,6 @@
 import type { DocumentInfo } from '../shared/types.js';
 import type { PdfMetadata } from './pdf/metadata.js';
-import { openPdf } from './pdf-view.js';
+import { loadPdfView } from './pdf-loader.js';
 import { api, el, icon, message, readerLabel as label, responseJson } from './ui.js';
 
 let importing = false;
@@ -8,7 +8,8 @@ let importing = false;
 async function importSinglePdf(file: File): Promise<DocumentInfo> {
   if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) throw new Error(label('Choose a PDF file.', '请选择 PDF 文件。'));
   if (file.size > 80 * 1024 * 1024) throw new Error(label('Choose a PDF of up to 80 MB.', '请选择不超过 80 MB 的 PDF 文件。'));
-  const check = await openPdf(new Uint8Array(await file.arrayBuffer()));
+  const [{ openPdf }, bytes] = await Promise.all([loadPdfView(), file.arrayBuffer()]);
+  const check = await openPdf(new Uint8Array(bytes));
   let meta: PdfMetadata = {};
   try { meta = await check.metadata(); } finally { await check.destroy(); }
   const params = new URLSearchParams({ title: file.name });

@@ -1,6 +1,5 @@
 // src/server/index.ts
 import { existsSync as existsSync5, readdirSync } from "node:fs";
-import { readFile as readFile3 } from "node:fs/promises";
 import path12 from "node:path";
 import os from "node:os";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -7858,13 +7857,13 @@ async function localFile(url) {
   });
   if (!file) return null;
   try {
-    const stat = await file.stat();
-    if (!stat.isFile()) return null;
-    if (stat.size > PDF_LIMIT) oversized();
-    const header = Buffer.alloc(Math.min(1024, stat.size));
+    const stat2 = await file.stat();
+    if (!stat2.isFile()) return null;
+    if (stat2.size > PDF_LIMIT) oversized();
+    const header = Buffer.alloc(Math.min(1024, stat2.size));
     await file.read(header, 0, header.length, 0);
     if (!header.includes("%PDF-")) return null;
-    const bytes = Buffer.alloc(stat.size);
+    const bytes = Buffer.alloc(stat2.size);
     let position = 0;
     while (position < bytes.length) {
       const { bytesRead } = await file.read(bytes, position, bytes.length - position, position);
@@ -8604,6 +8603,60 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
   return run;
 }
 
+// src/server/static-cache.ts
+import { createHash as createHash9 } from "node:crypto";
+import { readFile as readFile3, stat } from "node:fs/promises";
+var IMMUTABLE_PREFIXES = ["app/chunks/"];
+var LONG_CACHE_PREFIXES = ["vendor/", "app/assets/", "app/katex/"];
+function shortDigest(bytes) {
+  return createHash9("sha256").update(bytes).digest("hex").slice(0, 12);
+}
+function etagMatches(header, etag) {
+  if (!header) return false;
+  const trimmed = header.trim();
+  if (trimmed === "*") return true;
+  const normalized = etag.replace(/^W\//, "");
+  return trimmed.split(",").some((part) => part.trim().replace(/^W\//, "") === normalized);
+}
+function cacheControlFor(url, requestUrl, hash3) {
+  const version = URL.parse(requestUrl)?.searchParams.get("v");
+  if (version && version === hash3) return "private, max-age=31536000, immutable";
+  if (IMMUTABLE_PREFIXES.some((prefix2) => url.startsWith(prefix2))) return "private, max-age=31536000, immutable";
+  if (LONG_CACHE_PREFIXES.some((prefix2) => url.startsWith(prefix2))) return "private, max-age=86400";
+  return "private, no-cache";
+}
+function createStaticAssetHandler(url, file, contentType) {
+  let cached;
+  return async (req) => {
+    const info = await stat(file);
+    if (!cached || cached.mtimeMs !== info.mtimeMs || cached.size !== info.size) {
+      const bytes = new Uint8Array(await readFile3(file));
+      const hash3 = shortDigest(bytes);
+      cached = { mtimeMs: info.mtimeMs, size: info.size, bytes, hash: hash3, etag: `"${hash3}"` };
+    }
+    const headers = {
+      "content-type": contentType,
+      "cache-control": cacheControlFor(url, req.url, cached.hash),
+      etag: cached.etag,
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer"
+    };
+    if (etagMatches(req.headers.get("if-none-match"), cached.etag)) return new Response(null, { status: 304, headers });
+    return new Response(req.method === "HEAD" ? null : cached.bytes, { headers });
+  };
+}
+function pdfBytesResponse(req, bytes) {
+  const etag = `"${shortDigest(bytes)}"`;
+  const headers = {
+    "content-type": "application/pdf",
+    "cache-control": "private, no-cache",
+    etag,
+    "x-content-type-options": "nosniff"
+  };
+  if (etagMatches(req.headers.get("if-none-match"), etag)) return new Response(null, { status: 304, headers });
+  return new Response(req.method === "HEAD" ? null : new Uint8Array(bytes), { headers });
+}
+
 // src/server/index.ts
 var name = "paper-reader";
 var inject = ["connection"];
@@ -8719,9 +8772,7 @@ function apply(ctx) {
       }
     }
   });
-  const asset = (url, file) => route(url, ["GET", "HEAD"], async (req) => new Response(req.method === "HEAD" ? null : new Uint8Array(await readFile3(file)), {
-    headers: { "content-type": mimeTypes[path12.extname(file)] ?? "application/octet-stream", "cache-control": url.startsWith("vendor/") ? "private, max-age=86400" : "private, no-cache", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" }
-  }));
+  const asset = (url, file) => route(url, ["GET", "HEAD"], createStaticAssetHandler(url, file, mimeTypes[path12.extname(file)] ?? "application/octet-stream"));
   function assets(url, dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const file = path12.join(dir, entry.name);
@@ -8732,7 +8783,7 @@ function apply(ctx) {
   assets("app/", publicDir);
   for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path12.join(pdfDir, "build", file));
   for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path12.join(pdfDir, dir));
-  route("pdf", ["GET"], async (req) => new Response(new Uint8Array(await library.bytes(new URL(req.url).searchParams.get("id"))), { headers: { "content-type": "application/pdf", "cache-control": "private, no-cache" } }));
+  route("pdf", ["GET", "HEAD"], async (req) => pdfBytesResponse(req, await library.bytes(new URL(req.url).searchParams.get("id"))));
   route("article-image", ["GET"], async (req) => {
     const params = new URL(req.url).searchParams;
     const page = params.get("page");

@@ -1,7 +1,7 @@
 import type { AnnotationColor } from '../shared/annotations.js';
 import { ANNOTATION_COLORS, highlightColorLabel, highlightDotAriaLabel } from './annotation-colors.js';
 import type { DiscussionRef } from './discussion-drafts.js';
-import { insertNotebookPassage } from './notebook.js';
+import { insertNotebookPassage } from './notebook-loader.js';
 import { SelectionChat, type ChatState } from './selection-chat.js';
 import { chatSource, selectionKey, type SelectionContext } from './selection-context.js';
 import { SelectionNotes, type NoteState } from './selection-notes.js';
