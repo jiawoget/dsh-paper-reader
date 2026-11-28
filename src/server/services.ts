@@ -46,7 +46,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
   const database = store ?? new ReaderStore(root);
   const documents = library ?? new Library(root, readResource, id => database.deleteDocument(id));
   const resourceDeps = { root, library: documents, store: database, readResource };
-  const scheduleDiscover = (doc: DocumentInfo) => scheduleResourceDiscovery(resourceDeps, doc, autoDiscover);
+  const scheduleDiscover = (doc: DocumentInfo) => { if (autoDiscover) scheduleResourceDiscovery(resourceDeps, doc, true); };
   const notebooks = new PaperNotebooks(database, documents, openObsidian);
   const model = new ReaderModel(ctx, fetchImpl);
   const discussions = new PaperDiscussions(database, model);

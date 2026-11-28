@@ -35,7 +35,11 @@ export function sanitizeResourceUrl(raw: string): string | null {
 export function normalizeResourceUrl(raw: string): string {
   const parsed = URL.parse(raw);
   if (!parsed) return raw.trim().toLowerCase();
-  return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, '')}${parsed.search}`;
+  const host = parsed.hostname.toLowerCase();
+  let pathname = parsed.pathname.replace(/\/+$/, '');
+  if (CODE_HOST_RE.test(host)) pathname = pathname.toLowerCase().replace(/\.git$/i, '');
+  else if (/(?:^|\.)huggingface\.co$/.test(host)) pathname = pathname.toLowerCase();
+  return `${parsed.protocol}//${parsed.host.toLowerCase()}${pathname}${parsed.search}`;
 }
 
 export function classifyResourceKind(url: string, hint?: string): DocResourceKind {

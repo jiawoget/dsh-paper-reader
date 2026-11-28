@@ -45,16 +45,17 @@ function repoMatchesPaper(item: Record<string, unknown>, arxivId: string | undef
   return tokens.length === 1 ? hits.length === 1 && tokens[0].length >= 5 : hits.length >= 2 && hits.length / Math.min(tokens.length, 5) >= 0.5;
 }
 
-function pushCandidate(out: Candidate[], seen: Set<string>, rawUrl: unknown, source: string, hintKind?: DocResourceKind, rawTitle?: unknown): void {
-  if (typeof rawUrl !== 'string') return;
+function pushCandidate(out: Candidate[], seen: Set<string>, rawUrl: unknown, source: string, hintKind?: DocResourceKind, rawTitle?: unknown): boolean {
+  if (typeof rawUrl !== 'string') return false;
   const clean = sanitizeResourceUrl(rawUrl);
-  if (!clean) return;
+  if (!clean) return false;
   const norm = normalizeResourceUrl(clean);
-  if (seen.has(norm)) return;
+  if (seen.has(norm)) return false;
   const kind = hintKind ?? classifyResourceKind(clean);
   const title = typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim().slice(0, 120) : defaultResourceTitle(clean, kind);
   seen.add(norm);
   out.push({ url: clean, kind, title, source });
+  return true;
 }
 
 async function fetchJson(readResource: ResourceReader, url: string, signal?: AbortSignal): Promise<unknown> {
@@ -70,8 +71,8 @@ export async function discoverDocResources(
   const parts: string[] = [];
   if (full.abstract) parts.push(full.abstract);
   if (full.paragraphs?.length) parts.push(full.paragraphs.slice(0, 80).join('\n'));
-  if ((full.kind === 'pdf' || !parts.length) && existsSync(deps.root)) {
-    try { for (const p of deps.store.withDb(false, db => getDocPages(db, full.id).slice(0, 2))) if (p.text) parts.push(p.text); } catch {}
+  if ((full.kind === 'pdf' || Boolean(full.book) || !parts.length) && existsSync(deps.root)) {
+    try { for (const p of deps.store.withDb(false, db => getDocPages(db, full.id).slice(0, 3))) if (p.text) parts.push(p.text); } catch {}
   }
   const combined = parts.join('\n'), ownClean = full.url ? sanitizeResourceUrl(full.url) : null;
   const seen = new Set<string>(ownClean ? [normalizeResourceUrl(ownClean)] : []), candidates: Candidate[] = [], degraded: string[] = [];
@@ -98,8 +99,7 @@ export async function discoverDocResources(
         let added = 0;
         for (const raw of isObject(body) && Array.isArray(body.items) ? body.items : []) {
           if (!isObject(raw) || !repoMatchesPaper(raw, arxivId, tokens)) continue;
-          pushCandidate(candidates, seen, raw.html_url, 'github', 'code', raw.full_name);
-          if (++added >= 2) break;
+          if (pushCandidate(candidates, seen, raw.html_url, 'github', 'code', raw.full_name) && ++added >= 2) break;
         }
       } catch { degraded.push('github'); }
     }

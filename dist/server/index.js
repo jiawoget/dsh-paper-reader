@@ -1121,7 +1121,11 @@ function sanitizeResourceUrl(raw) {
 function normalizeResourceUrl(raw) {
   const parsed = URL.parse(raw);
   if (!parsed) return raw.trim().toLowerCase();
-  return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`;
+  const host = parsed.hostname.toLowerCase();
+  let pathname = parsed.pathname.replace(/\/+$/, "");
+  if (CODE_HOST_RE.test(host)) pathname = pathname.toLowerCase().replace(/\.git$/i, "");
+  else if (/(?:^|\.)huggingface\.co$/.test(host)) pathname = pathname.toLowerCase();
+  return `${parsed.protocol}//${parsed.host.toLowerCase()}${pathname}${parsed.search}`;
 }
 function classifyResourceKind(url, hint) {
   const parsed = URL.parse(url);
@@ -5975,15 +5979,16 @@ function repoMatchesPaper(item, arxivId, tokens) {
   return tokens.length === 1 ? hits.length === 1 && tokens[0].length >= 5 : hits.length >= 2 && hits.length / Math.min(tokens.length, 5) >= 0.5;
 }
 function pushCandidate(out, seen, rawUrl, source2, hintKind, rawTitle) {
-  if (typeof rawUrl !== "string") return;
+  if (typeof rawUrl !== "string") return false;
   const clean3 = sanitizeResourceUrl(rawUrl);
-  if (!clean3) return;
+  if (!clean3) return false;
   const norm = normalizeResourceUrl(clean3);
-  if (seen.has(norm)) return;
+  if (seen.has(norm)) return false;
   const kind = hintKind ?? classifyResourceKind(clean3);
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim().slice(0, 120) : defaultResourceTitle(clean3, kind);
   seen.add(norm);
   out.push({ url: clean3, kind, title, source: source2 });
+  return true;
 }
 async function fetchJson2(readResource, url, signal) {
   const res = await withTimeout(8e3, (sig) => readResource(url, "json", { signal: sig }), signal);
@@ -5995,9 +6000,9 @@ async function discoverDocResources(deps, doc, opts) {
   const parts = [];
   if (full.abstract) parts.push(full.abstract);
   if (full.paragraphs?.length) parts.push(full.paragraphs.slice(0, 80).join("\n"));
-  if ((full.kind === "pdf" || !parts.length) && existsSync5(deps.root)) {
+  if ((full.kind === "pdf" || Boolean(full.book) || !parts.length) && existsSync5(deps.root)) {
     try {
-      for (const p of deps.store.withDb(false, (db) => getDocPages(db, full.id).slice(0, 2))) if (p.text) parts.push(p.text);
+      for (const p of deps.store.withDb(false, (db) => getDocPages(db, full.id).slice(0, 3))) if (p.text) parts.push(p.text);
     } catch {
     }
   }
@@ -6027,8 +6032,7 @@ async function discoverDocResources(deps, doc, opts) {
         let added = 0;
         for (const raw of isObject(body) && Array.isArray(body.items) ? body.items : []) {
           if (!isObject(raw) || !repoMatchesPaper(raw, arxivId, tokens)) continue;
-          pushCandidate(candidates, seen, raw.html_url, "github", "code", raw.full_name);
-          if (++added >= 2) break;
+          if (pushCandidate(candidates, seen, raw.html_url, "github", "code", raw.full_name) && ++added >= 2) break;
         }
       } catch {
         degraded.push("github");
@@ -9611,7 +9615,9 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
   const database = store ?? new ReaderStore(root);
   const documents = library ?? new Library(root, readResource, (id) => database.deleteDocument(id));
   const resourceDeps = { root, library: documents, store: database, readResource };
-  const scheduleDiscover = (doc) => scheduleResourceDiscovery(resourceDeps, doc, autoDiscover);
+  const scheduleDiscover = (doc) => {
+    if (autoDiscover) scheduleResourceDiscovery(resourceDeps, doc, true);
+  };
   const notebooks = new PaperNotebooks(database, documents, openObsidian);
   const model = new ReaderModel(ctx, fetchImpl);
   const discussions = new PaperDiscussions(database, model);
