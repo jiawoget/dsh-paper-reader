@@ -1,9 +1,9 @@
 import type { DocumentInfo, PageView } from '../shared/types.js';
 import { buildSearchSources, extractTranslatedBlocks, searchDocument, type SearchBlock, type SearchResult } from './doc-search-index.js';
-import { readPaper } from './paper-evidence.js';
+import { readPaper, type PaperPage } from './paper-evidence.js';
 import { findQuotes } from './pdf/selection.js';
 import type { PdfDocument } from './pdf-view.js';
-import { byId, el, icon, readerLabel as label, type Glyph } from './ui.js';
+import { api, byId, el, icon, readerLabel as label, type Glyph } from './ui.js';
 
 interface DocSearchHost {
   doc: () => DocumentInfo; page: () => number; targetLanguage: () => string; view: () => PageView | undefined;
@@ -42,6 +42,7 @@ export class DocSearch {
   private readonly resultsEl = el('div', 'doc-search-results');
   private readonly listBtn: HTMLButtonElement; private readonly prevBtn: HTMLButtonElement; private readonly nextBtn: HTMLButtonElement;
   private readonly translations = new Map<string, Map<number, SearchBlock[]>>();
+  private readonly bookPages = new Map<string, Promise<PaperPage[]>>();
   private doc: DocumentInfo; private pdf?: PdfDocument; private result: SearchResult = EMPTY;
   private active = -1; private searching = false; private listOpen = false; private autoExpanded = false; private userToggledList = false; private pendingReveal = false;
   private searchEpoch = 0; private jumpEpoch = 0; private debounceTimer?: number; private repaintFrame = 0; private returnFocus?: HTMLElement; private fallbackLayer?: HTMLElement;
@@ -99,7 +100,10 @@ export class DocSearch {
   }
   reset(): void { this.close(false); this.listOpen = this.userToggledList = false; this.clearState(); }
   document(doc: DocumentInfo, pdf?: PdfDocument): void {
-    this.doc = doc; this.pdf = pdf; this.jumpEpoch++; this.clearState();
+    const sameBook = Boolean(doc.book && doc.id === this.doc.id);
+    this.doc = doc; this.pdf = pdf;
+    if (sameBook) return;
+    this.bookPages.delete(doc.id); this.jumpEpoch++; this.clearState();
     if (!this.root.hidden && this.input.value.trim()) void this.runSearch(true);
   }
   recordTranslations(docId: string, page: number, map: Record<string, string>): void {
@@ -129,7 +133,10 @@ export class DocSearch {
       const nodes = readText ? [...readText.querySelectorAll('.reading-passage > :is(p, h2)')].flatMap(textNodes)
         : [...native!.querySelectorAll('[role="presentation"]')].map(s => s.firstChild).filter((n): n is Text => n instanceof Text && Boolean(n.data));
       sourceHits = findQuotes(nodes, query); for (const hit of sourceHits) allRanges.push(...hit);
-    } else sourceByBlock = scanBlocks(orig.querySelectorAll<HTMLElement>('.web-reading-sheet .web-reading-row[data-anchor]:not([data-kind="image"])'), 'anchor', query, allRanges);
+    } else {
+      sourceByBlock = scanBlocks(orig.querySelectorAll<HTMLElement>('.web-reading-sheet .web-reading-row[data-anchor]:not([data-kind="image"])'), 'anchor', query, allRanges);
+      for (const hits of sourceByBlock.values()) sourceHits.push(...hits);
+    }
     if (this.host.isBilingual() || trans.offsetWidth > 0) {
       transByBlock = trans.querySelector('.pdf-sheet')
         ? scanBlocks(trans.querySelectorAll<HTMLElement>('.pdf-translated-text[data-block-id]:not([hidden])'), 'blockId', query, allRanges)
@@ -165,21 +172,30 @@ export class DocSearch {
     const onPage = this.active < 0 ? this.result.matches.findIndex(m => m.page === this.host.page()) : -1;
     await this.jumpTo(this.active < 0 ? (onPage >= 0 ? onPage : delta > 0 ? 0 : total - 1) : (this.active + delta + total) % total);
   }
+  private loadBookPages(docId: string): Promise<PaperPage[]> {
+    const cached = this.bookPages.get(docId);
+    if (cached) return cached;
+    const job = api('book.pages', { docId }).then(res => res.pages).catch(error => { this.bookPages.delete(docId); throw error; });
+    this.bookPages.set(docId, job);
+    return job;
+  }
   private async runSearch(autoSelect: boolean, preserveActive = false): Promise<void> {
     const query = this.input.value.trim(), epoch = ++this.searchEpoch;
     if (!query) return;
     const translated = this.host.view()?.blocks ? extractTranslatedBlocks(this.host.view()!.blocks) : [];
     if (translated.length) this.cacheFor(this.doc.id).set(this.host.page(), translated);
     const prev = preserveActive && this.active >= 0 ? this.result.matches[this.active] : undefined;
-    let pdfPages;
-    if (this.pdf) {
+    let pdfPages, bookPages;
+    if (this.pdf || this.doc.book) {
       this.searching = true; this.renderState();
-      try { pdfPages = await readPaper(this.doc, this.pdf); }
-      catch { if (epoch === this.searchEpoch) { this.searching = false; this.renderState(); } return; }
+      try {
+        if (this.pdf) pdfPages = await readPaper(this.doc, this.pdf);
+        else bookPages = await this.loadBookPages(this.doc.id);
+      } catch { if (epoch === this.searchEpoch) { this.searching = false; this.renderState(); } return; }
       if (epoch !== this.searchEpoch || this.root.hidden) return;
       this.searching = false;
     }
-    this.result = searchDocument(buildSearchSources(this.doc, pdfPages, this.cacheFor(this.doc.id)), query);
+    this.result = searchDocument(buildSearchSources(this.doc, pdfPages, this.cacheFor(this.doc.id), bookPages), query);
     if (!preserveActive) this.pendingReveal = false;
     if (!this.result.matches.length) { this.active = -1; this.autoExpanded = false; }
     else if (prev) this.active = this.result.matches.findIndex(m => m.page === prev.page && m.side === prev.side && m.blockId === prev.blockId && m.occurrence === prev.occurrence);
@@ -265,7 +281,8 @@ export class DocSearch {
     if (!total) { this.resultsEl.append(el('p', 'doc-search-empty', label('No matches', '无匹配结果'))); return; }
     const multiPage = Boolean(this.pdf || this.doc.book);
     for (const group of this.result.groups) {
-      this.resultsEl.append(el('div', 'doc-search-page', multiPage ? label('Page ' + group.page, '第 ' + group.page + ' 页') : label('Matches', '匹配结果')));
+      const sec = this.doc.book?.sections[group.page - 1];
+      this.resultsEl.append(el('div', 'doc-search-page', sec ? sec.title : multiPage ? label('Page ' + group.page, '第 ' + group.page + ' 页') : label('Matches', '匹配结果')));
       for (const { index, match } of group.matches) {
         const hit = el('button', 'doc-search-hit'); hit.type = 'button';
         if (index === this.active) hit.setAttribute('aria-current', 'true');

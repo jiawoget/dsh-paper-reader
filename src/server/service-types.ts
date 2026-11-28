@@ -216,6 +216,7 @@ export interface ServiceResults {
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];
+  'book.pages': Operations['book.pages'][1];
   'translation.get': Operations['translation.get'][1];
   'translation.page': Operations['translation.page'][1];
   'settings.save': { settings: PublicSettings };

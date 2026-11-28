@@ -17,7 +17,7 @@ import { ReaderModel, type StreamOptions } from './reader-model.js';
 import { PaperDiscussions } from './paper-discussion.js';
 import { PdfOutlines } from './pdf-outline.js';
 import { ReaderStore } from './reader-store.js';
-import { deleteTopic, hasDocPages, listTopics, replaceDocPages, saveTopic, searchDocPagesFts } from './research-store.js';
+import { deleteTopic, getDocPages, hasDocPages, listTopics, replaceDocPages, saveTopic, searchDocPagesFts } from './research-store.js';
 import { hostAttachments } from './region-image.js';
 import { inputObject, isObject, mergeSettings, readArxivFormat, readQuestionModel, readTargetLanguage, ServiceError, single, stringValue, type Input, type ServiceResults } from './service-types.js';
 import { openWebArticle } from './web-article.js';
@@ -51,9 +51,9 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
   };
   const indexDoc = async (doc: DocumentInfo, force = false): Promise<number> => {
     if (!force && database.withDb(false, db => hasDocPages(db, doc.id))) return 0;
-    const full = doc.kind === 'pdf' || doc.paragraphs || doc.abstract ? doc : await documents.get(doc.id);
+    const full = doc.kind === 'pdf' || doc.paragraphs || doc.abstract || doc.book ? doc : await documents.get(doc.id);
     const pdfBytes = full.kind === 'pdf' ? await documents.bytes(full.id) : undefined;
-    const pages = await extractDocumentPages(full, pdfBytes);
+    const pages = await extractDocumentPages(full, pdfBytes, full.book ? page => documents.cachedSection(full, page) : undefined);
     if (!pages.length || !documents.hasSync(full.id)) return 0;
     return database.withDb(true, db => replaceDocPages(db, full.id, pages));
   };
@@ -207,6 +207,16 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       return opened;
     },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
+    'book.pages': async input => {
+      const doc = await documents.get(input.docId);
+      if (!doc.book) return { pages: [] };
+      let pages = database.withDb(false, db => getDocPages(db, doc.id));
+      if (pages.length < doc.book.sections.length) {
+        await indexDoc(doc, true).catch(() => 0);
+        pages = database.withDb(false, db => getDocPages(db, doc.id));
+      }
+      return { pages };
+    },
     'translation.get': async input => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
     'translation.page': async (input, options) => {
       if (input.force !== undefined && typeof input.force !== 'boolean') throw new ServiceError(400, 'Invalid force option.');

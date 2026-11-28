@@ -30,20 +30,31 @@ export async function extractPdfPages(bytes: Buffer | Uint8Array): Promise<DocPa
   }
 }
 
-export async function extractDocumentPages(doc: DocumentInfo, pdfBytes?: Buffer): Promise<DocPageRecord[]> {
+export async function extractDocumentPages(
+  doc: DocumentInfo,
+  pdfBytes?: Buffer,
+  readSection?: (page: number) => Pick<DocumentInfo, 'paragraphs' | 'articleLayout'> | undefined
+): Promise<DocPageRecord[]> {
   if (doc.kind === 'pdf') return pdfBytes ? extractPdfPages(pdfBytes) : [];
   if (doc.kind === 'abstract') {
     const text = [doc.paperTitle || doc.title, doc.authors, doc.venue, doc.year, doc.doi, doc.abstract]
       .filter((v): v is string => typeof v === 'string' && Boolean(v.trim())).join('\n\n').trim();
     return text ? [{ page: 1, text }] : [];
   }
+  if (doc.book?.sections.length) {
+    const pages: DocPageRecord[] = [];
+    for (let i = 0; i < doc.book.sections.length; i++) {
+      const page = i + 1, sec = doc.book.sections[i];
+      const saved = readSection?.(page) ?? (doc.sectionPage === page ? doc : undefined);
+      const body = saved?.paragraphs?.map(p => p.trim()).filter(Boolean).join('\n\n') ?? '';
+      const text = body || [i === 0 ? doc.title : '', sec.chapterTitle, sec.title].filter(Boolean).join('\n');
+      if (text) pages.push({ page, text });
+    }
+    return pages;
+  }
   if (doc.paragraphs?.length) {
     const text = doc.paragraphs.map(p => p.trim()).filter(Boolean).join('\n\n');
     return text ? [{ page: doc.sectionPage ?? 1, text }] : [];
-  }
-  if (doc.book?.sections.length) {
-    const text = [doc.title, ...doc.book.sections.map(s => s.title)].filter(Boolean).join('\n');
-    return text ? [{ page: 1, text }] : [];
   }
   return [];
 }

@@ -65,7 +65,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
       const link = owner.createElement('a');
       link.className = 'web-reading-source'; link.href = originalUrl.href;
       link.rel = 'noopener noreferrer'; link.target = '_blank';
-      link.textContent = doc.book ? label('Access for free at OpenStax', '在 OpenStax 免费阅读原文') : label('Original webpage', '原网页');
+      link.textContent = doc.book && openStaxLocation(doc.url) ? label('Access for free at OpenStax', '在 OpenStax 免费阅读原文') : label('Original webpage', '原网页');
       sheet.append(link);
     }
     container.replaceChildren(sheet);
@@ -84,9 +84,11 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
       onLink(link, address) {
         const fragment = address.hash.slice(1); address.hash = '';
         let key = fragment; try { key = decodeURIComponent(fragment); } catch { /* Use the literal anchor. */ }
+        const baseHref = originalUrl ? originalUrl.origin + originalUrl.pathname + originalUrl.search : '';
         const bookLink = doc.book && format?.kind !== 'byline' ? openStaxLocation(address.href) : undefined;
-        const destination = bookLink?.book === doc.book?.slug && bookLink?.section ? bookPages.get(bookLink.section) : undefined;
-        const target = (address.href === originalUrl?.href || destination === page) && anchors.get(key);
+        const destination = bookLink?.book === doc.book?.slug && bookLink?.section ? bookPages.get(bookLink.section)
+          : address.href === baseHref && key && doc.book?.anchorPages && Object.hasOwn(doc.book.anchorPages, key) ? doc.book.anchorPages[key] : undefined;
+        const target = (address.href === baseHref || destination === page) && anchors.get(key);
         if (target) {
           link.href = sourceUrl(doc.id, page, target);
           link.addEventListener('click', event => {

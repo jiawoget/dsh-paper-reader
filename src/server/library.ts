@@ -3,6 +3,7 @@ import { mkdir, link, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { shouldShardArticle } from '../shared/doc-sharding.js';
 import { DEFAULT_TARGET_LANGUAGE, findTargetLanguagePreset, parseTargetLanguage, targetsSimplifiedChinese } from '../shared/languages.js';
 import { bookSlug, openStaxLocation, openStaxUrl, type OpenStaxLocation } from '../shared/openstax.js';
 import type { DocMetadata, DocPageRecord, DocumentInfo, OpenDocument, ReaderBlock } from '../shared/types.js';
@@ -10,6 +11,7 @@ import { articleUrl, type WebArticle } from '../shared/web-article.js';
 import { hasDecoderRepetition, translationQualityError } from '../shared/translation-quality.js';
 import { attachPdfToRecord, createAbstractRecord, writeAtomic } from './abstract-library.js';
 import { readArticleLayout } from './article-layout.js';
+import { importShardedWebArticle } from './book-import.js';
 import { applyMetaPatch, missingDocMeta, sanitizeDocMeta } from './library-meta.js';
 import { parseOpenStaxPage, publishedEntry, type ReadBookResource } from './openstax.js';
 import { publicResource } from './public-resource.js';
@@ -57,7 +59,7 @@ export class Library {
   private readonly jobs = new Map<string, Promise<Record<string,string>>>();
   private readonly bookJobs = new Map<string, Promise<DocumentInfo>>();
   private readonly metaJobs = new Map<string, Promise<unknown>>();
-  constructor(root: string, private readonly readBook: ReadBookResource = publicResource, private readonly onDelete?: (id: string) => void) {
+  constructor(readonly root: string, private readonly readBook: ReadBookResource = publicResource, private readonly onDelete?: (id: string) => void) {
     this.directory = path.join(root, 'documents');
     this.translationDir = path.join(root, 'translations');
     this.imageDir = path.join(root, 'article-images');
@@ -216,28 +218,27 @@ export class Library {
     }
     return this.bookJob(file, async () => {
       try { return await read(); } catch (error) { if (!isFsError(error, 'ENOENT')) throw error; }
+      if (!openStaxLocation(doc.url)) fail('This saved book section is missing.', 404);
       const source = await this.readBook(openStaxUrl(book.slug, section.slug), 'document');
       const { article } = parseOpenStaxPage(source.bytes.toString('utf8'), book.slug, section.slug, false);
       await this.saveSection(file, article);
       return read();
     });
   }
-  async importWeb(input: unknown): Promise<DocumentInfo> {
-    return (await this.importWebDocument(input)).doc;
-  }
+  async importWeb(input: unknown): Promise<DocumentInfo> { return (await this.importWebDocument(input)).doc; }
   async importWebDocument(input: unknown): Promise<OpenDocument> {
     if (!isRecord(input) || typeof input.url !== 'string' || !URL.canParse(input.url)) fail('A valid article URL is required.');
     const book = openStaxLocation(input.url);
     if (book) return this.openBook(book);
     const url = new URL(input.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) fail('Only HTTP and HTTPS articles are supported.');
-    url.hash = '';
     const raw = input.paragraphs;
-    if (!Array.isArray(raw) || raw.length > 4000 || !raw.every((p: unknown): p is string => typeof p === 'string')) fail('Invalid article paragraphs.');
-    const structured = input.articleLayout !== undefined;
-    const paragraphs = structured ? raw : raw.map(p => p.trim()).filter(Boolean);
+    if (!Array.isArray(raw) || raw.length > 25_000 || !raw.every((p: unknown): p is string => typeof p === 'string')) fail('Invalid article paragraphs.');
+    const structured = input.articleLayout !== undefined, paragraphs = structured ? raw : raw.map(p => p.trim()).filter(Boolean);
     if (structured && paragraphs.some(p => !p.trim())) fail('Invalid article paragraphs.');
-    if (!paragraphs.length || paragraphs.join('').length > 1_000_000) fail('The article is empty or too long.');
+    if (!paragraphs.length) fail('The article is empty or too long.');
+    if (shouldShardArticle({ paragraphs })) return importShardedWebArticle(this, input, url, paragraphs);
+    url.hash = '';
     const id = 'web-' + hash(JSON.stringify([url.href, paragraphs]));
     if (structured) {
       const layout = readArticleLayout(input.articleLayout, paragraphs);

@@ -2,7 +2,7 @@ import { parseAcademicInput, type AcademicTarget } from '../shared/academic-inta
 import type { ArxivFormat, DocMetadata, OpenDocument } from '../shared/types.js';
 import { articleUrl, type WebArticle } from '../shared/web-article.js';
 import { fail, isRecord, type Library } from './library.js';
-import { publicResource } from './public-resource.js';
+import { HTML_LIMIT, publicResource } from './public-resource.js';
 
 export type ResourceReader = typeof publicResource;
 export interface AcademicIntakeOptions { arxivFormat?: ArxivFormat; defaultArxivFormat?: ArxivFormat; meta?: DocMetadata }
@@ -15,7 +15,7 @@ export function pdfFilename(url: URL): string {
   return name.toLowerCase().endsWith('.pdf') ? name : name + '.pdf';
 }
 export function decodeHtml(bytes: Buffer, type: string, charset?: string): string {
-  if (type === 'application/pdf' || bytes.length > 5 * 1024 * 1024) fail('This link did not return a readable HTML article or PDF.', 415);
+  if (type === 'application/pdf' || bytes.length > HTML_LIMIT) fail('This link did not return a readable HTML article or PDF.', 415);
   const sniff = bytes.subarray(0, 4096).toString('latin1');
   if (!type.includes('html') && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail('This link did not return a readable HTML article or PDF.', 415);
   const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || 'utf-8';
