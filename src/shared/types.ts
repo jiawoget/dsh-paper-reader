@@ -20,6 +20,7 @@ import type {
   CitationAnalyzeInput, CitationReclassifyInput, CitationReclassifyResult,
   CitationReport, CitationSummary, CitationSummaryInput
 } from './citation-stance-types.js';
+import type { DocResource, DocResourceKind, DocResourcesDiscoverResult, DocResourcesListResult } from './doc-resources.js';
 
 export type ReadingSide = 'source' | 'translation';
 
@@ -238,6 +239,11 @@ export interface Operations {
   'citations.analyze': [CitationAnalyzeInput, CitationReport];
   'citations.summary': [CitationSummaryInput, CitationSummary];
   'citations.reclassify': [CitationReclassifyInput, CitationReclassifyResult];
+  'doc.resources.list': [{ docId?: string; includeDismissed?: boolean }, DocResourcesListResult];
+  'doc.resources.add': [{ docId: string; url?: string; targetDocId?: string; kind?: DocResourceKind; title?: string }, { resource: DocResource }];
+  'doc.resources.remove': [{ id: string }, { removed: boolean }];
+  'doc.resources.update': [{ id: string; status: 'linked' | 'dismissed' }, { resource: DocResource }];
+  'doc.resources.discover': [{ docId: string }, DocResourcesDiscoverResult];
   'web.import': [WebArticle & { anchor?: string }, OpenDocument];
   'web.open': [{ url: string; arxivFormat?: ArxivFormat }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];

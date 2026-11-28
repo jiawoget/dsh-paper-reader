@@ -1,5 +1,5 @@
 // src/server/index.ts
-import { existsSync as existsSync5, readdirSync } from "node:fs";
+import { existsSync as existsSync6, readdirSync } from "node:fs";
 import path16 from "node:path";
 import os from "node:os";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
@@ -263,8 +263,8 @@ function buildCiteKey(meta) {
   }
   const yearPart = extractYear(meta.year) ?? "";
   const foldedTitle = foldAscii(stripPdfExtension(meta.title) ?? "");
-  const titleTokens = foldedTitle.match(/[a-z0-9]+/g) ?? [];
-  const titleWord = titleTokens.find((token) => !TITLE_STOPWORDS.has(token)) ?? titleTokens[0] ?? "";
+  const titleTokens2 = foldedTitle.match(/[a-z0-9]+/g) ?? [];
+  const titleWord = titleTokens2.find((token) => !TITLE_STOPWORDS.has(token)) ?? titleTokens2[0] ?? "";
   const titlePart = titleWord.slice(0, 24);
   if (authorPart || titlePart) {
     return `${authorPart}${yearPart}${titlePart}`;
@@ -906,7 +906,7 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
 }
 
 // src/server/research-store.ts
-import { randomUUID } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 
 // src/server/service-types.ts
 import path from "node:path";
@@ -1094,10 +1094,185 @@ function readQuestionModel(value) {
   } };
 }
 
+// src/server/doc-resources-store.ts
+import { randomUUID } from "node:crypto";
+
+// src/shared/doc-resources.ts
+var DOC_RESOURCE_KINDS = ["code", "talk", "slides", "project", "dataset", "other"];
+var CODE_HOST_RE = /(?:^|\.)(?:github\.com|gitlab\.com|codeberg\.org)$/;
+var TALK_HOST_RE = /(?:^|\.)(?:youtube\.com|youtu\.be|bilibili\.com|slideslive\.com|vimeo\.com)$/;
+var SLIDES_HOST_RE = /(?:^|\.)(?:speakerdeck\.com|slideshare\.net)$/;
+var SLIDES_EXT_RE = /\.(?:pptx|ppt|key|odp)$/i;
+var DATASET_HOST_RE = /(?:^|\.)(?:huggingface\.co|kaggle\.com|zenodo\.org|figshare\.com)$/;
+var SKIP_HOST_RE = /(?:^|\.)(?:arxiv\.org|doi\.org|orcid\.org|creativecommons\.org|w3\.org|schema\.org)$/;
+var CODE_NON_REPO = /* @__PURE__ */ new Set(["about", "explore", "features", "issues", "login", "marketplace", "notifications", "pricing", "pulls", "search", "settings", "signup", "sponsors", "topics"]);
+function sanitizeResourceUrl(raw) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed || trimmed.length > 4096 || /[\u0000-\u001f\u007f]/.test(trimmed)) return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:" || parsed.username || parsed.password || !parsed.hostname) return null;
+  return parsed.href;
+}
+function normalizeResourceUrl(raw) {
+  const parsed = URL.parse(raw);
+  if (!parsed) return raw.trim().toLowerCase();
+  return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`;
+}
+function classifyResourceKind(url, hint) {
+  const parsed = URL.parse(url);
+  const host = parsed?.hostname.toLowerCase() ?? "";
+  const pathname = parsed?.pathname.toLowerCase() ?? url.toLowerCase();
+  const hintLow = (hint ?? "").toLowerCase();
+  if (CODE_HOST_RE.test(host)) return "code";
+  if (TALK_HOST_RE.test(host)) return "talk";
+  if (SLIDES_EXT_RE.test(pathname) || SLIDES_HOST_RE.test(host)) return "slides";
+  if (DATASET_HOST_RE.test(host) && !(/huggingface\.co$/.test(host) && pathname.startsWith("/papers/"))) return "dataset";
+  if (host.endsWith(".github.io") || /(?:^|\.)(?:projects?|blog)\./.test(host) || /(?:^|\/)(?:projects?|blog)(?:\/|$)/.test(pathname)) return "project";
+  if (hintLow) {
+    if (/\b(?:slides?|deck|presentation)\b/.test(hintLow)) return "slides";
+    if (/\b(?:talk|video|lecture|keynote)\b/.test(hintLow)) return "talk";
+    if (/\b(?:dataset|weights?|checkpoint|benchmark|model)\b/.test(hintLow)) return "dataset";
+    if (/\b(?:code|repo|repository|source)\b/.test(hintLow)) return "code";
+    if (/\b(?:project|homepage|demo|blog)\b/.test(hintLow)) return "project";
+  }
+  return "other";
+}
+function defaultResourceTitle(url, kind) {
+  const parsed = URL.parse(url);
+  if (!parsed) return url.slice(0, 120);
+  const host = parsed.hostname.replace(/^www\./i, ""), segs = parsed.pathname.split("/").filter(Boolean);
+  if (kind === "code" && segs.length >= 2) return `${segs[0]}/${segs[1]}`.slice(0, 120);
+  if (kind === "dataset" && /(?:^|\.)huggingface\.co$/i.test(host) && segs.length >= 2) return segs.slice(0, 3).join("/").slice(0, 120);
+  if (kind === "slides" && segs.length && SLIDES_EXT_RE.test(segs[segs.length - 1])) {
+    try {
+      return decodeURIComponent(segs[segs.length - 1]).slice(0, 120);
+    } catch {
+      return segs[segs.length - 1].slice(0, 120);
+    }
+  }
+  return (host + (segs.length ? "/" + segs.slice(0, 2).join("/") : "")).slice(0, 120);
+}
+function extractInPaperResources(text2, ownUrl) {
+  if (!text2) return [];
+  const cleanOwn = ownUrl ? sanitizeResourceUrl(ownUrl) : null;
+  const seen = new Set(cleanOwn ? [normalizeResourceUrl(cleanOwn)] : []);
+  const out = [];
+  for (const match of text2.matchAll(/https?:\/\/[^\s<>"'`]+/gi)) {
+    const clean3 = sanitizeResourceUrl(match[0].replace(/[.,;:!?'"\])}>]+$/g, ""));
+    if (!clean3) continue;
+    const norm = normalizeResourceUrl(clean3);
+    if (seen.has(norm)) continue;
+    const parsed = new URL(clean3), host = parsed.hostname.toLowerCase();
+    if (SKIP_HOST_RE.test(host)) continue;
+    const kind = classifyResourceKind(clean3);
+    if (kind === "other") continue;
+    const segs = parsed.pathname.split("/").filter(Boolean);
+    if (kind === "code" && (segs.length < 2 || CODE_NON_REPO.has(segs[0].toLowerCase()))) continue;
+    if (kind === "dataset" && /(?:^|\.)huggingface\.co$/.test(host) && segs.length < 2) continue;
+    if ((kind === "dataset" || kind === "slides" || kind === "talk") && !segs.length) continue;
+    if (kind === "talk" && /(?:^|\.)youtube\.com$/.test(host) && segs[0] === "watch" && !parsed.searchParams.get("v")) continue;
+    if (kind === "project" && !host.endsWith(".github.io") && !/(?:^|\.)(?:projects?|blog)\./.test(host) && !segs.length) continue;
+    seen.add(norm);
+    out.push({ url: clean3, kind, title: defaultResourceTitle(clean3, kind) });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+// src/server/doc-resources-store.ts
+var VALID_KINDS = new Set(DOC_RESOURCE_KINDS);
+var VALID_STATUSES = /* @__PURE__ */ new Set(["suggested", "linked", "dismissed"]);
+var toKind = (v) => typeof v === "string" && VALID_KINDS.has(v) ? v : "other";
+var toStatus = (v) => typeof v === "string" && VALID_STATUSES.has(v) ? v : "suggested";
+function decodeResource(row) {
+  return {
+    id: String(row.id ?? ""),
+    docId: String(row.doc_id ?? ""),
+    kind: toKind(row.kind),
+    title: String(row.title ?? ""),
+    ...typeof row.url === "string" && row.url ? { url: row.url } : {},
+    ...typeof row.target_doc_id === "string" && row.target_doc_id ? { targetDocId: row.target_doc_id } : {},
+    status: toStatus(row.status),
+    source: String(row.source ?? "manual"),
+    createdAt: Number(row.created_at ?? 0),
+    updatedAt: Number(row.updated_at ?? 0)
+  };
+}
+function ensureDocResourcesSchema(db) {
+  db.exec("CREATE TABLE IF NOT EXISTS doc_resources(id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, url TEXT, target_doc_id TEXT, status TEXT NOT NULL, source TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_doc_resources_doc ON doc_resources(doc_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_doc_resources_target ON doc_resources(target_doc_id)");
+}
+function deleteDocResourcesForDoc(db, docId) {
+  db.prepare("DELETE FROM doc_resources WHERE doc_id=?").run(docId);
+  db.prepare("DELETE FROM doc_resources WHERE target_doc_id=? AND (url IS NULL OR url='')").run(docId);
+  db.prepare("UPDATE doc_resources SET target_doc_id=NULL WHERE target_doc_id=?").run(docId);
+}
+function listDocResources(db, docId, includeDismissed = false) {
+  const filter = includeDismissed ? "" : " AND status!='dismissed'";
+  const rows = db.prepare(`SELECT * FROM doc_resources WHERE doc_id=?${filter} ORDER BY CASE status WHEN 'linked' THEN 0 WHEN 'suggested' THEN 1 ELSE 2 END, updated_at DESC, created_at DESC`).all(docId);
+  const backlinks = db.prepare("SELECT id, doc_id, kind, title FROM doc_resources WHERE target_doc_id=? AND status='linked' ORDER BY updated_at DESC").all(docId).map((r) => ({
+    id: String(r.id ?? ""),
+    sourceDocId: String(r.doc_id ?? ""),
+    kind: toKind(r.kind),
+    title: String(r.title ?? "")
+  }));
+  return { resources: rows.map(decodeResource), backlinks };
+}
+function pendingResourceCounts(db) {
+  const counts = {};
+  for (const row of db.prepare("SELECT doc_id, COUNT(*) AS n FROM doc_resources WHERE status='suggested' GROUP BY doc_id").all()) {
+    const id = String(row.doc_id ?? ""), count = Number(row.n ?? 0);
+    if (id && count > 0) counts[id] = count;
+  }
+  return counts;
+}
+function addDocResource(db, input) {
+  const normUrl = input.url ? normalizeResourceUrl(input.url) : "";
+  const existing = db.prepare("SELECT * FROM doc_resources WHERE doc_id=?").all(input.docId).map(decodeResource).find(
+    (row) => normUrl && row.url && normalizeResourceUrl(row.url) === normUrl || input.targetDocId && row.targetDocId === input.targetDocId
+  );
+  const now = Date.now();
+  if (existing) {
+    if (input.status === "suggested") return { resource: existing, created: false };
+    db.prepare("UPDATE doc_resources SET kind=?, title=?, url=?, target_doc_id=?, status=?, source=?, updated_at=? WHERE id=?").run(input.kind, input.title, input.url ?? existing.url ?? null, input.targetDocId ?? existing.targetDocId ?? null, input.status, input.source, now, existing.id);
+    const updated = db.prepare("SELECT * FROM doc_resources WHERE id=?").get(existing.id);
+    return { resource: updated ? decodeResource(updated) : { ...existing, status: input.status, updatedAt: now }, created: false };
+  }
+  const id = randomUUID();
+  db.prepare("INSERT INTO doc_resources(id, doc_id, kind, title, url, target_doc_id, status, source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(id, input.docId, input.kind, input.title, input.url ?? null, input.targetDocId ?? null, input.status, input.source, now, now);
+  return {
+    resource: {
+      id,
+      docId: input.docId,
+      kind: input.kind,
+      title: input.title,
+      ...input.url ? { url: input.url } : {},
+      ...input.targetDocId ? { targetDocId: input.targetDocId } : {},
+      status: input.status,
+      source: input.source,
+      createdAt: now,
+      updatedAt: now
+    },
+    created: true
+  };
+}
+function updateDocResourceStatus(db, id, status) {
+  if (!db.prepare("UPDATE doc_resources SET status=?, updated_at=? WHERE id=?").run(status, Date.now(), id).changes) return void 0;
+  const row = db.prepare("SELECT * FROM doc_resources WHERE id=?").get(id);
+  return row ? decodeResource(row) : void 0;
+}
+var removeDocResource = (db, id) => Boolean(db.prepare("DELETE FROM doc_resources WHERE id=?").run(id).changes);
+
 // src/server/research-store.ts
 function hasResearchSchema(db) {
-  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist','citation_stances')").get();
-  return Number(row?.n ?? 0) === 9;
+  const row = db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name IN ('doc_pages','doc_pages_fts','topics','graph_cache','paper_cards','extraction_tables','extraction_cells','watchlist','citation_stances','doc_resources')").get();
+  return Number(row?.n ?? 0) === 10;
 }
 function ensureResearchSchema(db) {
   db.exec("CREATE TABLE IF NOT EXISTS doc_pages(docId TEXT NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(docId, page)) STRICT");
@@ -1109,6 +1284,7 @@ function ensureResearchSchema(db) {
   db.exec("CREATE TABLE IF NOT EXISTS extraction_cells(table_id TEXT NOT NULL, doc_id TEXT NOT NULL, col_id TEXT NOT NULL, value TEXT NOT NULL, quote TEXT NOT NULL DEFAULT '', page INTEGER, reasoning TEXT NOT NULL DEFAULT '', verified INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, source_kind TEXT NOT NULL DEFAULT 'pdf', status TEXT NOT NULL DEFAULT 'done', updated_at INTEGER NOT NULL, PRIMARY KEY(table_id, doc_id, col_id)) STRICT");
   db.exec(`CREATE TABLE IF NOT EXISTS watchlist(id TEXT PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, query TEXT NOT NULL, doc_id TEXT, work_id TEXT, sources_json TEXT NOT NULL DEFAULT '["openalex","europepmc","arxiv"]', cursor_date TEXT NOT NULL, seen_keys_json TEXT NOT NULL DEFAULT '[]', unread_json TEXT NOT NULL DEFAULT '[]', last_checked_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT`);
   db.exec("CREATE TABLE IF NOT EXISTS citation_stances(target_key TEXT NOT NULL, direction TEXT NOT NULL, citing_key TEXT NOT NULL, doc_id TEXT, source TEXT NOT NULL, citing_doc_id TEXT, citing_page INTEGER, citing_title TEXT NOT NULL, citing_authors_json TEXT NOT NULL, citing_year INTEGER, citing_doi TEXT, citing_arxiv TEXT, citing_url TEXT, section TEXT NOT NULL, context TEXT NOT NULL, stance TEXT NOT NULL, rationale TEXT NOT NULL, is_influential INTEGER NOT NULL DEFAULT 0, is_self_citation INTEGER NOT NULL DEFAULT 0, manual_override INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(target_key, direction, citing_key)) STRICT");
+  ensureDocResourcesSchema(db);
 }
 function deleteResearchDocument(db, docId) {
   db.prepare("DELETE FROM doc_pages WHERE docId=?").run(docId);
@@ -1117,6 +1293,7 @@ function deleteResearchDocument(db, docId) {
   db.prepare("DELETE FROM extraction_cells WHERE doc_id=?").run(docId);
   db.prepare("DELETE FROM watchlist WHERE doc_id=?").run(docId);
   db.prepare("DELETE FROM citation_stances WHERE doc_id=? OR citing_doc_id=?").run(docId, docId);
+  deleteDocResourcesForDoc(db, docId);
 }
 function segmentFtsText(text2) {
   return text2.replace(new RegExp("(\\p{Script=Han})", "gu"), " $1 ").replace(/\s+/g, " ").trim();
@@ -1212,7 +1389,7 @@ function listTopics(db) {
 }
 function saveTopic(db, input) {
   const name2 = single(input.name, "topic name", 120, true);
-  const id = input.id === void 0 ? randomUUID() : single(input.id, "topic ID", 128, true);
+  const id = input.id === void 0 ? randomUUID2() : single(input.id, "topic ID", 128, true);
   const tag = single(input.tag, "topic tag", 40) || name2.slice(0, 40).trim();
   const zoteroCollection = single(input.zoteroCollection, "Zotero collection", 120);
   const description = stringValue(input.description, "topic description", 1e3, false, true).trim();
@@ -1691,7 +1868,7 @@ function readGraphPaperInput(raw) {
 import { createHash as createHash4 } from "node:crypto";
 
 // src/server/library.ts
-import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID4 } from "node:crypto";
 import { mkdir as mkdir3, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync2, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1896,7 +2073,7 @@ function translationQualityError(source2, result) {
 }
 
 // src/server/abstract-library.ts
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash, randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path2 from "node:path";
@@ -2036,7 +2213,7 @@ function bad2(message, status = 400) {
   throw new ServiceError(status, message);
 }
 async function writeAtomic(file, content) {
-  const tmp = `${file}.${process.pid}.${randomUUID2()}.tmp`;
+  const tmp = `${file}.${process.pid}.${randomUUID3()}.tmp`;
   await writeFile(tmp, content, { flag: "wx" });
   try {
     await rename(tmp, file);
@@ -2668,7 +2845,7 @@ function isFsError(error, code) {
 }
 var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
 async function writeOnce(file, bytes) {
-  const temporary = file + "." + randomUUID3() + ".tmp";
+  const temporary = file + "." + randomUUID4() + ".tmp";
   await writeFile2(temporary, bytes, { flag: "wx" });
   try {
     try {
@@ -3679,7 +3856,7 @@ var ReaderModel = class {
 };
 
 // src/server/reader-store.ts
-import { createHash as createHash3, randomInt, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash3, randomInt, randomUUID as randomUUID5 } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import path7 from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -4069,7 +4246,7 @@ function entryFor(kind, input, prior, allowEmpty = false) {
     }
   }
   return {
-    id: prior?.id ?? randomUUID4(),
+    id: prior?.id ?? randomUUID5(),
     docId,
     title: stringValue(next.title, "document title", 2048),
     page,
@@ -5739,6 +5916,160 @@ function registerPaperReaderTools(ctx, deps) {
     return () => {
       for (const dispose of disposers) if (typeof dispose === "function") dispose();
     };
+  });
+}
+
+// src/server/doc-resources-discover.ts
+import { existsSync as existsSync5 } from "node:fs";
+var ARXIV_TEXT_RE = /\barxiv\s*:\s*(\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?\b/i;
+var ARXIV_URL_TEXT_RE = /arxiv\.org\/(?:abs|pdf|html)\/(\d{4}\.\d{4,5})(?:v\d+)?/i;
+var STOP_TOKENS = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "using",
+  "based",
+  "via",
+  "towards",
+  "toward",
+  "paper",
+  "model",
+  "models",
+  "learning",
+  "neural",
+  "network",
+  "networks",
+  "large",
+  "language",
+  "deep",
+  "system",
+  "systems",
+  "method",
+  "study",
+  "analysis",
+  "approach"
+]);
+var inflight = /* @__PURE__ */ new Set();
+function withTimeout(ms, run, parent) {
+  const ac = new AbortController(), onAbort = () => ac.abort();
+  if (parent?.aborted) ac.abort();
+  else parent?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => ac.abort(), ms);
+  timer.unref?.();
+  return run(ac.signal).finally(() => {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", onAbort);
+  });
+}
+var titleTokens = (title) => [...new Set((title.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).filter((t) => !STOP_TOKENS.has(t)))].slice(0, 8);
+function repoMatchesPaper(item, arxivId, tokens) {
+  const topics = Array.isArray(item.topics) ? item.topics.filter((t) => typeof t === "string").join(" ") : "";
+  const hay = `${typeof item.full_name === "string" ? item.full_name : ""} ${typeof item.name === "string" ? item.name : ""} ${typeof item.description === "string" ? item.description : ""} ${topics}`.toLowerCase();
+  if (arxivId && hay.includes(arxivId.toLowerCase())) return true;
+  if (!tokens.length) return false;
+  const hits = tokens.filter((t) => hay.includes(t));
+  return tokens.length === 1 ? hits.length === 1 && tokens[0].length >= 5 : hits.length >= 2 && hits.length / Math.min(tokens.length, 5) >= 0.5;
+}
+function pushCandidate(out, seen, rawUrl, source2, hintKind, rawTitle) {
+  if (typeof rawUrl !== "string") return;
+  const clean3 = sanitizeResourceUrl(rawUrl);
+  if (!clean3) return;
+  const norm = normalizeResourceUrl(clean3);
+  if (seen.has(norm)) return;
+  const kind = hintKind ?? classifyResourceKind(clean3);
+  const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim().slice(0, 120) : defaultResourceTitle(clean3, kind);
+  seen.add(norm);
+  out.push({ url: clean3, kind, title, source: source2 });
+}
+async function fetchJson2(readResource, url, signal) {
+  const res = await withTimeout(8e3, (sig) => readResource(url, "json", { signal: sig }), signal);
+  return JSON.parse(res.bytes.toString("utf8"));
+}
+async function discoverDocResources(deps, doc, opts) {
+  const includeRemote = opts?.includeRemote ?? true;
+  const full = doc.paragraphs || doc.abstract || doc.book ? doc : await deps.library.get(doc.id).catch(() => doc);
+  const parts = [];
+  if (full.abstract) parts.push(full.abstract);
+  if (full.paragraphs?.length) parts.push(full.paragraphs.slice(0, 80).join("\n"));
+  if ((full.kind === "pdf" || !parts.length) && existsSync5(deps.root)) {
+    try {
+      for (const p of deps.store.withDb(false, (db) => getDocPages(db, full.id).slice(0, 2))) if (p.text) parts.push(p.text);
+    } catch {
+    }
+  }
+  const combined = parts.join("\n"), ownClean = full.url ? sanitizeResourceUrl(full.url) : null;
+  const seen = new Set(ownClean ? [normalizeResourceUrl(ownClean)] : []), candidates = [], degraded = [];
+  for (const item of extractInPaperResources(combined, full.url)) pushCandidate(candidates, seen, item.url, "in-paper", item.kind, item.title);
+  const arxivId = extractArxivId(full.url, full.doi) ?? ARXIV_TEXT_RE.exec(combined)?.[1]?.toLowerCase() ?? ARXIV_URL_TEXT_RE.exec(combined)?.[1]?.toLowerCase();
+  const doi = cleanDoi2(full.doi);
+  const tokens = titleTokens((full.paperTitle || full.title || "").replace(/\.(?:pdf|md|markdown|html?|pptx|docx)$/i, "").trim());
+  if (includeRemote) {
+    if (arxivId) {
+      try {
+        const body = await fetchJson2(deps.readResource, `https://huggingface.co/api/papers/${encodeURIComponent(arxivId)}`, opts?.signal);
+        const rec = isObject(body) ? isObject(body.paper) ? { ...body.paper, ...body } : body : null;
+        if (rec) {
+          pushCandidate(candidates, seen, rec.githubRepo, "huggingface", "code");
+          pushCandidate(candidates, seen, rec.projectPage, "huggingface", "project");
+        }
+      } catch {
+        degraded.push("huggingface");
+      }
+    }
+    const ghQuery = arxivId || (tokens.length >= 2 ? tokens.slice(0, 6).join(" ") : "");
+    if (ghQuery) {
+      try {
+        const body = await fetchJson2(deps.readResource, `https://api.github.com/search/repositories?q=${encodeURIComponent(ghQuery)}&per_page=3`, opts?.signal);
+        let added = 0;
+        for (const raw of isObject(body) && Array.isArray(body.items) ? body.items : []) {
+          if (!isObject(raw) || !repoMatchesPaper(raw, arxivId, tokens)) continue;
+          pushCandidate(candidates, seen, raw.html_url, "github", "code", raw.full_name);
+          if (++added >= 2) break;
+        }
+      } catch {
+        degraded.push("github");
+      }
+    }
+    if ((doi || arxivId) && !candidates.some((c) => c.kind === "code" || c.kind === "project")) {
+      try {
+        const oaDoi = doi ? doi.toLowerCase() : `10.48550/arxiv.${arxivId}`;
+        const url = oaUrl("/works/https://doi.org/" + encodeURIComponent(oaDoi), { select: "primary_location,best_oa_location,locations" }, deps.store.settings());
+        const body = await fetchJson2(deps.readResource, url, opts?.signal);
+        if (isObject(body)) {
+          for (const loc of [body.primary_location, body.best_oa_location, ...Array.isArray(body.locations) ? body.locations : []]) {
+            if (!isObject(loc) || typeof loc.landing_page_url !== "string") continue;
+            const kind = classifyResourceKind(loc.landing_page_url);
+            if (kind !== "other") pushCandidate(candidates, seen, loc.landing_page_url, "openalex", kind);
+          }
+        }
+      } catch {
+        degraded.push("openalex");
+      }
+    }
+  }
+  if (!existsSync5(deps.root) || !deps.library.hasSync(full.id)) return { resources: [], backlinks: [], discovered: 0, degraded };
+  const discovered = candidates.length ? deps.store.withDb(true, (db) => {
+    if (!deps.library.hasSync(full.id)) return 0;
+    let count = 0;
+    for (const c of candidates) {
+      if (addDocResource(db, { docId: full.id, kind: c.kind, title: c.title, url: c.url, status: "suggested", source: c.source }).created) count++;
+    }
+    return count;
+  }) : 0;
+  return { ...deps.store.withDb(false, (db) => listDocResources(db, full.id)), discovered, degraded };
+}
+function scheduleResourceDiscovery(deps, doc, includeRemote = true) {
+  const key2 = `${deps.root}\0${doc.id}`;
+  if (!doc.id || inflight.has(key2)) return;
+  inflight.add(key2);
+  void Promise.resolve().then(async () => {
+    if (existsSync5(deps.root) && deps.library.hasSync(doc.id)) await discoverDocResources(deps, doc, { includeRemote });
+  }).catch(() => void 0).finally(() => {
+    inflight.delete(key2);
   });
 }
 
@@ -7492,7 +7823,7 @@ async function runDeepSearch(deps, input, onEvent, opts) {
 }
 
 // src/server/watchlist.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 var isIsoDate = (s) => {
   if (!DATE_RE.test(s)) return false;
@@ -7512,7 +7843,7 @@ var listWatchlist = (deps) => ({ entries: deps.store.withDb(false, listWatchlist
 var deleteWatchlist = (input, deps) => deps.store.withDb(true, (db) => deleteWatchlistEntry(db, single(input.id, "watchlist ID", 128, true)));
 async function saveWatchlist(input, deps) {
   if (input.kind !== "topic" && input.kind !== "paper") throw new ServiceError(400, "Choose topic or paper watchlist kind.");
-  const kind = input.kind, id = input.id === void 0 ? randomUUID5() : single(input.id, "watchlist ID", 128, true), prev = deps.store.withDb(false, (db) => getWatchlistEntry(db, id));
+  const kind = input.kind, id = input.id === void 0 ? randomUUID6() : single(input.id, "watchlist ID", 128, true), prev = deps.store.withDb(false, (db) => getWatchlistEntry(db, id));
   const docId = input.docId === void 0 ? prev?.docId : single(input.docId, "document ID", 512) || void 0, doc = docId ? await deps.library.get(docId) : void 0;
   const rawQuery = input.query === void 0 ? prev?.query ?? (doc ? doc.doi || doc.paperTitle || doc.title : "") : single(input.query, "watchlist query", 500);
   const workId = input.workId === void 0 ? prev?.workId ?? (doc?.doi ? cleanDoi2(doc.doi) : void 0) : single(input.workId, "work ID", 200) || void 0;
@@ -7734,7 +8065,7 @@ function formatHighlightsSection(annotations, options) {
 }
 
 // src/server/obsidian.ts
-import { createHash as createHash7, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID8 } from "node:crypto";
 import {
   closeSync as closeSync2,
   constants as constants2,
@@ -7757,7 +8088,7 @@ import path13 from "node:path";
 import { createHash as createHash6 } from "node:crypto";
 
 // src/server/vault-sources.ts
-import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID7 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
 import path12 from "node:path";
 var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
@@ -7766,7 +8097,7 @@ function publicSource(value) {
   if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
-  const temp = path12.join(path12.dirname(file), ".source-" + randomUUID6() + ".tmp");
+  const temp = path12.join(path12.dirname(file), ".source-" + randomUUID7() + ".tmp");
   copyFileSync(original, temp, constants.COPYFILE_EXCL);
   try {
     try {
@@ -8047,7 +8378,7 @@ function fileContent(file) {
 }
 function writeMarkdown(file, observed, next) {
   if (observed === next) return;
-  const temp = path13.join(path13.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
+  const temp = path13.join(path13.dirname(file), ".paper-reader-" + randomUUID8() + ".tmp");
   const fd = openSync2(temp, "wx", 384);
   try {
     try {
@@ -9276,9 +9607,11 @@ var ZoteroLibrary = class {
 };
 
 // src/server/services.ts
-function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian(), library, store, readResource = publicResource }) {
+function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian(), library, store, readResource = publicResource, autoDiscover = false }) {
   const database = store ?? new ReaderStore(root);
   const documents = library ?? new Library(root, readResource, (id) => database.deleteDocument(id));
+  const resourceDeps = { root, library: documents, store: database, readResource };
+  const scheduleDiscover = (doc) => scheduleResourceDiscovery(resourceDeps, doc, autoDiscover);
   const notebooks = new PaperNotebooks(database, documents, openObsidian);
   const model = new ReaderModel(ctx, fetchImpl);
   const discussions = new PaperDiscussions(database, model);
@@ -9317,6 +9650,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "library.createAbstract": async (input) => {
       const doc = await documents.createAbstract(input);
       await indexDoc(doc, doc.kind === "abstract").catch(() => 0);
+      scheduleDiscover(doc);
       return { doc };
     },
     "library.importRefs": async (input) => {
@@ -9431,7 +9765,9 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       if (!isObject(input.paper)) throw new ServiceError(400, "Invalid paper payload.");
       const topicTag = input.topicTag === void 0 ? void 0 : single(input.topicTag, "topic tag", 40);
       const arxivFormat = input.arxivFormat === void 0 ? void 0 : readArxivFormat(input.arxivFormat);
-      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode, arxivFormat, topicTag }, { library: documents, store: database, readResource, indexDoc, settings: database.settings() });
+      const saved = await saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode, arxivFormat, topicTag }, { library: documents, store: database, readResource, indexDoc, settings: database.settings() });
+      scheduleDiscover(saved.doc);
+      return saved;
     },
     "trends.query": async (input, options) => queryFieldTrends(readTrendQueryInput(input), graphCtx(await listDocsWithMeta2(), options?.signal)),
     "trends.papers": async (input, options) => queryTrendPapers(readTrendPapersInput(input), graphCtx(await listDocsWithMeta2(), options?.signal)),
@@ -9453,15 +9789,48 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "citations.analyze": (input, options) => analyzeCitations({ store: database, library: documents, model, fetchFn: fetchImpl }, input, options),
     "citations.summary": (input) => summarizeCitations({ store: database, library: documents }, input),
     "citations.reclassify": (input) => reclassifyCitation({ store: database }, input),
+    "doc.resources.list": (input) => {
+      if (input.includeDismissed !== void 0 && typeof input.includeDismissed !== "boolean") throw new ServiceError(400, "Invalid includeDismissed option.");
+      if (input.docId === void 0) return { resources: [], backlinks: [], pendingCounts: database.withDb(false, pendingResourceCounts) };
+      return database.withDb(false, (db) => listDocResources(db, single(input.docId, "document ID", 512, true), input.includeDismissed === true));
+    },
+    "doc.resources.add": async (input) => {
+      const docId = single(input.docId, "document ID", 512, true);
+      await documents.get(docId);
+      const rawUrl = input.url === void 0 ? "" : stringValue(input.url, "resource URL", 4096);
+      const cleanUrl = rawUrl ? sanitizeResourceUrl(rawUrl) ?? void 0 : void 0;
+      if (rawUrl && !cleanUrl) throw new ServiceError(400, "Enter a valid HTTP(S) URL without embedded credentials.");
+      const targetDocId = input.targetDocId === void 0 || input.targetDocId === "" ? void 0 : single(input.targetDocId, "target document ID", 512, true);
+      if (!cleanUrl && !targetDocId) throw new ServiceError(400, "Provide a resource URL or a local library document.");
+      if (targetDocId === docId) throw new ServiceError(400, "Cannot link a document to itself.");
+      const targetDoc = targetDocId ? await documents.get(targetDocId) : void 0;
+      if (input.kind !== void 0 && (typeof input.kind !== "string" || !DOC_RESOURCE_KINDS.includes(input.kind))) throw new ServiceError(400, "Choose a valid resource kind.");
+      const rawTitle = single(input.title, "resource title", 200);
+      const kind = input.kind ? input.kind : cleanUrl ? classifyResourceKind(cleanUrl, rawTitle) : /\.pptx?$/i.test(targetDoc?.title ?? "") ? "slides" : "other";
+      const title = rawTitle || (targetDoc ? (targetDoc.paperTitle || targetDoc.title).slice(0, 200) : defaultResourceTitle(cleanUrl, kind));
+      if (!documents.hasSync(docId)) throw new ServiceError(404, "Document not found.");
+      return { resource: database.withDb(true, (db) => addDocResource(db, { docId, kind, title, url: cleanUrl, targetDocId, status: "linked", source: "manual" }).resource) };
+    },
+    "doc.resources.remove": (input) => ({ removed: database.withDb(true, (db) => removeDocResource(db, single(input.id, "resource ID", 128, true))) }),
+    "doc.resources.update": (input) => {
+      const id = single(input.id, "resource ID", 128, true), status = input.status;
+      if (status !== "linked" && status !== "dismissed") throw new ServiceError(400, "Choose linked or dismissed status.");
+      const resource = database.withDb(true, (db) => updateDocResourceStatus(db, id, status));
+      if (!resource) throw new ServiceError(404, "Linked resource not found.");
+      return { resource };
+    },
+    "doc.resources.discover": async (input, options) => discoverDocResources(resourceDeps, await documents.get(input.docId), { includeRemote: true, signal: options?.signal }),
     "web.import": async (input) => {
       const opened = await documents.importWebDocument(input);
       await indexDoc(opened.doc, true).catch(() => 0);
+      scheduleDiscover(opened.doc);
       return opened;
     },
     "web.open": async (input) => {
       const arxivFormat = input.arxivFormat === void 0 ? void 0 : readArxivFormat(input.arxivFormat);
       const opened = await openWebArticle(documents, input.url, readResource, { arxivFormat, defaultArxivFormat: database.settings().arxivFormat });
       await indexDoc(opened.doc, true).catch(() => 0);
+      scheduleDiscover(opened.doc);
       return opened;
     },
     "book.section": async (input) => ({ doc: await documents.bookSection(input.docId, input.page) }),
@@ -9601,7 +9970,7 @@ function pdfBytesResponse(req, bytes) {
 var name = "paper-reader";
 var inject = ["connection"];
 var builtWeb = fileURLToPath5(new URL("../web/", import.meta.url));
-var publicDir = existsSync5(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
+var publicDir = existsSync6(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
 var pdfDir = path16.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
 var mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -9703,7 +10072,8 @@ function apply(ctx) {
       if (models.attachments === store2) delete models.attachments;
     };
   });
-  const service = createServices({ root, ctx: models, library, store, readResource: publicResource });
+  const resourceDeps = { root, library, store, readResource: publicResource };
+  const service = createServices({ root, ctx: models, library, store, readResource: publicResource, autoDiscover: true });
   registerPaperReaderTools(ctx, { root, library });
   const route = (suffix, methods, fetch, requestBody = "buffered") => ctx.connection.fetch.register({
     path: "/api/paper-reader/" + suffix,
@@ -9752,6 +10122,7 @@ function apply(ctx) {
       if (pages.length && library.hasSync(doc.id)) store.withDb(true, (db) => replaceDocPages(db, doc.id, pages));
     } catch {
     }
+    scheduleResourceDiscovery(resourceDeps, doc, true);
     return json({ doc });
   }, "streaming");
   route("import-file", ["POST"], async (req) => {
@@ -9760,7 +10131,9 @@ function apply(ctx) {
     const contentType = req.headers.get("content-type") ?? void 0;
     const limit = fileImportLimit(filename, contentType);
     const bytes = await boundedBody(req, limit);
-    return json(await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get("url") ?? void 0, meta: metaFromParams(params) }));
+    const opened = await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get("url") ?? void 0, meta: metaFromParams(params) });
+    scheduleResourceDiscovery(resourceDeps, opened.doc, true);
+    return json(opened);
   }, "streaming");
   route("attach-pdf", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);

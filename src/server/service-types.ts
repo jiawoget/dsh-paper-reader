@@ -213,6 +213,11 @@ export interface ServiceResults {
   'citations.analyze': Operations['citations.analyze'][1];
   'citations.summary': Operations['citations.summary'][1];
   'citations.reclassify': Operations['citations.reclassify'][1];
+  'doc.resources.list': Operations['doc.resources.list'][1];
+  'doc.resources.add': Operations['doc.resources.add'][1];
+  'doc.resources.remove': Operations['doc.resources.remove'][1];
+  'doc.resources.update': Operations['doc.resources.update'][1];
+  'doc.resources.discover': Operations['doc.resources.discover'][1];
   'web.import': Operations['web.import'][1];
   'web.open': Operations['web.open'][1];
   'book.section': Operations['book.section'][1];

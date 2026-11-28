@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { registerPaperReaderTools, type HostToolsRegistry } from './host-tools.js';
+import { scheduleResourceDiscovery } from './doc-resources-discover.js';
 import { fileImportLimit, importLocalFile, resolveImportFilename } from './file-import.js';
 import { Library, PDF_LIMIT, fail, isRecord } from './library.js';
 import { extractPdfPages } from './pdf-text.js';
@@ -96,7 +97,8 @@ export function apply(ctx:ReaderHost):void {
     models.attachments = store;
     return () => { if (models.attachments === store) delete models.attachments; };
   });
-  const service = createServices({root,ctx:models,library,store,readResource:publicResource});
+  const resourceDeps = { root, library, store, readResource: publicResource };
+  const service = createServices({root,ctx:models,library,store,readResource:publicResource,autoDiscover:true});
   registerPaperReaderTools(ctx, { root, library });
   const route=(suffix:string,methods:Method[],fetch:HostRoute['fetch'],requestBody:HostRoute['requestBody']='buffered') => ctx.connection.fetch.register({
     path:'/api/paper-reader/'+suffix,methods,requestBody,
@@ -139,6 +141,7 @@ export function apply(ctx:ReaderHost):void {
       const pages = await extractPdfPages(bytes);
       if (pages.length && library.hasSync(doc.id)) store.withDb(true, db => replaceDocPages(db, doc.id, pages));
     } catch {}
+    scheduleResourceDiscovery(resourceDeps, doc, true);
     return json({ doc });
   },'streaming');
   route('import-file',['POST'],async req => {
@@ -147,7 +150,9 @@ export function apply(ctx:ReaderHost):void {
     const contentType = req.headers.get('content-type') ?? undefined;
     const limit = fileImportLimit(filename, contentType);
     const bytes = await boundedBody(req, limit);
-    return json(await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get('url') ?? undefined, meta: metaFromParams(params) }));
+    const opened = await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get('url') ?? undefined, meta: metaFromParams(params) });
+    scheduleResourceDiscovery(resourceDeps, opened.doc, true);
+    return json(opened);
   },'streaming');
   route('attach-pdf',['POST'],async req => {
     if(req.headers.get('content-type')?.split(';')[0]!=='application/pdf') fail('Choose a PDF file.',415);

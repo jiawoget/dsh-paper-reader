@@ -1,6 +1,12 @@
 import type { DocPageHit, DocumentInfo, GraphDirection } from '../shared/types.js';
+import {
+  classifyResourceKind, defaultResourceTitle, DOC_RESOURCE_KINDS, sanitizeResourceUrl,
+  type DocResourceKind
+} from '../shared/doc-resources.js';
 import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
+import { discoverDocResources, scheduleResourceDiscovery } from './doc-resources-discover.js';
+import { addDocResource, listDocResources, pendingResourceCounts, removeDocResource, updateDocResourceStatus } from './doc-resources-store.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from './academic-graph.js';
 import { saveGraphPaper } from './paper-save.js';
 import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
@@ -26,7 +32,7 @@ import { Library } from './library.js';
 
 export interface ServiceOptions {
   root: string; ctx?: unknown; fetchImpl?: typeof fetch; openObsidian?: ObsidianLauncher;
-  library?: Library; store?: ReaderStore; readResource?: ResourceReader;
+  library?: Library; store?: ReaderStore; readResource?: ResourceReader; autoDiscover?: boolean;
 }
 type Operation = keyof ServiceResults;
 type Result = ServiceResults[Operation];
@@ -36,9 +42,11 @@ interface ServiceAction {
   (operation: string, payload?: unknown, options?: StreamOptions): Promise<Result>;
 }
 
-export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian(), library, store, readResource = publicResource }: ServiceOptions): ServiceAction {
+export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian = installedObsidian(), library, store, readResource = publicResource, autoDiscover = false }: ServiceOptions): ServiceAction {
   const database = store ?? new ReaderStore(root);
   const documents = library ?? new Library(root, readResource, id => database.deleteDocument(id));
+  const resourceDeps = { root, library: documents, store: database, readResource };
+  const scheduleDiscover = (doc: DocumentInfo) => scheduleResourceDiscovery(resourceDeps, doc, autoDiscover);
   const notebooks = new PaperNotebooks(database, documents, openObsidian);
   const model = new ReaderModel(ctx, fetchImpl);
   const discussions = new PaperDiscussions(database, model);
@@ -74,6 +82,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'library.createAbstract': async input => {
       const doc = await documents.createAbstract(input);
       await indexDoc(doc, doc.kind === 'abstract').catch(() => 0);
+      scheduleDiscover(doc);
       return { doc };
     },
     'library.importRefs': async input => {
@@ -177,7 +186,9 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       if (!isObject(input.paper)) throw new ServiceError(400, 'Invalid paper payload.');
       const topicTag = input.topicTag === undefined ? undefined : single(input.topicTag, 'topic tag', 40);
       const arxivFormat = input.arxivFormat === undefined ? undefined : readArxivFormat(input.arxivFormat);
-      return saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode, arxivFormat, topicTag }, { library: documents, store: database, readResource, indexDoc, settings: database.settings() });
+      const saved = await saveGraphPaper({ paper: readGraphPaperInput(input.paper), mode, arxivFormat, topicTag }, { library: documents, store: database, readResource, indexDoc, settings: database.settings() });
+      scheduleDiscover(saved.doc);
+      return saved;
     },
     'trends.query': async (input, options) => queryFieldTrends(readTrendQueryInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
     'trends.papers': async (input, options) => queryTrendPapers(readTrendPapersInput(input), graphCtx(await listDocsWithMeta(), options?.signal)),
@@ -199,11 +210,43 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'citations.analyze': (input, options) => analyzeCitations({ store: database, library: documents, model, fetchFn: fetchImpl }, input, options),
     'citations.summary': input => summarizeCitations({ store: database, library: documents }, input),
     'citations.reclassify': input => reclassifyCitation({ store: database }, input),
-    'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); return opened; },
+    'doc.resources.list': input => {
+      if (input.includeDismissed !== undefined && typeof input.includeDismissed !== 'boolean') throw new ServiceError(400, 'Invalid includeDismissed option.');
+      if (input.docId === undefined) return { resources: [], backlinks: [], pendingCounts: database.withDb(false, pendingResourceCounts) };
+      return database.withDb(false, db => listDocResources(db, single(input.docId, 'document ID', 512, true), input.includeDismissed === true));
+    },
+    'doc.resources.add': async input => {
+      const docId = single(input.docId, 'document ID', 512, true);
+      await documents.get(docId);
+      const rawUrl = input.url === undefined ? '' : stringValue(input.url, 'resource URL', 4096);
+      const cleanUrl = rawUrl ? sanitizeResourceUrl(rawUrl) ?? undefined : undefined;
+      if (rawUrl && !cleanUrl) throw new ServiceError(400, 'Enter a valid HTTP(S) URL without embedded credentials.');
+      const targetDocId = input.targetDocId === undefined || input.targetDocId === '' ? undefined : single(input.targetDocId, 'target document ID', 512, true);
+      if (!cleanUrl && !targetDocId) throw new ServiceError(400, 'Provide a resource URL or a local library document.');
+      if (targetDocId === docId) throw new ServiceError(400, 'Cannot link a document to itself.');
+      const targetDoc = targetDocId ? await documents.get(targetDocId) : undefined;
+      if (input.kind !== undefined && (typeof input.kind !== 'string' || !DOC_RESOURCE_KINDS.includes(input.kind as DocResourceKind))) throw new ServiceError(400, 'Choose a valid resource kind.');
+      const rawTitle = single(input.title, 'resource title', 200);
+      const kind: DocResourceKind = input.kind ? (input.kind as DocResourceKind) : cleanUrl ? classifyResourceKind(cleanUrl, rawTitle) : /\.pptx?$/i.test(targetDoc?.title ?? '') ? 'slides' : 'other';
+      const title = rawTitle || (targetDoc ? (targetDoc.paperTitle || targetDoc.title).slice(0, 200) : defaultResourceTitle(cleanUrl!, kind));
+      if (!documents.hasSync(docId)) throw new ServiceError(404, 'Document not found.');
+      return { resource: database.withDb(true, db => addDocResource(db, { docId, kind, title, url: cleanUrl, targetDocId, status: 'linked', source: 'manual' }).resource) };
+    },
+    'doc.resources.remove': input => ({ removed: database.withDb(true, db => removeDocResource(db, single(input.id, 'resource ID', 128, true))) }),
+    'doc.resources.update': input => {
+      const id = single(input.id, 'resource ID', 128, true), status = input.status;
+      if (status !== 'linked' && status !== 'dismissed') throw new ServiceError(400, 'Choose linked or dismissed status.');
+      const resource = database.withDb(true, db => updateDocResourceStatus(db, id, status));
+      if (!resource) throw new ServiceError(404, 'Linked resource not found.');
+      return { resource };
+    },
+    'doc.resources.discover': async (input, options) => discoverDocResources(resourceDeps, await documents.get(input.docId), { includeRemote: true, signal: options?.signal }),
+    'web.import': async input => { const opened = await documents.importWebDocument(input); await indexDoc(opened.doc, true).catch(() => 0); scheduleDiscover(opened.doc); return opened; },
     'web.open': async input => {
       const arxivFormat = input.arxivFormat === undefined ? undefined : readArxivFormat(input.arxivFormat);
       const opened = await openWebArticle(documents, input.url, readResource, { arxivFormat, defaultArxivFormat: database.settings().arxivFormat });
       await indexDoc(opened.doc, true).catch(() => 0);
+      scheduleDiscover(opened.doc);
       return opened;
     },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
