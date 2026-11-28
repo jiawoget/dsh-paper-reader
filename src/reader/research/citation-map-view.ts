@@ -1,8 +1,10 @@
+import type { CitationCluster } from '../../shared/graph-clusters.js';
 import type { ArxivFormat, DocumentInfo, GraphDirection, GraphExploreResult, GraphNode, GraphPaper } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
 import { CitationMapSvg, type AuthorLabelMode, type GraphViewMode } from './citation-map-svg.js';
 import { researchText, researchViewName } from './labels.js';
 import { formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
+import { PaperPicker } from './paper-picker.js';
 import type { ResearchShellContext, ResearchViewModule } from './state.js';
 
 interface TrailStep { label: string; direction: GraphDirection; seedIds: string[]; result: GraphExploreResult; selectedId: string | null }
@@ -15,20 +17,16 @@ const CAP = 40, DIRS: readonly GraphDirection[] = ['earlier', 'later', 'similar'
 const DIR_TEXT: Record<GraphDirection, string> = { earlier: 'Earlier', later: 'Later', similar: 'Similar' };
 const isDir = (v?: string): v is GraphDirection => v === 'earlier' || v === 'later' || v === 'similar';
 const shortTitle = (s: string) => s.length > 26 ? s.slice(0, 25) + '…' : s;
-const shortAuthors = (raw?: string): string => {
-  const s = (raw ?? '').trim(), parts = s ? (s.includes(';') ? s.split(';') : s.split(',')).map(p => p.trim()).filter(Boolean) : [];
-  const first = parts[0] ?? s, head = first.length > 36 ? first.slice(0, 35) + '…' : first;
-  return parts.length > 1 ? `${head} et al.` : head;
-};
 const seedKey = (p: GraphPaper) => p.openAlexId || p.doi || (p.arxivId ? `arXiv:${p.arxivId}` : p.s2Id || p.id);
 
 export function createCitationMapView(): ResearchViewModule {
   let mounted = false, restored = false, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
   let docs: DocumentInfo[] = [], trail: TrailStep[] = [], selectedId: string | null = null, mobileSearchOpen = false, seedPickerOpen = false;
   let mode: GraphViewMode = 'network', authorMode: AuthorLabelMode = 'first', graphCollapsed = false, mobilePane: 'list' | 'graph' = 'list', seedDocId = '', seedQuery = '';
+  let clusters: CitationCluster[] = [], clusterFilter: string | null = null;
   let svg: CitationMapSvg | undefined, topEl: HTMLElement | undefined, splitEl: HTMLElement | undefined, crumbsEl: HTMLElement | undefined, degradedEl: HTMLElement | undefined;
   let statusEl: HTMLElement | undefined, listEl: HTMLElement | undefined, detailEl: HTMLElement | undefined, detailBackdrop: HTMLElement | undefined, capEl: HTMLElement | undefined;
-  let seedWrap: HTMLElement | undefined, seedPillTitle: HTMLElement | undefined, seedChangeBtn: HTMLButtonElement | undefined, seedPickerEl: HTMLElement | undefined, seedSearchIn: HTMLInputElement | undefined, seedListEl: HTMLElement | undefined;
+  let seedWrap: HTMLElement | undefined, seedPillTitle: HTMLElement | undefined, seedChangeBtn: HTMLButtonElement | undefined, seedPicker: PaperPicker | undefined, clusterBarEl: HTMLElement | undefined;
   let seedInput: HTMLInputElement | undefined, restoreGraphBtn: HTMLButtonElement | undefined;
   let mobileListBtn: HTMLButtonElement | undefined, mobileGraphBtn: HTMLButtonElement | undefined, mobileSearchBtn: HTMLButtonElement | undefined, dirBtns: HTMLButtonElement[] = [], syncToolbar: (() => void) | undefined;
   let outsideClickHandler: ((e: Event) => void) | undefined;
@@ -41,7 +39,7 @@ export function createCitationMapView(): ResearchViewModule {
   const closeSeedPicker = (refocus = false) => {
     if (!seedPickerOpen) return;
     seedPickerOpen = false;
-    if (seedPickerEl) seedPickerEl.hidden = true;
+    seedPicker?.close();
     seedChangeBtn?.setAttribute('aria-expanded', 'false');
     if (refocus && seedChangeBtn?.isConnected) seedChangeBtn.focus({ preventScroll: true });
   };
@@ -50,32 +48,39 @@ export function createCitationMapView(): ResearchViewModule {
     const activeSeed = currentStep()?.result.seeds[0], doc = docs.find(x => x.id === seedDocId);
     const full = activeSeed?.title || doc?.paperTitle || doc?.title || seedQuery || t('Pick library paper', '选择本地文献');
     seedPillTitle.textContent = shortTitle(full); seedPillTitle.title = full;
-    if (seedPickerEl) seedPickerEl.hidden = !seedPickerOpen;
     seedChangeBtn?.setAttribute('aria-expanded', String(seedPickerOpen));
   };
-  const renderSeedList = () => {
-    if (!seedListEl) return;
-    seedListEl.replaceChildren();
-    const q = (seedSearchIn?.value ?? '').trim().toLowerCase();
-    const filtered = docs.filter(d => !q || `${d.paperTitle || d.title} ${d.authors ?? ''} ${d.year ?? ''} ${d.doi ?? ''}`.toLowerCase().includes(q));
-    if (!filtered.length) { seedListEl.append(el('p', 'cm-seed-empty', t('No matching library papers.', '未找到匹配的本地文献。'))); return; }
-    for (const d of filtered) {
-      const full = d.paperTitle || d.title, meta = [shortAuthors(d.authors), d.year ?? ''].filter(Boolean).join(' · ');
-      const opt = mkBtn(`cm-seed-opt${d.id === seedDocId ? ' is-active' : ''}`, '', () => {
-        seedDocId = d.id; seedQuery = ''; if (seedInput) seedInput.value = '';
-        closeSeedPicker(false); syncSeedPill();
-        void exploreSeed(currentStep()?.direction ?? 'later', d.id, '');
-      });
-      opt.setAttribute('role', 'option'); opt.setAttribute('aria-selected', String(d.id === seedDocId)); opt.dataset.docId = d.id;
-      opt.append(el('span', 'cm-seed-opt-title', full), ...(meta ? [el('span', 'cm-seed-opt-meta', meta)] : []));
-      seedListEl.append(opt);
+  const openSeedPicker = () => { seedPickerOpen = true; seedPicker?.open(); syncSeedPill(); };
+  const applyClusterFilter = (nextId: string | null) => {
+    clusterFilter = nextId;
+    svg?.setClusterFilter(nextId);
+    const allowed = nextId ? new Set(clusters.find(c => c.id === nextId)?.nodeIds ?? []) : null;
+    for (const [nid, row] of rowEls) row.hidden = Boolean(allowed && !allowed.has(nid));
+    if (clusterBarEl) {
+      for (const b of clusterBarEl.querySelectorAll<HTMLButtonElement>('.cm-cluster-chip')) {
+        const cid = b.dataset.clusterId;
+        b.setAttribute('aria-pressed', String(cid === 'all' ? !clusterFilter : cid === clusterFilter));
+      }
     }
   };
-  const openSeedPicker = () => {
-    seedPickerOpen = true;
-    if (seedSearchIn) seedSearchIn.value = '';
-    renderSeedList(); syncSeedPill();
-    seedSearchIn?.focus({ preventScroll: true });
+  const renderClusterBar = () => {
+    if (!clusterBarEl) return;
+    clusterBarEl.replaceChildren();
+    const show = mode === 'network' && clusters.length >= 2;
+    clusterBarEl.hidden = !show;
+    if (!show) return;
+    const allChip = mkBtn('btn cm-cluster-chip', '', () => applyClusterFilter(null));
+    allChip.dataset.clusterId = 'all'; allChip.setAttribute('aria-pressed', String(!clusterFilter));
+    allChip.append(el('span', 'cm-cluster-name', researchText.all()), el('span', 'cm-cluster-count', String(currentNodes().length)));
+    clusterBarEl.append(allChip);
+    for (const c of clusters) {
+      const chip = mkBtn('btn cm-cluster-chip', '', () => applyClusterFilter(clusterFilter === c.id ? null : c.id));
+      chip.dataset.clusterId = c.id; chip.dataset.color = String(c.colorIndex);
+      chip.setAttribute('aria-pressed', String(clusterFilter === c.id));
+      const dot = el('i', 'cm-cluster-dot'); dot.dataset.color = String(c.colorIndex);
+      chip.append(dot, el('span', 'cm-cluster-name', c.label), el('span', 'cm-cluster-count', String(c.count)));
+      clusterBarEl.append(chip);
+    }
   };
   const closeDetail = () => { selectedId = null; if (currentStep()) currentStep()!.selectedId = null; renderDetail(); };
   const reconcileMissing = (isMissing: (docId: string, id: string) => boolean) => {
@@ -118,14 +123,14 @@ export function createCitationMapView(): ResearchViewModule {
   const rememberDoc = (doc: DocumentInfo) => {
     docs = docs.some(d => d.id === doc.id) ? docs.map(d => d.id === doc.id ? doc : d) : [doc, ...docs];
     if (!seedDocId) seedDocId = doc.id;
-    if (mounted) { syncSeedPill(); if (seedPickerOpen) renderSeedList(); }
+    if (mounted) { syncSeedPill(); seedPicker?.refresh(); }
   };
   const refreshDocs = () => {
     void api('library.list', {}).then(({ docs: listed }) => {
       docs = listed; const liveIds = new Set(listed.map(d => d.id)); reconcileMissing((did, id) => !liveIds.has(did) && !savingIds.has(id));
       if (!mounted) return;
       if (!listed.some(d => d.id === seedDocId) && listed[0]) seedDocId = listed[0].id;
-      syncSeedPill(); if (seedPickerOpen) renderSeedList();
+      syncSeedPill(); seedPicker?.refresh();
     }).catch(() => undefined);
   };
   const savePaperInPlace = async (node: GraphNode, arxivFormat?: ArxivFormat) => {
@@ -167,9 +172,12 @@ export function createCitationMapView(): ResearchViewModule {
     crumbsEl.scrollLeft = crumbsEl.scrollWidth;
   };
   const renderStep = () => {
-    const step = currentStep(); renderCrumbs(); syncSeedPill(); rowEls.clear(); rowActions.clear();
+    const step = currentStep(); renderCrumbs(); syncSeedPill(); rowEls.clear(); rowActions.clear(); clusterFilter = null;
     if (!listEl || !capEl || !statusEl) return; listEl.replaceChildren();
-    if (!step) { capEl.textContent = t(`Cap ${CAP}`, `上限 ${CAP}`); svg?.render([], [], mode, authorMode, null); renderDegraded([]); renderDetail(); return; }
+    if (!step) {
+      capEl.textContent = t(`Cap ${CAP}`, `上限 ${CAP}`); clusters = svg?.render([], [], mode, authorMode, null) ?? [];
+      renderClusterBar(); renderDegraded([]); renderDetail(); return;
+    }
     const { nodes, edges, degraded } = step.result;
     capEl.textContent = t(`${nodes.length} / ${CAP}`, `${nodes.length} / ${CAP} 篇`);
     statusEl.textContent = nodes.length ? '' : t('No connected papers found for this direction.', '该方向暂未找到关联文献。');
@@ -185,7 +193,8 @@ export function createCitationMapView(): ResearchViewModule {
       item.append(titleBtn, el('p', 'cm-row-meta', byline), act); listEl.append(item); rowEls.set(node.id, item); rowActions.set(node.id, act);
       shell?.paperFloatBar?.attach(item, { paper: node, onSaved: doc => { rememberDoc(doc); updatePaperStatusInPlace(node.id, true, doc.id); } });
     }
-    svg?.render(nodes, edges, mode, authorMode, selectedId); renderDetail();
+    clusters = svg?.render(nodes, edges, mode, authorMode, selectedId) ?? [];
+    renderClusterBar(); renderDetail();
   };
   const explorePaper = async (paper: GraphPaper, direction: GraphDirection, resetTrail: boolean) => {
     const { seq, signal } = beginRequest();
@@ -230,14 +239,18 @@ export function createCitationMapView(): ResearchViewModule {
       seedChangeBtn.ariaLabel = t('Change library seed paper', '切换本地种子文献');
       seedChangeBtn.setAttribute('aria-haspopup', 'dialog'); seedChangeBtn.setAttribute('aria-expanded', 'false');
       pill.append(seedPillTitle, seedChangeBtn);
-      seedPickerEl = el('div', 'cm-seed-picker'); seedPickerEl.setAttribute('role', 'dialog');
-      seedPickerEl.setAttribute('aria-label', t('Choose library seed paper', '选择本地种子文献')); seedPickerEl.hidden = true;
-      seedSearchIn = el('input', 'search cm-seed-search'); seedSearchIn.type = 'search';
-      seedSearchIn.ariaLabel = t('Filter library papers', '筛选本地文献'); seedSearchIn.placeholder = t('Filter library papers…', '筛选本地文献…');
-      seedSearchIn.addEventListener('input', () => renderSeedList());
-      seedSearchIn.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSeedPicker(true); } });
-      seedListEl = el('div', 'cm-seed-list'); seedListEl.setAttribute('role', 'listbox');
-      seedPickerEl.append(seedSearchIn, seedListEl); seedWrap.append(pill, seedPickerEl);
+      seedPicker = new PaperPicker({
+        docs: () => docs, selectedDocId: () => seedDocId, currentReadingDocId: () => shell?.activeDocId() || '',
+        ariaLabel: t('Choose library seed paper', '选择本地种子文献'),
+        pickerClass: 'cm-seed-picker', searchClass: 'cm-seed-search', listClass: 'cm-seed-list', optionClass: 'cm-seed-opt',
+        onSelectDoc: d => {
+          seedDocId = d.id; seedQuery = ''; if (seedInput) seedInput.value = '';
+          closeSeedPicker(false); syncSeedPill();
+          void exploreSeed(currentStep()?.direction ?? 'later', d.id, '');
+        },
+        onClose: refocus => closeSeedPicker(refocus)
+      });
+      seedWrap.append(pill, seedPicker.root);
       outsideClickHandler = e => { if (seedPickerOpen && seedWrap && !(e.target instanceof Node && seedWrap.contains(e.target))) closeSeedPicker(false); };
       document.addEventListener('pointerdown', outsideClickHandler);
       seedInput = el('input', 'search cm-seed-input'); seedInput.type = 'search'; seedInput.value = seedQuery;
@@ -263,13 +276,20 @@ export function createCitationMapView(): ResearchViewModule {
       const firstBtn = mkBtn('btn', t('First Author', '第一作者'), () => { authorMode = 'first'; syncLayoutFlags(); svg?.setAuthorMode('first'); });
       const lastBtn = mkBtn('btn', t('Last Author', '末位作者'), () => { authorMode = 'last'; syncLayoutFlags(); svg?.setAuthorMode('last'); });
       const hideBtn = mkBtn('btn cm-hide-graph', t('Hide Graph', '隐藏图谱'), () => { graphCollapsed = true; syncLayoutFlags(); }); hideBtn.setAttribute('aria-expanded', 'true');
+      const zoomGroup = el('div', 'cm-zoom-group');
+      const zOut = mkBtn('btn cm-zoom-btn', '−', () => svg?.zoomOut()); zOut.ariaLabel = researchText.zoomOut(); zOut.title = researchText.zoomOut(); zOut.dataset.zoomAct = 'out';
+      const zFit = mkBtn('btn cm-zoom-btn cm-zoom-fit', researchText.fitGraph(), () => svg?.fitView()); zFit.ariaLabel = researchText.fitGraphLabel(); zFit.dataset.zoomAct = 'fit';
+      const zIn = mkBtn('btn cm-zoom-btn', '+', () => svg?.zoomIn()); zIn.ariaLabel = researchText.zoomIn(); zIn.title = researchText.zoomIn(); zIn.dataset.zoomAct = 'in';
+      zoomGroup.append(zOut, zFit, zIn);
+      clusterBarEl = el('div', 'cm-cluster-bar'); clusterBarEl.setAttribute('role', 'group');
+      clusterBarEl.setAttribute('aria-label', researchText.clustersLabel()); clusterBarEl.hidden = true;
       syncToolbar = () => {
         netBtn.setAttribute('aria-pressed', String(mode === 'network')); timeBtn.setAttribute('aria-pressed', String(mode === 'timeline'));
         firstBtn.setAttribute('aria-pressed', String(authorMode === 'first')); lastBtn.setAttribute('aria-pressed', String(authorMode === 'last'));
       };
-      graphBar.append(netBtn, timeBtn, firstBtn, lastBtn, hideBtn);
+      graphBar.append(netBtn, timeBtn, firstBtn, lastBtn, zoomGroup, hideBtn);
       svg = new CitationMapSvg({ onHover: id => { for (const [nid, row] of rowEls) row.classList.toggle('is-highlighted', nid === id); }, onSelect: id => { selectedId = id; if (currentStep()) currentStep()!.selectedId = id; renderDetail(); } });
-      graphPane.append(graphBar, svg.root); splitEl.append(left, detailBackdrop, detailEl, graphPane);
+      graphPane.append(graphBar, clusterBarEl, svg.root); splitEl.append(left, detailBackdrop, detailEl, graphPane);
       topEl = el('div', 'cm-top'); topEl.append(bar, crumbsEl, degradedEl, mobileTabs); view.append(topEl, splitEl); host.append(view); renderStep();
       refreshDocs();
       const explicitSeed = Boolean(startCtx?.seedDocId || startCtx?.query);
@@ -280,7 +300,7 @@ export function createCitationMapView(): ResearchViewModule {
       });
     },
     unmount() {
-      mounted = false; seedPickerOpen = false; abortPending(); rowEls.clear(); rowActions.clear(); svg = undefined;
+      mounted = false; seedPickerOpen = false; abortPending(); rowEls.clear(); rowActions.clear(); svg = undefined; seedPicker?.dispose(); seedPicker = undefined;
       if (outsideClickHandler) { document.removeEventListener('pointerdown', outsideClickHandler); outsideClickHandler = undefined; }
     },
     saveState: (): SavedState => ({ trail, selectedId, mode, authorMode, graphCollapsed, mobilePane, listScrollTop: listEl?.scrollTop ?? 0, seedDocId, seedQuery }),
@@ -298,7 +318,7 @@ export function createCitationMapView(): ResearchViewModule {
     onDocumentMutated(docId, deleted) {
       if (!deleted) { refreshDocs(); return; }
       docs = docs.filter(d => d.id !== docId); if (seedDocId === docId) seedDocId = docs[0]?.id ?? '';
-      syncSeedPill(); if (seedPickerOpen) renderSeedList();
+      syncSeedPill(); seedPicker?.refresh();
       reconcileMissing(did => did === docId);
     }
   };

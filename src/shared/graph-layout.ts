@@ -1,3 +1,4 @@
+import { detectCitationClusters, edgePairKey, type CitationCluster } from './graph-clusters.js';
 import type { GraphEdge, GraphNode, GraphPaper, PositionedGraphNode } from './types.js';
 
 export function reconstructInvertedAbstract(inv: Record<string, number[]> | null | undefined): string {
@@ -20,7 +21,6 @@ export function rankEarlierByCoCitation(candidates: GraphPaper[], seedCountMap: 
 
 const clamp = (v: number, lo: number, hi: number): number => v < lo ? lo : v > hi ? hi : v;
 const safeCite = (v?: number): number => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
-const pairKey = (a: string, b: string): string => a < b ? `${a}|${b}` : `${b}|${a}`;
 const nodeRankCmp = (a: GraphNode, b: GraphNode): number =>
   Number(Boolean(b.isSeed)) - Number(Boolean(a.isSeed)) || (b.coCitations ?? 0) - (a.coCitations ?? 0) || (b.citationCount ?? 0) - (a.citationCount ?? 0) || (a.year ?? 9999) - (b.year ?? 9999) || a.id.localeCompare(b.id);
 
@@ -63,13 +63,13 @@ export function buildCitationGraphEdges(
       if (!vId || vId === u.id) continue;
       const ck = `${u.id}->${vId}`;
       if (!citesKeys.has(ck)) {
-        citesKeys.add(ck); directPairs.add(pairKey(u.id, vId)); inMap.push(vId);
+        citesKeys.add(ck); directPairs.add(edgePairKey(u.id, vId)); inMap.push(vId);
         edges.push({ source: u.id, target: vId, kind: 'cites', weight: 1 });
       }
     }
     for (let i = 0; i < inMap.length; i++) {
       for (let j = i + 1; j < inMap.length; j++) {
-        const pk = pairKey(inMap[i], inMap[j]);
+        const pk = edgePairKey(inMap[i], inMap[j]);
         coCites.set(pk, (coCites.get(pk) ?? 0) + 1);
       }
     }
@@ -77,7 +77,7 @@ export function buildCitationGraphEdges(
   const simCandidates: { source: string; target: string; weight: number }[] = [];
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
-      const u = nodes[i], v = nodes[j], pk = pairKey(u.id, v.id);
+      const u = nodes[i], v = nodes[j], pk = edgePairKey(u.id, v.id);
       if (directPairs.has(pk)) continue;
       const ru = refSets.get(u.id), rv = refSets.get(v.id);
       let shared = 0;
@@ -126,7 +126,8 @@ export function buildCitationGraphEdges(
 }
 
 export function computeCitationMapLayout(
-  nodes: GraphNode[], edges: GraphEdge[], mode: 'timeline' | 'network', width: number, height: number
+  nodes: GraphNode[], edges: GraphEdge[], mode: 'timeline' | 'network', width: number, height: number,
+  precomputedClusters?: readonly CitationCluster[]
 ): PositionedGraphNode[] {
   if (!nodes.length) return [];
   const safeW = Math.max(160, Number.isFinite(width) ? width : 800), safeH = Math.max(160, Number.isFinite(height) ? height : 500);
@@ -136,10 +137,26 @@ export function computeCitationMapLayout(
   const spanX = maxX - minX, spanY = maxY - minY, cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const scale = Math.min(1, Math.max(5, Math.min(14, Math.sqrt((spanX * spanY) / (nodes.length * 14)))) / 14);
   const gap = Math.max(2, Math.round(4 * scale));
-  const items = nodes.map(n => ({
-    node: n, x: cx, y: cy, tx: cx, ty: cy,
-    r: Math.max(5, Math.round((n.isSeed ? 13 : 8 + Math.min(6, Math.round(Math.log10(safeCite(n.citationCount) + 1) * 1.8))) * scale))
-  }));
+  const logs = nodes.map(n => Math.log10(safeCite(n.citationCount) + 1));
+  const loLog = Math.min(...logs), hiLog = Math.max(...logs), logSpan = hiLog - loLog;
+  const clusters = mode === 'network' ? (precomputedClusters ?? detectCitationClusters(nodes, edges)) : [];
+  const nodeCluster = new Map<string, string>();
+  for (const c of clusters) for (const id of c.nodeIds) nodeCluster.set(id, c.id);
+  const clusterCenter = new Map<string, { x: number; y: number }>();
+  if (clusters.length >= 2) {
+    clusters.forEach((c, idx) => {
+      const a = (idx / clusters.length) * Math.PI * 2 - Math.PI / 2;
+      clusterCenter.set(c.id, { x: cx + Math.cos(a) * spanX * 0.3, y: cy + Math.sin(a) * spanY * 0.28 });
+    });
+  }
+  const items = nodes.map((n, idx) => {
+    const absU = clamp(logs[idx] / 4.5, 0, 1);
+    const relU = logSpan > 0.05 ? (logs[idx] - loLog) / logSpan : absU;
+    const u = 0.68 * relU + 0.32 * absU;
+    const baseR = n.isSeed ? 13 + u * 5 : 6 + u * 11;
+    const cid = nodeCluster.get(n.id);
+    return { node: n, x: cx, y: cy, tx: cx, ty: cy, r: Math.max(5, Math.min(18, Math.round(baseR * scale))), cid, anchor: cid ? clusterCenter.get(cid) : undefined };
+  });
   const idIndex = new Map(items.map((item, idx) => [item.node.id, idx]));
 
   if (mode === 'timeline') {
@@ -156,37 +173,61 @@ export function computeCitationMapLayout(
   } else {
     const order = items.map((_, idx) => idx).sort((ai, bi) => nodeRankCmp(items[ai].node, items[bi].node));
     const seeds = order.filter(i => items[i].node.isSeed), others = order.filter(i => !items[i].node.isSeed);
-    const innerR = Math.min(spanX, spanY) * 0.14;
+    const innerR = Math.min(spanX, spanY) * 0.12;
     seeds.forEach((idx, rank) => {
       const a = (rank / Math.max(1, seeds.length)) * Math.PI * 2 - Math.PI / 2;
-      items[idx].x = seeds.length === 1 ? cx : cx + Math.cos(a) * innerR;
-      items[idx].y = seeds.length === 1 ? cy : cy + Math.sin(a) * innerR;
+      const anc = items[idx].anchor;
+      items[idx].x = seeds.length === 1 ? (anc ? cx + (anc.x - cx) * 0.16 : cx) : cx + Math.cos(a) * innerR;
+      items[idx].y = seeds.length === 1 ? (anc ? cy + (anc.y - cy) * 0.16 : cy) : cy + Math.sin(a) * innerR;
     });
-    others.forEach((idx, rank) => {
-      const frac = Math.sqrt((rank + 1) / (others.length + 1)), a = rank * 2.399963229728653;
-      items[idx].x = clamp(cx + Math.cos(a) * (spanX * 0.48 * frac), minX, maxX);
-      items[idx].y = clamp(cy + Math.sin(a) * (spanY * 0.46 * frac), minY, maxY);
-    });
+    if (clusters.length >= 2) {
+      const rankByCluster = new Map<string, number>();
+      const localR = Math.min(spanX, spanY) * 0.18;
+      for (const idx of others) {
+        const cid = items[idx].cid ?? 'c0', rank = rankByCluster.get(cid) ?? 0;
+        rankByCluster.set(cid, rank + 1);
+        const anc = items[idx].anchor ?? { x: cx, y: cy };
+        const frac = Math.sqrt((rank + 1) / Math.max(2, (clusters.find(c => c.id === cid)?.count ?? 2) + 1));
+        const a = rank * 2.399963229728653;
+        items[idx].x = clamp(anc.x + Math.cos(a) * localR * frac, minX, maxX);
+        items[idx].y = clamp(anc.y + Math.sin(a) * localR * frac, minY, maxY);
+      }
+    } else {
+      others.forEach((idx, rank) => {
+        const frac = Math.sqrt((rank + 1) / (others.length + 1)), a = rank * 2.399963229728653;
+        items[idx].x = clamp(cx + Math.cos(a) * (spanX * 0.48 * frac), minX, maxX);
+        items[idx].y = clamp(cy + Math.sin(a) * (spanY * 0.46 * frac), minY, maxY);
+      });
+    }
   }
 
   const edgeSpecs = edges
     .map(e => [idIndex.get(e.source), idIndex.get(e.target), clamp(e.weight ?? (e.kind === 'cites' ? 1 : 0.6), 0.15, 1)] as const)
     .filter((p): p is readonly [number, number, number] => p[0] !== undefined && p[1] !== undefined && p[0] !== p[1]);
   const cell = Math.sqrt((spanX * spanY) / Math.max(1, items.length)), idealEdge = Math.hypot(spanX, spanY) * 0.34;
-  const sepX = Math.min(88, Math.max(34, cell * 1.1)), sepY = Math.min(46, Math.max(22, cell * 0.58));
+  const sepX = Math.min(82, Math.max(32, cell * 1.05)), sepY = Math.min(44, Math.max(20, cell * 0.56));
   const maxDriftY = Math.min(14, Math.max(8, spanY * 0.045));
-  for (let step = 0, total = mode === 'network' ? 90 : 100; step < total; step++) {
-    if (mode === 'network' && step < 40) {
+  const clustered = mode === 'network' && clusters.length >= 2;
+  for (let step = 0, total = mode === 'network' ? 110 : 100; step < total; step++) {
+    if (mode === 'network' && step < 52) {
       for (const [ai, bi, w] of edgeSpecs) {
         const a = items[ai], b = items[bi], dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy) || 1;
-        const targetDist = idealEdge * (1.2 - 0.4 * w), pull = ((dist - targetDist) / dist) * (0.005 + 0.008 * w);
+        const same = clustered && a.cid !== undefined && a.cid === b.cid;
+        const targetDist = clustered ? idealEdge * (same ? 0.48 - 0.14 * w : 1.08) : idealEdge * (1.2 - 0.4 * w);
+        const pull = ((dist - targetDist) / dist) * (clustered ? (same ? 0.015 + 0.012 * w : 0.003 + 0.003 * w) : 0.005 + 0.008 * w);
         a.x += dx * pull; a.y += dy * pull; b.x -= dx * pull; b.y -= dy * pull;
+      }
+      if (clustered) {
+        for (const item of items) {
+          if (item.node.isSeed || !item.anchor) continue;
+          item.x += (item.anchor.x - item.x) * 0.032; item.y += (item.anchor.y - item.y) * 0.032;
+        }
       }
     } else if (mode === 'timeline') {
       const xPull = step < 35 ? 0.08 : 0, yPull = step < 55 ? 0.35 : 0;
       for (const item of items) { item.x += (item.tx - item.x) * xPull; item.y += (item.ty - item.y) * yPull; }
     }
-    const labelPass = mode === 'network' && step < 65, repelPass = mode === 'network' && step < 45;
+    const labelPass = mode === 'network' && step < 72, repelPass = mode === 'network' && step < 58;
     for (let i = 0; i < items.length; i++) {
       for (let j = i + 1; j < items.length; j++) {
         const a = items[i], b = items[j];
@@ -200,12 +241,14 @@ export function computeCitationMapLayout(
           a.x -= hx * push; a.y -= uy * push * yw; b.x += hx * push; b.y += uy * push * yw;
         } else {
           if (repelPass && dist < idealEdge * 1.1) {
-            const rf = Math.min(4, (cell * cell * 0.16) / (dist * dist + 60)), ux = dx / dist, uy = dy / dist;
+            const diffCluster = clustered && a.cid !== b.cid;
+            const mult = diffCluster ? 0.28 : 0.14;
+            const rf = Math.min(diffCluster ? 5.5 : 3.5, (cell * cell * mult) / (dist * dist + 60)), ux = dx / dist, uy = dy / dist;
             a.x -= ux * rf; a.y -= uy * rf; b.x += ux * rf; b.y += uy * rf;
           }
           if (labelPass) {
             const nd = Math.hypot(dx / sepX, dy / sepY);
-            if (nd < 1) { const f = (1 - nd) * 0.22; a.x -= dx * f; a.y -= dy * f; b.x += dx * f; b.y += dy * f; }
+            if (nd < 1) { const f = (1 - nd) * 0.2; a.x -= dx * f; a.y -= dy * f; b.x += dx * f; b.y += dy * f; }
           }
         }
       }
@@ -217,5 +260,5 @@ export function computeCitationMapLayout(
       item.y = clamp(Number.isFinite(item.y) ? item.y : cy, yLo, yHi);
     }
   }
-  return items.map(({ node, x, y, r }) => ({ ...node, x: Number(x.toFixed(2)), y: Number(y.toFixed(2)), radius: r }));
+  return items.map(({ node, x, y, r, cid }) => ({ ...node, x: Number(x.toFixed(2)), y: Number(y.toFixed(2)), radius: r, ...(cid ? { clusterId: cid } : {}) }));
 }

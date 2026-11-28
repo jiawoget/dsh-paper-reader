@@ -176,7 +176,19 @@ async function run(): Promise<void> {
         if (body.op === 'graph.explore') {
           const seed = String((body.payload?.seeds as string[] | undefined)?.[0] ?? '');
           const root = seed === 'W9' ? mapAlt : mapSeed;
-          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seeds: [root], nodes: [{ ...root, isSeed: true }, mapNbr, mapFar], edges: [{ source: root.id, target: 'W2', kind: 'cites', weight: 1 }, { source: 'W2', target: 'W3', kind: 'related', weight: 0.6 }], degraded: [], fromCache: false }) });
+          const extraNodes = [
+            { id: 'W5', openAlexId: 'W5', title: 'FlashAttention-2 Hardware Tiling', authors: ['Tri Dao'], firstAuthor: 'Tri Dao', lastAuthor: 'Tri Dao', year: 2023, citationCount: 1600, source: 'openalex', topic: 'Flash Attention', inLibrary: false },
+            { id: 'W6', openAlexId: 'W6', title: 'Speculative Decoding Draft Trees', authors: ['Chen Li'], firstAuthor: 'Chen Li', lastAuthor: 'Chen Li', year: 2024, citationCount: 640, source: 'openalex', topic: 'Speculative Decoding', inLibrary: false },
+            { id: 'W7', openAlexId: 'W7', title: 'Parallel Speculative Decoding Verification', authors: ['Mina Sun'], firstAuthor: 'Mina Sun', lastAuthor: 'Mina Sun', year: 2025, citationCount: 220, source: 'openalex', topic: 'Speculative Decoding', inLibrary: false },
+            { id: 'W8', openAlexId: 'W8', title: 'Weight Quantization Kernels INT4', authors: ['Leo Wu'], firstAuthor: 'Leo Wu', lastAuthor: 'Leo Wu', year: 2024, citationCount: 380, source: 'openalex', topic: 'Weight Quantization', inLibrary: false },
+            { id: 'W10', openAlexId: 'W10', title: 'SmoothQuant Weight Quantization Scaling', authors: ['Kai Tan'], firstAuthor: 'Kai Tan', lastAuthor: 'Kai Tan', year: 2023, citationCount: 950, source: 'openalex', topic: 'Weight Quantization', inLibrary: false }
+          ];
+          const extraEdges = [
+            { source: 'W2', target: 'W5', kind: 'cites', weight: 1 }, { source: 'W6', target: 'W7', kind: 'cites', weight: 1 },
+            { source: 'W8', target: 'W10', kind: 'cites', weight: 1 }, { source: 'W5', target: 'W6', kind: 'related', weight: 0.25 },
+            { source: 'W7', target: 'W8', kind: 'related', weight: 0.2 }
+          ];
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ seeds: [root], nodes: [{ ...root, isSeed: true }, mapNbr, mapFar, ...extraNodes], edges: [{ source: root.id, target: 'W2', kind: 'cites', weight: 1 }, { source: 'W2', target: 'W3', kind: 'related', weight: 0.6 }, ...extraEdges], degraded: [], fromCache: false }) });
           return;
         }
         if (body.op === 'graph.savePaper') {
@@ -231,13 +243,37 @@ async function run(): Promise<void> {
       assert.equal(await ws.locator('.cm-seed-select').count(), 0);
       assert.match(await ws.locator('.cm-seed-title').innerText(), /PagedAttention/);
       assert.match((await ws.locator('.cm-edge[data-kind="cites"]').first().getAttribute('marker-end')) ?? '', /^url\(#cm-arrow(?:-hi)?\)$/);
-      assert.equal(await ws.locator('.cm-edge[data-kind="related"]').count(), 1);
+      assert.ok((await ws.locator('.cm-edge[data-kind="related"]').count()) >= 1);
+      assert.ok((await ws.locator('.cm-halo').count()) >= 2);
+      const chipCount = await ws.locator('.cm-cluster-chip').count();
+      assert.ok(chipCount >= 4, `expected All + >=3 cluster chips, got ${chipCount}`);
+      const chipOverflow = await ws.locator('.cm-cluster-chip').evaluateAll(els => els.filter(e => e.scrollWidth > e.clientWidth + 1).length);
+      assert.equal(chipOverflow, 0);
       await ws.locator('.cm-row[data-node-id="W1"]').hover();
       await page.waitForFunction(() => Boolean(document.querySelector('.cm-node[data-node-id="W1"].is-highlighted') && document.querySelector('.cm-node[data-node-id="W2"].is-neighbor') && document.querySelector('.cm-node[data-node-id="W3"].is-dimmed')));
       assert.equal(await ws.locator('.cm-edge[data-kind="cites"]').first().getAttribute('marker-end'), 'url(#cm-arrow-hi)');
+      await ws.locator('.cm-row[data-node-id="W3"]').hover();
+      await page.waitForFunction(() => Boolean(document.querySelector('.cm-node[data-node-id="W1"].is-seed-path') && document.querySelector('.cm-node[data-node-id="W2"].is-seed-path') && document.querySelector('.cm-edge.is-seed-path')));
+      const firstClusterChip = ws.locator('.cm-cluster-chip:not([data-cluster-id="all"])').first();
+      await firstClusterChip.click();
+      assert.equal(await firstClusterChip.getAttribute('aria-pressed'), 'true');
+      assert.ok((await ws.locator('.cm-node.is-dimmed').count()) >= 1);
+      assert.ok((await ws.locator('.cm-row:not([hidden])').count()) < 8);
+      await ws.locator('.cm-cluster-chip[data-cluster-id="all"]').click();
+      assert.equal(await ws.locator('.cm-row:not([hidden])').count(), 8);
+      await ws.locator('.cm-zoom-btn[data-zoom-act="in"]').click();
+      assert.ok(Number(await ws.locator('.cm-svg').getAttribute('data-zoom')) > 1.1);
+      await ws.locator('.cm-zoom-btn[data-zoom-act="fit"]').click();
+      assert.equal(await ws.locator('.cm-svg').getAttribute('data-zoom'), '1.00');
+      await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Timeline', exact: true }).click();
+      assert.equal(await ws.locator('.cm-cluster-bar').isVisible(), false);
+      assert.equal(await ws.locator('.cm-halo').count(), 0);
+      await ws.locator('.cm-graph-bar').getByRole('button', { name: 'Network', exact: true }).click();
       await ws.locator('.cm-seed-change').click();
       await ws.locator('.cm-seed-picker').waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.cm-seed-picker .pp-count').innerText(), /3 papers/);
       await ws.locator('.cm-seed-search').fill('Adaptive');
+      assert.match(await ws.locator('.cm-seed-picker .pp-count').innerText(), /1 of 3/);
       await ws.locator(`.cm-seed-opt[data-doc-id="${localDocId}"]`).click();
       await ws.locator('.cm-node[data-node-id="W9"]').waitFor({ state: 'visible' });
       assert.ok(resolveDocIds.includes(localDocId));

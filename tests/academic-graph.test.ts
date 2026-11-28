@@ -4,8 +4,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import {
+  computeClusterHulls, computeShortestPathToSeed, detectCitationClusters, edgePairKey, extractClusterLabel, selectBackboneEdges
+} from '../src/shared/graph-clusters.js';
 import { buildCitationGraphEdges, computeCitationMapLayout, rankEarlierByCoCitation, reconstructInvertedAbstract, timelineCitationScale } from '../src/shared/graph-layout.js';
-import type { GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
+import { filterLibraryPapers, PAPER_PICKER_VISIBLE_CAP } from '../src/reader/research/paper-picker.js';
+import type { DocumentInfo, GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from '../src/server/academic-graph.js';
 import { Library } from '../src/server/library.js';
 import { ReaderStore } from '../src/server/reader-store.js';
@@ -306,4 +310,48 @@ test('graph.savePaper mode=auto handles arXiv HTML/PDF/404-fallback, OA PDF, DOI
   assert.equal(nonArxivVerRes.mode, 'oa-html'); assert.equal(nonArxivVerRes.doc.kind, 'web');
   assert.equal(nonArxivVerRes.doc.url, 'https://arxiv.org/html/2501.00001');
   assert.deepEqual(fetched, ['https://arxiv.org/html/2501.00001']);
+});
+
+test('citation clustering, labels, shortest path to seed, backbone edges, hulls, and 500-paper picker cap', () => {
+  const mk = (id: string, title: string, citationCount: number, year: number, isSeed = false, topic?: string): GraphNode => ({
+    id, title, authors: ['A. Researcher'], firstAuthor: 'A. Researcher', lastAuthor: 'A. Researcher', year, citationCount, source: 'openalex', isSeed, topic
+  });
+  const nodes: GraphNode[] = [
+    mk('S0', 'PagedAttention KV Cache Serving', 4000, 2023, true, 'KV Cache Serving'), mk('A1', 'Paged KV Cache Block Allocation', 800, 2024, false, 'KV Cache Serving'),
+    mk('A2', 'Prefix KV Cache Sharing Pools', 420, 2024, false, 'KV Cache Serving'), mk('A3', 'Distributed KV Cache Routing', 180, 2025, false, 'KV Cache Serving'),
+    mk('B1', 'Speculative Decoding Draft Verification', 1200, 2023, false, 'Speculative Decoding'), mk('B2', 'Tree Speculative Decoding Acceleration', 520, 2024, false, 'Speculative Decoding'),
+    mk('B3', 'Medusa Speculative Decoding Heads', 900, 2024, false, 'Speculative Decoding'), mk('B4', 'Parallel Speculative Decoding Trees', 110, 2025, false, 'Speculative Decoding'),
+    mk('C1', 'Activation-Aware Weight Quantization', 2200, 2023, false, 'Weight Quantization'), mk('C2', 'SmoothQuant INT8 Weight Quantization', 1500, 2023, false, 'Weight Quantization'),
+    mk('C3', 'Sub-bit Weight Quantization Kernels', 75, 2024, false, 'Weight Quantization'), mk('C4', 'Mixed Precision Weight Quantization', 12, 2025, false, 'Weight Quantization')
+  ];
+  const edges: GraphEdge[] = [
+    { source: 'S0', target: 'A1', kind: 'cites', weight: 1 }, { source: 'A1', target: 'A2', kind: 'cites', weight: 1 }, { source: 'A2', target: 'A3', kind: 'related', weight: 0.85 },
+    { source: 'A1', target: 'A3', kind: 'related', weight: 0.7 }, { source: 'S0', target: 'B1', kind: 'cites', weight: 1 }, { source: 'B1', target: 'B2', kind: 'cites', weight: 1 },
+    { source: 'B2', target: 'B3', kind: 'related', weight: 0.9 }, { source: 'B3', target: 'B4', kind: 'related', weight: 0.8 }, { source: 'S0', target: 'C1', kind: 'cites', weight: 1 },
+    { source: 'C1', target: 'C2', kind: 'cites', weight: 1 }, { source: 'C2', target: 'C3', kind: 'related', weight: 0.85 }, { source: 'C3', target: 'C4', kind: 'related', weight: 0.75 },
+    { source: 'A3', target: 'B4', kind: 'related', weight: 0.2 }, { source: 'B4', target: 'C4', kind: 'related', weight: 0.18 }, { source: 'A1', target: 'C3', kind: 'related', weight: 0.16 }
+  ];
+  const c1 = detectCitationClusters(nodes, edges);
+  assert.deepEqual(c1, detectCitationClusters([...nodes].reverse(), [...edges].reverse()));
+  assert.ok(c1.length >= 3 && c1.length <= 5, `expected 3..5 clusters, got ${c1.length}`);
+  for (const c of c1) assert.ok(c.label.trim().split(/\s+/).length >= 1 && c.label.trim().split(/\s+/).length <= 3, `bad label: ${c.label}`);
+  assert.match(extractClusterLabel(nodes.slice(4, 8), nodes), /Speculative|Decoding/i);
+  const tiny = detectCitationClusters(nodes.slice(0, 3), edges.slice(0, 2));
+  assert.ok(tiny.length >= 1 && tiny.length <= 2);
+  const path3 = computeShortestPathToSeed(nodes, edges, 'B4');
+  assert.deepEqual([...path3.nodeIds].sort(), ['A1', 'A3', 'B4', 'S0']);
+  assert.ok(path3.edgeKeys.size === 3 && path3.edgeKeys.has(edgePairKey('S0', 'A1')) && path3.edgeKeys.has(edgePairKey('A3', 'B4')));
+  assert.deepEqual([...computeShortestPathToSeed([...nodes, mk('ISO', 'Isolated', 5, 2022)], edges, 'ISO').nodeIds], ['ISO']);
+  const backbone = selectBackboneEdges(nodes, edges);
+  assert.ok(backbone.has(edgePairKey('S0', 'A1')) && backbone.has(edgePairKey('B1', 'B2')) && !backbone.has(edgePairKey('A1', 'C3')));
+  const placed = computeCitationMapLayout(nodes, edges, 'network', 760, 480, c1), hulls = computeClusterHulls(placed, c1, 760, 480);
+  const radii = placed.filter(n => !n.isSeed).map(n => n.radius);
+  assert.ok(hulls.length >= 3 && Math.max(...radii) - Math.min(...radii) >= 6 && Math.hypot(hulls[0].cx - hulls[1].cx, hulls[0].cy - hulls[1].cy) > 120);
+  const docs: DocumentInfo[] = Array.from({ length: 520 }, (_, i) => ({
+    id: `doc-${i}`, kind: 'pdf', title: i === 412 ? 'Quantum Attention Compression' : `Serving Paper ${i}`,
+    authors: i === 412 ? 'Ada Lovelace' : `Author ${i}`, year: String(2018 + (i % 8)),
+    meta: { status: 'unread', starred: false, tags: i === 412 ? ['quantization'] : ['serving'] }
+  }));
+  const all = filterLibraryPapers(docs, ''), hit = filterLibraryPapers(docs, 'quantum quantization');
+  assert.ok(all.total === 520 && all.matched === 520 && all.items.length === PAPER_PICKER_VISIBLE_CAP && hit.matched === 1 && hit.items[0]?.id === 'doc-412');
 });
