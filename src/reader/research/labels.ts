@@ -133,5 +133,23 @@ export const researchText = {
     : kind === 'slides' ? t('Slides', '幻灯片')
     : kind === 'project' ? t('Project', '项目主页')
     : kind === 'dataset' ? t('Dataset', '数据集')
-    : t('Other', '其他')
+    : t('Other', '其他'),
+  pickerFilterPlaceholder: () => t('Filter library papers…', '筛选本地文献…'),
+  pickerFilterLabel: () => t('Filter library papers', '筛选本地文献'),
+  pickerEmpty: () => t('No matching library papers.', '未找到匹配的本地文献。'),
+  pickerCount: (shown: number, matched: number, total: number) => matched < total
+    ? (shown < matched ? t(`Showing ${shown} of ${matched} (${total} total)`, `显示 ${shown} / ${matched}（共 ${total} 篇）`) : t(`${matched} of ${total}`, `${matched} / ${total} 篇`))
+    : (shown < total ? t(`Showing ${shown} of ${total}`, `显示 ${shown} / ${total} 篇`) : t(`${total} papers`, `共 ${total} 篇`)),
+  pickerCurrentPaper: () => t('Current reading paper', '当前精读文献'),
+  pickerSearching: () => t('Searching…', '检索中…'),
+  pickerExternalHeading: () => t('External matches', '外部文献'),
+  zoomOut: () => t('Zoom out', '缩小'),
+  zoomIn: () => t('Zoom in', '放大'),
+  fitGraph: () => t('Fit', '重置'),
+  fitGraphLabel: () => t('Fit graph to view', '重置图谱视图'),
+  clustersLabel: () => t('Topic clusters', '主题聚类'),
+  seedNode: () => t('Seed', '种子'),
+  inLibraryNode: () => t('In library', '已在库'),
+  yearRampLabel: () => t('Older → Newer', '较早 → 较新'),
+  pathFocusLabel: () => t('Path to seed', '溯源路径')
 };

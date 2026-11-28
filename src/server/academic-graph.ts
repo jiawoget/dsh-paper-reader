@@ -107,7 +107,7 @@ export function parseOaWork(raw: unknown): ResolvedWork | undefined {
   const authors = arrOf(raw.authorships).map(a => isObject(a) && isObject(a.author) ? str(a.author.display_name) ?? '' : '').filter(Boolean);
   const abstract = isObject(raw.abstract_inverted_index) ? reconstructInvertedAbstract(raw.abstract_inverted_index as Record<string, number[]>) || undefined : undefined;
   return {
-    paper: makePaper({ id: oaId, openAlexId: oaId, title, authors, year: num(raw.publication_year), venue: isObject(prim.source) ? str(prim.source.display_name) : undefined, doi, arxivId, pmid: str(ids.pmid) ? /(\d+)\/?$/.exec(str(ids.pmid)!)?.[1] : undefined, abstract, citationCount: num(raw.cited_by_count), oaPdfUrl: str(oa.pdf_url), url: str(prim.landing_page_url), source: 'openalex' }),
+    paper: makePaper({ id: oaId, openAlexId: oaId, title, authors, year: num(raw.publication_year), venue: isObject(prim.source) ? str(prim.source.display_name) : undefined, doi, arxivId, pmid: str(ids.pmid) ? /(\d+)\/?$/.exec(str(ids.pmid)!)?.[1] : undefined, abstract, citationCount: num(raw.cited_by_count), oaPdfUrl: str(oa.pdf_url), url: str(prim.landing_page_url), topic: pt ? str(pt.display_name) : undefined, source: 'openalex' }),
     referencedIds: arrOf(raw.referenced_works).map(shortOaId).filter((v): v is string => Boolean(v)),
     relatedIds: arrOf(raw.related_works).map(shortOaId).filter((v): v is string => Boolean(v)), fromCache: false,
     primaryTopicId: pt ? shortTopicId(pt.id) : undefined, primaryTopicName: pt ? str(pt.display_name) : undefined,

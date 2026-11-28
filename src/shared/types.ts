@@ -59,11 +59,11 @@ export interface GraphPaper {
   id: string; title: string; authors: string[]; firstAuthor: string; lastAuthor: string;
   year?: number; venue?: string; doi?: string; arxivId?: string; pmid?: string;
   openAlexId?: string; s2Id?: string; abstract?: string; citationCount?: number;
-  oaPdfUrl?: string; url?: string; source: GraphSource; inLibrary?: boolean; docId?: string; score?: number;
+  oaPdfUrl?: string; url?: string; topic?: string; source: GraphSource; inLibrary?: boolean; docId?: string; score?: number;
 }
 export interface GraphNode extends GraphPaper { isSeed?: boolean; direction?: GraphDirection | 'seed'; coCitations?: number }
 export interface GraphEdge { source: string; target: string; kind: 'cites' | 'related'; weight?: number }
-export interface PositionedGraphNode extends GraphNode { x: number; y: number; radius: number }
+export interface PositionedGraphNode extends GraphNode { x: number; y: number; radius: number; clusterId?: string }
 export interface GraphExploreResult { seeds: GraphPaper[]; nodes: GraphNode[]; edges: GraphEdge[]; degraded: string[]; fromCache: boolean }
 export interface DocumentInfo extends DocMetadata {
   id: string;
