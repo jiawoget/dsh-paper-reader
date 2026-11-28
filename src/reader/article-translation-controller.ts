@@ -134,15 +134,15 @@ export class ArticleTranslationController {
   private clearStandby(): void { if (this.standby) { this.standby.cleanup(); this.standby = undefined; } }
   private renderStandbyBar(): void {
     const s = this.standby; if (!s) return;
-    const all = this.translatable(s.doc, s.view), done = s.force && s.completed ? s.completed.size : all.filter(b => Boolean(b.translation)).length;
-    if (!all.length || (!s.force && done >= all.length)) { this.clearStandby(); this.hideBar(); return; }
+    const all = this.translatable(s.doc, s.view), done = s.force ? (s.completed?.size ?? 0) : all.filter(b => Boolean(b.translation)).length;
+    if (!all.length || done >= all.length) { this.clearStandby(); this.hideBar(); return; }
     const visibleMissing = this.visibleBatch(all, s.force ? { force: true, translated: s.completed } : undefined).length;
     const text = s.mode === 'stopped' ? researchText.pausedProgress(done, all.length) : done === 0 ? researchText.longSectionPrompt(all.length) : visibleMissing > 0 ? researchText.longSectionProgress(done, all.length) : researchText.screenTranslated(done, all.length);
     this.showBar(s.mode, text, done / all.length, () => {
       const toggle = mkBtn('btn article-scroll-toggle', researchText.autoTranslateScroll(), () => this.setAutoOnScroll(!this.autoOnScroll));
       toggle.setAttribute('aria-pressed', String(this.autoOnScroll));
       return [
-        ...(visibleMissing > 0 ? [mkBtn('btn primary', researchText.translateScreen(), () => { void this.translateViewport(); })] : []),
+        ...(visibleMissing > 0 ? [mkBtn('btn primary', researchText.translateScreen(), () => { void this.translateViewport(undefined, s.force ? { force: true, done: s.completed } : undefined); })] : []),
         s.mode === 'stopped' ? mkBtn(visibleMissing === 0 ? 'btn primary' : 'btn', researchText.resumeTranslation(), () => { void this.start(s.force, s.completed); }) : mkBtn('btn', researchText.translateAll(), () => { void this.start(false); }),
         toggle
       ];
@@ -151,8 +151,8 @@ export class ArticleTranslationController {
   private enterStandby(doc: DocumentInfo, page: number, target: string, view: PageView, mode: 'prompt' | 'stopped', force: boolean, completed?: Set<string>): void {
     if (!this.matches(doc.id, page, target, view)) return;
     this.clearStandby();
-    const all = this.translatable(doc, view);
-    if (!all.length || (!force && all.every(b => Boolean(b.translation)))) { this.hideBar(); return; }
+    const all = this.translatable(doc, view), done = force ? (completed?.size ?? 0) : all.filter(b => Boolean(b.translation)).length;
+    if (!all.length || done >= all.length) { this.hideBar(); return; }
     let scrollTimer = 0, cleanup = () => {};
     if (typeof document !== 'undefined') {
       const scroller = byId('paperScroll'), translated = byId('translated');
@@ -161,7 +161,7 @@ export class ArticleTranslationController {
         if (e.defaultPrevented || e.button !== 0 || this.activeRun) return;
         const sel = window.getSelection(); if (sel && !sel.isCollapsed && sel.toString().trim()) return;
         const row = (e.target instanceof Element ? e.target : e.target instanceof Node ? e.target.parentElement : null)?.closest<HTMLElement>('[data-anchor].is-untranslated');
-        if (row?.dataset.anchor && translated.contains(row)) void this.translateViewport(row.dataset.anchor);
+        if (row?.dataset.anchor && translated.contains(row)) void this.translateViewport(row.dataset.anchor, force ? { force: true, done: completed } : undefined);
       };
       translated.classList.add('can-click-translate'); scroller.addEventListener('scroll', onScroll, { passive: true }); translated.addEventListener('click', onClick);
       cleanup = () => { scroller.removeEventListener('scroll', onScroll); translated.removeEventListener('click', onClick); translated.classList.remove('can-click-translate'); clearTimeout(scrollTimer); scrollTimer = 0; };
@@ -169,19 +169,15 @@ export class ArticleTranslationController {
     this.standby = { key: `${doc.id}:${page}:${target}`, doc, page, target, view, mode, force, completed, cleanup };
     this.renderStandbyBar();
   }
+  private triggerScrollBurst(): void {
+    const s = this.standby; if (!s || this.activeRun) return;
+    if (!this.matches(s.doc.id, s.page, s.target, s.view)) { this.clearStandby(); this.hideBar(); return; }
+    if (this.autoOnScroll && this.visibleBatch(this.translatable(s.doc, s.view), s.force ? { force: true, translated: s.completed } : undefined).length) void this.translateViewport(undefined, s.force ? { force: true, done: s.completed } : undefined);
+    else this.renderStandbyBar();
+  }
   getAutoOnScroll(): boolean { return this.autoOnScroll; }
-  setAutoOnScroll(on: boolean): void {
-    if (this.autoOnScroll === on) return;
-    this.autoOnScroll = on;
-    if (!this.standby || this.activeRun) return;
-    if (on && this.visibleBatch(this.translatable(this.standby.doc, this.standby.view)).length) void this.translateViewport(); else this.renderStandbyBar();
-  }
-  handleScroll(): void {
-    if (!this.standby || this.activeRun) return;
-    const { doc, page, target, view } = this.standby;
-    if (!this.matches(doc.id, page, target, view)) { this.clearStandby(); this.hideBar(); return; }
-    if (this.autoOnScroll && this.visibleBatch(this.translatable(doc, view)).length) void this.translateViewport(); else this.renderStandbyBar();
-  }
+  setAutoOnScroll(on: boolean): void { if (this.autoOnScroll !== on) { this.autoOnScroll = on; this.triggerScrollBurst(); } }
+  handleScroll(): void { this.triggerScrollBurst(); }
   abort(): void {
     this.runId++; if (this.raf) { this.cancelSchedule(this.raf); this.raf = 0; }
     this.clearStandby();
@@ -197,22 +193,24 @@ export class ArticleTranslationController {
     if (!all.length || all.every(b => b.translation)) { this.abort(); return; }
     if (!canTranslateDocument(settings, target)) { this.abort(); this.showUnavailable(settings, target); return; }
     if (this.activeRun?.key === key || (this.standby?.key === key && this.standby.view === view)) return;
-    if (this.raf) this.cancelSchedule(this.raf);
+    this.abort();
     const isLong = isLongTranslationScope(all);
     this.raf = this.schedule(() => { this.raf = 0; if (isLong) this.enterStandby(doc, page, target, view, 'prompt', false); else void this.start(false); });
   }
-  async translateViewport(anchorId?: string): Promise<void> { await this.runBatches('viewport', { anchorId }); }
+  async translateViewport(anchorId?: string, opts?: { force?: boolean; done?: Set<string> }): Promise<void> { await this.runBatches('viewport', { anchorId, ...opts }); }
   async start(force = false, done?: Set<string>): Promise<void> { await this.runBatches('all', { force, done }); }
   private async runBatches(mode: 'all' | 'viewport', opts: { force?: boolean; done?: Set<string>; anchorId?: string }): Promise<void> {
     const ctx = this.context(); if (!ctx) return;
-    const { doc, page, settings, target, view, key } = ctx, force = Boolean(opts.force);
+    const { doc, page, settings, target, view, key } = ctx;
+    const inherit = mode === 'viewport' && opts.force === undefined && this.standby?.key === key && this.standby.view === view && this.standby.force;
+    const force = Boolean(inherit ? true : opts.force), doneOpt = inherit ? this.standby?.completed : opts.done;
     if (!canTranslateDocument(settings, target)) { this.abort(); this.showUnavailable(settings, target); return; }
     const all = this.translatable(doc, view);
-    let firstBatch = mode === 'viewport' ? this.visibleBatch(all, opts.anchorId ? { anchorId: opts.anchorId } : undefined) : undefined;
-    if (mode === 'viewport' && !firstBatch?.length) { if (this.standby) this.renderStandbyBar(); else if (isLongTranslationScope(all)) this.enterStandby(doc, page, target, view, 'prompt', false); return; }
+    let firstBatch = mode === 'viewport' ? this.visibleBatch(all, { ...(opts.anchorId ? { anchorId: opts.anchorId } : {}), ...(force ? { force: true, translated: doneOpt } : {}) }) : undefined;
+    if (mode === 'viewport' && !firstBatch?.length) { if (this.standby) this.renderStandbyBar(); else if (isLongTranslationScope(all)) this.enterStandby(doc, page, target, view, force ? 'stopped' : 'prompt', force, force ? doneOpt : undefined); return; }
     this.abort();
-    const completed = opts.done ? new Set(opts.done) : new Set<string>(force ? [] : all.filter(b => b.translation).map(b => b.id));
-    if (!all.length || (!force && completed.size >= all.length)) return;
+    const completed = doneOpt ? new Set(doneOpt) : new Set<string>(force ? [] : all.filter(b => b.translation).map(b => b.id));
+    if (!all.length || completed.size >= all.length) return;
     const runId = ++this.runId; let inFlight: string[] = [], scrollTimer = 0;
     const run = { key, ctrl: new AbortController(), paused: false, reprioritizing: false, cleanup: () => {} };
     const active = () => this.runId === runId && this.matches(doc.id, page, target, view);
@@ -250,19 +248,19 @@ export class ArticleTranslationController {
       }
       if (active()) {
         view.setPendingBlocks?.(new Set()); if (this.activeRun === run) this.activeRun = undefined;
-        if (mode === 'viewport' && !all.every(b => Boolean(b.translation))) this.enterStandby(doc, page, target, view, 'prompt', false); else this.hideBar();
+        if (mode === 'viewport' && completed.size < all.length) this.enterStandby(doc, page, target, view, force ? 'stopped' : 'prompt', force, force ? completed : undefined); else this.hideBar();
       }
     } catch (error) {
       if (!active()) return;
       view.setPendingBlocks?.(new Set()); if (this.activeRun === run) this.activeRun = undefined;
       if (run.ctrl.signal.aborted || isAbortError(error)) {
         if (run.paused && (mode === 'viewport' || completed.size < all.length)) {
-          if (mode === 'viewport') this.enterStandby(doc, page, target, view, 'prompt', false);
+          if (mode === 'viewport') this.enterStandby(doc, page, target, view, force ? 'stopped' : 'prompt', force, force ? completed : undefined);
           else if (isLongTranslationScope(all)) this.enterStandby(doc, page, target, view, 'stopped', force, completed);
           else this.showBar('stopped', researchText.pausedProgress(completed.size, all.length), completed.size / all.length, () => [mkBtn('btn primary', researchText.resumeTranslation(), () => { void this.start(force, completed); })], { done: completed.size, total: all.length });
         } else this.hideBar();
       } else this.showBar('error', message(error), completed.size / all.length,
-        () => [mkBtn('btn primary', label('Retry', '重试'), () => { void (mode === 'viewport' ? this.translateViewport(opts.anchorId) : this.start(force, completed)); }), mkBtn('btn', label('Connections', '连接设置'), () => this.host.openSettings())], { done: completed.size, total: all.length });
+        () => [mkBtn('btn primary', label('Retry', '重试'), () => { void (mode === 'viewport' ? this.translateViewport(opts.anchorId, force ? { force: true, done: completed } : undefined) : this.start(force, completed)); }), mkBtn('btn', label('Connections', '连接设置'), () => this.host.openSettings())], { done: completed.size, total: all.length });
     } finally {
       run.cleanup(); if (this.activeRun === run) this.activeRun = undefined;
       if (this.runId === runId && !active()) { if (this.host.view() === view) view.setPendingBlocks?.(new Set()); this.hideBar(); }

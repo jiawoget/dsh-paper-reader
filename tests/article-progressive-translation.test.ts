@@ -104,52 +104,43 @@ test('ArticleTranslationController gates long sections, runs single viewport bur
   };
 
   const skipIds = ['c-1', 't-1', 'e-1', 'i-1'];
-  const shortLayout: DocumentInfo['articleLayout'] = { 'c-1': { kind: 'pre' }, 't-1': { kind: 'table' }, 'e-1': { kind: 'equation' }, 'i-1': { kind: 'image' }, ...Object.fromEntries(Array.from({ length: 22 }, (_, i) => [`x-${i}`, { kind: 'pre' as const }])) };
-  const shortH = mkHarness([...mkBlocks(6, 40), ...skipIds.map(id => ({ id, text: 'skip' })), ...Array.from({ length: 22 }, (_, i) => ({ id: `x-${i}`, text: 'code' }))], shortLayout, 'short');
+  const skipLayout: DocumentInfo['articleLayout'] = { 'c-1': { kind: 'pre' }, 't-1': { kind: 'table' }, 'e-1': { kind: 'equation' }, 'i-1': { kind: 'image' } };
+  const shortH = mkHarness([...mkBlocks(6, 40), ...skipIds.map(id => ({ id, text: 'skip' })), ...Array.from({ length: 22 }, (_, i) => ({ id: `x-${i}`, text: 'code' }))], { ...skipLayout, ...Object.fromEntries(Array.from({ length: 22 }, (_, i) => [`x-${i}`, { kind: 'pre' as const }])) }, 'short');
   shortH.ctrl.sync(); await flush();
-  assert.deepEqual(shortH.calls.flat(), ['p-1', 'p-2', 'p-3', 'p-4', 'p-5', 'p-6']);
-  assert.equal(shortH.states.at(-1)?.state, 'hidden');
+  assert.deepEqual(shortH.calls.flat(), ['p-1', 'p-2', 'p-3', 'p-4', 'p-5', 'p-6']); assert.equal(shortH.states.at(-1)?.state, 'hidden');
 
   const longBlocks: ReaderBlock[] = [...mkBlocks(30, 60), ...skipIds.map(id => ({ id, text: 'skip' }))];
-  const h = mkHarness(longBlocks, { 'c-1': { kind: 'pre' }, 't-1': { kind: 'table' }, 'e-1': { kind: 'equation' }, 'i-1': { kind: 'image' } }, 'long-1');
+  const h = mkHarness(longBlocks, skipLayout, 'long-1');
   h.ctrl.sync(); await flush();
-  assert.equal(h.calls.length, 0);
+  assert.equal(h.calls.length, 0); assert.equal(h.ctrl.getAutoOnScroll(), false);
   assert.deepEqual(h.states.at(-1), { state: 'prompt', done: 0, total: 30, visibleMissing: 6 });
-  assert.equal(h.ctrl.getAutoOnScroll(), false);
-
   await h.ctrl.translateViewport();
-  assert.equal(h.calls.length, 1);
-  assert.deepEqual(h.calls[0], ['p-1', 'p-2', 'p-3', 'p-4', 'p-5', 'p-6']);
-  assert.deepEqual(h.states.at(-1), { state: 'prompt', done: 6, total: 30, visibleMissing: 0 });
-  assert.equal(longBlocks[20].translation, undefined);
-
+  assert.equal(h.calls.length, 1); assert.deepEqual(h.calls[0], ['p-1', 'p-2', 'p-3', 'p-4', 'p-5', 'p-6']);
+  assert.deepEqual(h.states.at(-1), { state: 'prompt', done: 6, total: 30, visibleMissing: 0 }); assert.equal(longBlocks[20].translation, undefined);
   h.setVp(1500, 1920); h.ctrl.handleScroll(); await flush();
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.states.at(-1)?.visibleMissing, 8);
-
+  assert.equal(h.calls.length, 1); assert.equal(h.states.at(-1)?.visibleMissing, 8);
   h.ctrl.setAutoOnScroll(true); await flush();
-  assert.equal(h.calls.length, 2);
-  assert.equal(h.calls[1].length, 8);
-  h.ctrl.handleScroll(); await flush();
-  assert.equal(h.calls.length, 2);
-
+  assert.equal(h.calls.length, 2); assert.equal(h.calls[1].length, 8);
+  h.ctrl.handleScroll(); await flush(); assert.equal(h.calls.length, 2);
   h.setDoc('long-2'); h.ctrl.sync(); await flush();
-  assert.equal(h.ctrl.getAutoOnScroll(), false);
-  assert.equal(h.calls.length, 2);
+  assert.equal(h.ctrl.getAutoOnScroll(), false); assert.equal(h.calls.length, 2);
 
-  let batchNum = 0;
-  h.setOnCall(async (ids, signal) => {
-    if (++batchNum === 2) { h.ctrl.stop(); assert.equal(signal.aborted, true); throw new DOMException('Aborted', 'AbortError'); }
-    return Object.fromEntries(ids.map(id => [id, `译:${id}`]));
-  });
-  await h.ctrl.start(false);
+  const stopOnSecond = (prefix: string) => { let n = 0; return async (ids: string[], signal: AbortSignal) => { if (++n === 2) { h.ctrl.stop(); assert.equal(signal.aborted, true); throw new DOMException('Aborted', 'AbortError'); } return Object.fromEntries(ids.map(id => [id, `${prefix}:${id}`])); }; };
+  h.setOnCall(stopOnSecond('译')); await h.ctrl.start(false);
   assert.equal(h.states.at(-1)?.state, 'stopped');
-  const doneAfterStop = longBlocks.slice(0, 30).filter(b => b.translation).length;
-  assert.ok(doneAfterStop > 14 && doneAfterStop < 30);
-
-  h.setOnCall(undefined);
-  await h.ctrl.start(false);
-  assert.equal(h.states.at(-1)?.state, 'hidden');
-  assert.equal(longBlocks.slice(0, 30).every(b => Boolean(b.translation)), true);
+  const doneAfterStop = longBlocks.slice(0, 30).filter(b => b.translation).length; assert.ok(doneAfterStop > 14 && doneAfterStop < 30);
+  h.setOnCall(undefined); await h.ctrl.start(false);
+  assert.equal(h.states.at(-1)?.state, 'hidden'); assert.equal(longBlocks.slice(0, 30).every(b => Boolean(b.translation)), true);
   assert.equal(h.calls.flat().some(id => skipIds.includes(id)), false);
+
+  h.setVp(0, 320); h.setOnCall(stopOnSecond('新')); await h.ctrl.start(true);
+  assert.deepEqual(h.states.at(-1), { state: 'stopped', done: 4, total: 30, visibleMissing: 1 });
+  h.setOnCall(async ids => Object.fromEntries(ids.map(id => [id, `新:${id}`])));
+  h.setVp(400, 1180); await h.ctrl.translateViewport();
+  assert.deepEqual(h.calls.at(-1), Array.from({ length: 10 }, (_, i) => `p-${i + 5}`));
+  assert.deepEqual(h.states.at(-1), { state: 'stopped', done: 14, total: 30, visibleMissing: 0 });
+  h.setVp(1400, 2180); h.ctrl.setAutoOnScroll(true); await flush();
+  assert.deepEqual(h.states.at(-1), { state: 'stopped', done: 24, total: 30, visibleMissing: 0 });
+  h.ctrl.setAutoOnScroll(false); h.setVp(2400, 3200); await h.ctrl.translateViewport();
+  assert.equal(h.states.at(-1)?.state, 'hidden'); assert.equal(longBlocks.slice(0, 30).every(b => b.translation === `新:${b.id}`), true);
 });
