@@ -32,6 +32,10 @@ function externalLink(cls: string, href: string, title: string): HTMLAnchorEleme
   return link;
 }
 
+function isSlideDoc(doc: DocumentInfo): boolean {
+  return /\.pptx?$/i.test(doc.title) || Boolean(doc.book?.sections.some(s => s.chapterId === 'slides'));
+}
+
 export function mountDocResourcesPanel(container: HTMLElement, opts: DocResourcesPanelOptions): void {
   const token = String(++mountSeq);
   container.dataset.resSeq = token;
@@ -95,7 +99,7 @@ export function mountDocResourcesPanel(container: HTMLElement, opts: DocResource
     if (mode === 'doc') {
       syncDocOptions();
       const chosen = docs.find(d => d.id === docSel.value);
-      kindSel.value = chosen && /\.pptx?$/i.test(chosen.title) ? 'slides' : 'other';
+      kindSel.value = chosen && isSlideDoc(chosen) ? 'slides' : 'other';
     } else {
       kindSel.value = urlIn.value.trim() ? classifyResourceKind(urlIn.value.trim(), titleIn.value.trim()) : 'code';
     }
@@ -218,9 +222,9 @@ export function mountDocResourcesPanel(container: HTMLElement, opts: DocResource
   docSel.addEventListener('change', () => {
     if (kindTouched) return;
     const chosen = docs.find(d => d.id === docSel.value);
-    if (chosen) kindSel.value = /\.pptx?$/i.test(chosen.title) ? 'slides' : 'other';
+    if (chosen) kindSel.value = isSlideDoc(chosen) ? 'slides' : 'other';
   });
-  form.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeForm(true); } });
+  form.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); closeForm(true); } });
   form.addEventListener('submit', async e => {
     e.preventDefault();
     if (busy) return;

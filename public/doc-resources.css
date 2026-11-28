@@ -52,7 +52,7 @@
 .doc-res-sug-info svg { flex: none; color: var(--muted); }
 .doc-res-sug-link {
   color: var(--desk-ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  min-width: 0; display: inline-flex; align-items: center; min-height: 24px;
+  min-width: 0; display: block; line-height: 24px;
 }
 .doc-res-sug-link:hover { color: var(--purple); text-decoration: underline; }
 .doc-res-sug-actions { display: inline-flex; align-items: center; gap: 4px; flex: none; }
@@ -79,6 +79,7 @@
 .doc-res-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 @media (pointer: coarse), (max-width: 700px) {
   .doc-res :is(button, a[href], input, select) { min-height: 44px; min-width: 44px; }
+  .doc-res-sug-link { line-height: 44px; }
   .doc-res-chip-del { opacity: 1; }
   .doc-res-sug-row { flex-wrap: wrap; }
   .doc-res-form-row { grid-template-columns: minmax(0, 1fr); }

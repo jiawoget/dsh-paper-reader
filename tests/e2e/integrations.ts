@@ -374,10 +374,18 @@ async function linkedResources({ context, host, pane }: ReaderSession): Promise<
     title: 'KV Study', url: 'https://example.com/kv-study',
     paragraphs: ['Dataset at https://huggingface.co/datasets/demo/kv-bench and talk https://youtu.be/demoTalk123 in this study.']
   })).doc as { id: string; title: string };
-  const companion = (await post('web.import', {
-    title: 'Deck Slides.pptx', url: 'https://example.com/deck-slides',
-    paragraphs: ['Slide overview of block allocation.']
-  })).doc as { id: string; title: string };
+  const slideXml = Buffer.from(
+    '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+    + '<p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Deck Slides</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+  );
+  const entryName = Buffer.from('ppt/slides/slide1.xml'), lfh = Buffer.alloc(30), cd = Buffer.alloc(46), eocd = Buffer.alloc(22);
+  lfh.writeUInt32LE(0x04034b50, 0); lfh.writeUInt16LE(20, 4); lfh.writeUInt32LE(slideXml.length, 18); lfh.writeUInt32LE(slideXml.length, 22); lfh.writeUInt16LE(entryName.length, 26);
+  cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt32LE(slideXml.length, 20); cd.writeUInt32LE(slideXml.length, 24); cd.writeUInt16LE(entryName.length, 28);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10); eocd.writeUInt32LE(cd.length + entryName.length, 12); eocd.writeUInt32LE(lfh.length + entryName.length + slideXml.length, 16);
+  const pptxRes = await context.request.post(host.origin + '/api/paper-reader/import-file?filename=deck.pptx', { data: Buffer.concat([lfh, entryName, slideXml, cd, entryName, eocd]) });
+  assert.ok(pptxRes.ok());
+  const companion = (await pptxRes.json()).doc as { id: string; title: string };
+  assert.equal(companion.title, 'Deck Slides');
   await post('doc.resources.discover', { docId: paper.id });
 
   await pane.getByRole('button', { name: 'Open library' }).click();
@@ -390,6 +398,7 @@ async function linkedResources({ context, host, pane }: ReaderSession): Promise<
   const panel = pane.locator('.doc-res');
   await panel.locator('.doc-res-dot').waitFor({ state: 'visible' });
   assert.equal(await panel.locator('.doc-res-sug-row').count(), 2);
+  assert.equal(await panel.locator('.doc-res-sug-link').first().evaluate(node => getComputedStyle(node).display), 'block');
 
   await panel.getByRole('button', { name: '+ Add link' }).click();
   await panel.locator('.doc-res-url').fill('javascript:alert(1)');
