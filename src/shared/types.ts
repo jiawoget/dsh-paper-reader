@@ -217,6 +217,7 @@ export interface Operations {
   'topics.save': [{ id?: string; name: string; tag?: string; zoteroCollection?: string; description?: string }, { topic: TopicRecord }];
   'topics.delete': [{ id: string }, { id: string; deleted: boolean }];
   'graph.resolve': [{ query?: string; docId?: string }, { paper: GraphPaper | null; degraded: string[]; fromCache: boolean }];
+  'graph.search': [{ query: string; limit?: number }, { papers: GraphPaper[]; degraded: string[] }];
   'graph.explore': [{ seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, GraphExploreResult];
   'graph.savePaper': [{ paper: GraphPaper; mode?: SavePaperMode; arxivFormat?: ArxivFormat; topicTag?: string }, SaveGraphPaperResult];
   'trends.query': [TrendQueryInput, TrendQueryResult];

@@ -191,6 +191,7 @@ export interface ServiceResults {
   'topics.save': Operations['topics.save'][1];
   'topics.delete': Operations['topics.delete'][1];
   'graph.resolve': Operations['graph.resolve'][1];
+  'graph.search': Operations['graph.search'][1];
   'graph.explore': Operations['graph.explore'][1];
   'graph.savePaper': Operations['graph.savePaper'][1];
   'trends.query': Operations['trends.query'][1];

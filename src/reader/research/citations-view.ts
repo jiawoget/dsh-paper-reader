@@ -1,6 +1,7 @@
-import type { CitationAnalyzeInput, CitationDirection, CitationReport, CitationStance, CitationStatement } from '../../shared/citation-stance-types.js';
-import type { DocumentInfo, GraphPaper, GraphSource } from '../../shared/types.js';
+import type { CitationDirection, CitationReport, CitationStance, CitationStatement } from '../../shared/citation-stance-types.js';
+import type { DocumentInfo } from '../../shared/types.js';
 import { api, el, message, readerLabel as t, safeWeb, toast } from '../ui.js';
+import { citationAnalyzePayload, citationTargetTitle, CitationsWorkbench, emptyCitationTarget, hasCitationTarget, statementToGraphPaper, type CitationsTarget } from './citations-workbench.js';
 import { researchText, researchViewName } from './labels.js';
 import { formatDegradedSources, isAbortError, mkBtn, renderPaperActions, saveGraphPaper } from './paper-intake.js';
 import { STANCE_ITEMS, stanceBadge, stanceText } from './reference-citations.js';
@@ -9,19 +10,16 @@ import type { ResearchShellContext, ResearchViewModule } from './state.js';
 type SourceFilter = 'all' | 'local' | 'external';
 type YearFilter = 'all' | '2y' | '5y';
 type SortMode = 'local' | 'newest' | 'influential' | 'contrasting';
-interface CitTarget { docId: string; doi: string; arxivId: string; query: string }
 interface CitFilters { section: string; source: SourceFilter; excludeSelf: boolean; yearRange: YearFilter; search: string; sort: SortMode }
 interface SavedCitationsState {
   report: CitationReport | null; otherCount: number | null; direction: CitationDirection;
-  target: CitTarget; filters: CitFilters; stances: CitationStance[]; expanded: string[]; listScrollTop: number;
+  target: CitationsTarget; filters: CitFilters; stances: CitationStance[]; expanded: string[]; listScrollTop: number;
 }
 
 const SECTIONS = ['Introduction', 'Methods', 'Results', 'Discussion', 'Unknown'] as const, SNIPPET_CAP = 220;
 const STANCE_PRIO: Record<CitationStance, number> = { contrasting: 0, extending: 1, supporting: 2, mentioning: 3, unclassified: 4 };
 const SOURCE_LABEL: Record<CitationStatement['source'], () => string> = { local: () => t('★ Local', '★ 本地反引'), s2: () => 'Semantic Scholar', europepmc: () => 'Europe PMC', openalex: () => 'OpenAlex' };
 const isStance = (v?: string): v is CitationStance => STANCE_ITEMS.some(x => x.key === v);
-const shortLabel = (s: string) => s.length > 44 ? s.slice(0, 43) + '…' : s;
-const normTitle = (s?: string) => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const formatAuthors = (a: readonly string[]) => a.length > 4 ? `${a.slice(0, 4).join(', ')} et al.` : a.join(', ');
 const emptyTallies = () => ({ citingPapers: 0, citationStatements: 0, supporting: 0, extending: 0, contrasting: 0, mentioning: 0, unclassified: 0, localBackCitations: 0 });
 const defaultFilters = (): CitFilters => ({ section: '', source: 'all', excludeSelf: false, yearRange: 'all', search: '', sort: 'local' });
@@ -30,11 +28,11 @@ const mkSelect = (cls: string, opts: readonly (readonly [string, string])[], onC
 export function createCitationsView(): ResearchViewModule {
   let mounted = false, restored = false, reqSeq = 0, ctrl: AbortController | null = null, shell: ResearchShellContext | undefined;
   let docs: DocumentInfo[] = [], report: CitationReport | null = null, otherCount: number | null = null, preselectedStance: CitationStance | null = null;
-  let direction: CitationDirection = 'cited_by', mobileFiltersOpen = false;
-  let target: CitTarget = { docId: '', doi: '', arxivId: '', query: '' }, filters: CitFilters = defaultFilters();
+  let direction: CitationDirection = 'cited_by', mobileFiltersOpen = false, targetTitleHint = '';
+  let target: CitationsTarget = emptyCitationTarget(), filters: CitFilters = defaultFilters();
   const stanceFilter = new Set<CitationStance>(), expandedKeys = new Set<string>(), savedMap = new Map<string, string>(), savingKeys = new Set<string>();
   const tallyBtns = new Map<CitationStance, { btn: HTMLButtonElement; count: HTMLElement }>(), facetChecks = new Map<CitationStance, { input: HTMLInputElement; count: HTMLElement }>();
-  let viewEl: HTMLElement | undefined, titleEl: HTMLElement | undefined, bylineEl: HTMLElement | undefined, docSelect: HTMLSelectElement | undefined;
+  let viewEl: HTMLElement | undefined, titleEl: HTMLElement | undefined, bylineEl: HTMLElement | undefined, workbench: CitationsWorkbench | undefined;
   let refreshBtn: HTMLButtonElement | undefined, sciteLink: HTMLAnchorElement | undefined, mobileFiltersBtn: HTMLButtonElement | undefined;
   let papersUnitEl: HTMLElement | undefined, stmtsUnitEl: HTMLElement | undefined, citedByBtn: HTMLButtonElement | undefined, refsBtn: HTMLButtonElement | undefined;
   let bannerEl: HTMLElement | undefined, distBarEl: HTMLElement | undefined, facetsBackdrop: HTMLElement | undefined;
@@ -46,21 +44,7 @@ export function createCitationsView(): ResearchViewModule {
   const beginRequest = () => { abortPending(); ctrl = new AbortController(); return { seq: reqSeq, signal: ctrl.signal }; };
   const activeFacetCount = () => stanceFilter.size + (filters.section ? 1 : 0) + (filters.source !== 'all' ? 1 : 0) + (filters.excludeSelf ? 1 : 0) + (filters.yearRange !== 'all' ? 1 : 0);
   const hasFilters = () => activeFacetCount() > 0 || Boolean(filters.search.trim());
-  const matchLocalDoc = (s: CitationStatement): string | undefined => {
-    if (s.citingDocId && docs.some(d => d.id === s.citingDocId)) return s.citingDocId;
-    const saved = savedMap.get(s.citingKey); if (saved && docs.some(d => d.id === saved)) return saved;
-    const doi = s.citingDoi?.toLowerCase(), ax = s.citingArxiv?.toLowerCase(), nt = normTitle(s.citingTitle);
-    return docs.find(d => (doi && d.doi?.toLowerCase().includes(doi)) || (ax && (d.url?.toLowerCase().includes(ax) || d.doi?.toLowerCase().includes(ax))) || (nt.length >= 16 && normTitle(d.paperTitle || d.title) === nt))?.id;
-  };
-  const toGraphPaper = (s: CitationStatement): GraphPaper => {
-    const localId = matchLocalDoc(s), src: GraphSource = s.source === 's2' ? 's2' : s.source === 'europepmc' ? 'europepmc' : 'openalex';
-    return {
-      id: s.citingKey, title: s.citingTitle, authors: s.citingAuthors, firstAuthor: s.citingAuthors[0] ?? '', lastAuthor: s.citingAuthors.at(-1) ?? '',
-      ...(s.citingYear ? { year: s.citingYear } : {}), ...(s.citingDoi ? { doi: s.citingDoi } : {}), ...(s.citingArxiv ? { arxivId: s.citingArxiv } : {}),
-      ...(s.citingUrl ? { url: s.citingUrl } : {}), ...(s.citingArxiv ? { oaPdfUrl: `https://arxiv.org/pdf/${s.citingArxiv}.pdf` } : {}),
-      source: src, inLibrary: Boolean(localId), ...(localId ? { docId: localId } : {})
-    };
-  };
+  const toGraphPaper = (s: CitationStatement) => statementToGraphPaper(s, docs, savedMap);
   const matchesFilters = (s: CitationStatement): boolean => {
     if ((stanceFilter.size > 0 && !stanceFilter.has(s.stance)) || (filters.section && s.section !== filters.section)) return false;
     if ((filters.source === 'local' && s.source !== 'local') || (filters.source === 'external' && s.source === 'local') || (filters.excludeSelf && s.isSelfCitation)) return false;
@@ -90,12 +74,14 @@ export function createCitationsView(): ResearchViewModule {
     if (selfCheck) selfCheck.checked = filters.excludeSelf; if (yearSelect) yearSelect.value = filters.yearRange;
     if (clearBtn) clearBtn.hidden = !hasFilters(); syncMobileFilters();
   };
+  const currentTargetTitle = () => citationTargetTitle(target, report, docs, targetTitleHint);
   const syncHeader = () => {
     const tgt = report?.target, doc = target.docId ? docs.find(d => d.id === target.docId) : undefined;
-    if (titleEl) titleEl.textContent = tgt?.title || doc?.paperTitle || doc?.title || target.query || target.doi || (target.arxivId ? `arXiv:${target.arxivId}` : '') || researchViewName('citations');
+    if (titleEl) titleEl.textContent = currentTargetTitle() || researchViewName('citations');
     const meta = [tgt?.authors.length ? formatAuthors(tgt.authors) : (doc?.authors ?? ''), tgt?.year ? String(tgt.year) : (doc?.year ?? ''), tgt?.doi ? `DOI: ${tgt.doi}` : (tgt?.arxivId ? `arXiv:${tgt.arxivId}` : '')].filter(Boolean).join(' · ');
     if (bylineEl) { bylineEl.textContent = meta; bylineEl.hidden = !meta; }
     if (sciteLink) { const href = safeWeb(report?.sciteUrl); sciteLink.hidden = !href; if (href) sciteLink.href = href; }
+    workbench?.sync();
     if (!bannerEl) return;
     if (report?.offline) { bannerEl.hidden = false; bannerEl.dataset.kind = 'offline'; bannerEl.textContent = t('Offline mode — showing local library back-citations only. External sources are unavailable.', '离线模式 — 当前展示本地文献库反向引用，外部引文数据源暂不可用。'); return; }
     const msg = report?.degraded.length ? [formatDegradedSources(report.degraded.filter(d => d !== 'llm')), report.degraded.includes('llm') ? t('AI stance classification unavailable; showing existing stances and raw contexts.', '立场分类服务暂不可用，当前保留已有分类与原文语境。') : ''].filter(Boolean).join(' ') : '';
@@ -129,14 +115,14 @@ export function createCitationsView(): ResearchViewModule {
         void saveGraphPaper(paper, { mode: 'auto', arxivFormat }, shell).then(doc => {
           savingKeys.delete(stmt.citingKey); savedMap.set(stmt.citingKey, doc.id);
           if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs];
-          if (mounted) { syncDocOptions(); syncExternalSlots(); }
+          if (mounted) { workbench?.refresh(); syncExternalSlots(); }
         }).catch(err => { savingKeys.delete(stmt.citingKey); if (mounted) syncExternalSlots(); toast(message(err)); });
       }
     });
   };
   const attachFloatCard = (card: HTMLElement, stmt: CitationStatement) => shell?.paperFloatBar?.attach(card, {
     paper: toGraphPaper(stmt),
-    onSaved: doc => { savedMap.set(stmt.citingKey, doc.id); if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs]; if (mounted) { syncDocOptions(); syncExternalSlots(); } }
+    onSaved: doc => { savedMap.set(stmt.citingKey, doc.id); if (!docs.some(d => d.id === doc.id)) docs = [doc, ...docs]; if (mounted) { workbench?.refresh(); syncExternalSlots(); } }
   });
   const syncExternalSlots = () => {
     if (!listEl || !report) return;
@@ -218,28 +204,24 @@ export function createCitationsView(): ResearchViewModule {
   const clearFiltersOnly = () => { stanceFilter.clear(); preselectedStance = null; filters = { ...defaultFilters(), sort: filters.sort }; if (searchInput) searchInput.value = ''; };
   const resetFilters = () => { clearFiltersOnly(); if (statusEl) statusEl.textContent = ''; syncFilterControls(); renderList(); };
   const toggleStance = (s: CitationStance) => { preselectedStance = null; if (stanceFilter.has(s)) stanceFilter.delete(s); else stanceFilter.add(s); syncFilterControls(); renderList(); };
-  const syncDocOptions = () => {
-    if (!docSelect) return;
-    docSelect.replaceChildren(...docs.map(d => { const full = d.paperTitle || d.title, o = new Option(shortLabel(full), d.id); o.title = full; return o; }));
-    if (!target.docId && (target.doi || target.arxivId || target.query)) { docSelect.prepend(new Option(shortLabel(report?.target.title || target.query || target.doi || `arXiv:${target.arxivId}`), '')); docSelect.value = ''; }
-    else if (docs.some(d => d.id === target.docId)) docSelect.value = target.docId;
-  };
+  const refreshDocs = () => { void api('library.list', {}).then(({ docs: listed }) => { docs = listed; if (mounted) { workbench?.refresh(); syncHeader(); syncExternalSlots(); } }).catch(() => undefined); };
   const loadReport = async (forceRefresh = false) => {
-    const payload: CitationAnalyzeInput = target.docId ? { docId: target.docId, direction, ...(forceRefresh ? { forceRefresh: true } : {}) }
-      : (target.doi || target.arxivId || target.query) ? { ...(target.doi ? { doi: target.doi } : {}), ...(target.arxivId ? { arxivId: target.arxivId } : {}), ...(target.query ? { query: target.query } : {}), direction, ...(forceRefresh ? { forceRefresh: true } : {}) } : {};
-    if (!payload.docId && !payload.doi && !payload.arxivId && !payload.query) { if (statusEl) statusEl.textContent = t('Select a library paper to analyze citations.', '请选择一篇本地文献以进行引用分析。'); return; }
+    const payload = citationAnalyzePayload(target, direction, forceRefresh);
+    if (!hasCitationTarget(target)) { if (statusEl) statusEl.textContent = researchText.citationsPromptSelect(); return; }
     const { seq, signal } = beginRequest();
     if (refreshBtn) refreshBtn.disabled = true; if (statusEl) statusEl.textContent = t('Analyzing citations…', '正在分析引用立场…');
     try {
       const res = await api('citations.analyze', payload, false, signal);
       if (!mounted || seq !== reqSeq) return;
-      report = res; if (res.target.docId && !target.docId) target.docId = res.target.docId;
+      report = res; targetTitleHint = '';
+      const docId = target.docId || res.target.docId || '', doi = target.doi || res.target.doi || '', arxivId = target.arxivId || res.target.arxivId || '';
+      target = { docId, doi, arxivId, query: docId || doi || arxivId ? '' : (res.target.pmid ? `PMID:${res.target.pmid}` : (res.target.title || target.query)) };
       let notice = '';
       if (preselectedStance && res.statements.length > 0 && !res.statements.some(matchesFilters)) {
         const st = stanceText(preselectedStance); stanceFilter.clear();
         notice = t(`No ${st} citations found — showing all ${res.statements.length}.`, `未找到「${st}」类引用 — 已显示全部 ${res.statements.length} 条。`);
       }
-      preselectedStance = null; if (statusEl) statusEl.textContent = notice; syncDocOptions(); renderAll();
+      preselectedStance = null; if (statusEl) statusEl.textContent = notice; workbench?.recordAnalyzed(res.target); renderAll();
     } catch (err) { if (mounted && seq === reqSeq && !isAbortError(err)) { if (statusEl) statusEl.textContent = message(err); toast(message(err)); } }
     finally { if (mounted && seq === reqSeq && refreshBtn) refreshBtn.disabled = false; }
   };
@@ -251,21 +233,22 @@ export function createCitationsView(): ResearchViewModule {
       const startCtx = ctx.openContext();
       if (startCtx) {
         target = { docId: startCtx.docId ?? '', doi: startCtx.doi ?? '', arxivId: startCtx.arxivId ?? '', query: startCtx.query ?? '' };
-        direction = startCtx.direction === 'references' ? 'references' : 'cited_by'; clearFiltersOnly();
-        const initStance = startCtx.stance ?? startCtx.filter;
-        if (isStance(initStance)) { preselectedStance = initStance; stanceFilter.add(initStance); }
+        targetTitleHint = ''; direction = startCtx.direction === 'references' ? 'references' : 'cited_by'; clearFiltersOnly();
+        const initStance = startCtx.stance ?? startCtx.filter; if (isStance(initStance)) { preselectedStance = initStance; stanceFilter.add(initStance); }
         expandedKeys.clear(); otherCount = null; report = null;
-      } else if (!target.docId && !target.doi && !target.arxivId && !target.query) target.docId = ctx.activeDocId();
+      } else if (!hasCitationTarget(target)) target.docId = ctx.activeDocId();
 
       viewEl = el('section', 'cit-view'); viewEl.setAttribute('aria-label', researchViewName('citations'));
       const topEl = el('header', 'cit-top'), headRow = el('div', 'cit-head'), titleWrap = el('div', 'cit-title-wrap'), controls = el('div', 'cit-head-controls');
       titleEl = el('h1', 'cit-title', researchViewName('citations')); bylineEl = el('p', 'cit-byline'); bylineEl.hidden = true; titleWrap.append(titleEl, bylineEl);
-      docSelect = el('select', 'cit-doc-select'); docSelect.ariaLabel = t('Select library paper', '选择库内文献');
-      docSelect.addEventListener('change', () => { if (!docSelect!.value) return; target = { docId: docSelect!.value, doi: '', arxivId: '', query: '' }; clearFiltersOnly(); otherCount = null; report = null; expandedKeys.clear(); renderAll(); void loadReport(false); });
+      workbench = new CitationsWorkbench({
+        docs: () => docs, target: () => target, currentTitle: currentTargetTitle, currentReadingDocId: () => shell?.activeDocId() || '',
+        onSelectTarget: (next, hint) => { target = next; targetTitleHint = hint?.title ?? ''; clearFiltersOnly(); otherCount = null; report = null; expandedKeys.clear(); renderAll(); void loadReport(false); }
+      });
       refreshBtn = mkBtn('btn cit-refresh-btn', t('Refresh', '刷新'), () => { void loadReport(true); });
       sciteLink = el('a', 'btn cit-scite-link', 'Scite ↗'); sciteLink.target = '_blank'; sciteLink.rel = 'noopener noreferrer'; sciteLink.ariaLabel = t('Open Scite report', '打开 Scite 报告'); sciteLink.hidden = true;
       mobileFiltersBtn = mkBtn('btn cit-filters-toggle', t('Filters', '筛选'), () => { mobileFiltersOpen = !mobileFiltersOpen; syncMobileFilters(); });
-      controls.append(docSelect, refreshBtn, sciteLink, mobileFiltersBtn); headRow.append(titleWrap, controls);
+      controls.append(workbench.pickerWrap, refreshBtn, sciteLink, mobileFiltersBtn); headRow.append(titleWrap, controls);
       const subRow = el('div', 'cit-subbar'), unitsEl = el('div', 'cit-units'), dirTabs = el('div', 'cit-dir-tabs');
       papersUnitEl = el('span', 'cit-unit'); papersUnitEl.dataset.unit = 'papers'; stmtsUnitEl = el('span', 'cit-unit'); stmtsUnitEl.dataset.unit = 'statements'; unitsEl.append(papersUnitEl, stmtsUnitEl);
       const switchDir = (next: CitationDirection) => { if (direction === next) return; otherCount = report ? report.tallies.citationStatements : null; direction = next; report = null; clearFiltersOnly(); expandedKeys.clear(); renderAll(); void loadReport(false); };
@@ -318,29 +301,31 @@ export function createCitationsView(): ResearchViewModule {
       matchCountEl = el('span', 'cit-match-count'); toolbar.append(searchInput, sortSelect, matchCountEl);
       statusEl = el('p', 'cit-status'); statusEl.setAttribute('role', 'status'); listEl = el('div', 'cit-list');
       feedPane.append(toolbar, statusEl, listEl); splitEl.append(facetsBackdrop, facetsEl, feedPane);
-      bodyEl.append(subRow, bannerEl, talliesWrap, splitEl); viewEl.append(topEl, bodyEl); host.append(viewEl); renderAll();
-      void api('library.list', {}).then(({ docs: listed }) => { docs = listed; if (mounted) { syncDocOptions(); syncHeader(); syncExternalSlots(); } }).catch(() => undefined);
-      void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted && !restored) void loadReport(false); });
+      bodyEl.append(workbench.recentStrip, subRow, bannerEl, talliesWrap, splitEl); viewEl.append(topEl, bodyEl); host.append(viewEl); renderAll();
+      refreshDocs(); void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted && !restored && !report) void loadReport(false); });
     },
-    unmount() { mounted = false; abortPending(); tallyBtns.clear(); facetChecks.clear(); },
+    unmount() { mounted = false; abortPending(); workbench?.dispose(); workbench = undefined; tallyBtns.clear(); facetChecks.clear(); },
     saveState: (): SavedCitationsState => ({ report, otherCount, direction, target: { ...target }, filters: { ...filters }, stances: [...stanceFilter], expanded: [...expandedKeys], listScrollTop: listEl?.scrollTop ?? 0 }),
     restoreState(raw) {
       if (!raw || typeof raw !== 'object') return;
       const s = raw as SavedCitationsState; restored = true; abortPending();
       report = s.report ?? null; otherCount = s.otherCount ?? null; direction = s.direction === 'references' ? 'references' : 'cited_by';
-      target = { docId: s.target?.docId ?? '', doi: s.target?.doi ?? '', arxivId: s.target?.arxivId ?? '', query: s.target?.query ?? '' };
-      filters = { ...defaultFilters(), ...(s.filters ?? {}) };
+      target = { ...emptyCitationTarget(), ...(s.target ?? {}) }; filters = { ...defaultFilters(), ...(s.filters ?? {}) };
       stanceFilter.clear(); for (const st of s.stances ?? []) if (isStance(st)) stanceFilter.add(st);
       expandedKeys.clear(); for (const k of s.expanded ?? []) expandedKeys.add(k);
       if (searchInput) searchInput.value = filters.search; if (sortSelect) sortSelect.value = filters.sort;
-      syncDocOptions(); renderAll(); if (listEl) listEl.scrollTop = s.listScrollTop ?? 0;
+      workbench?.sync(); renderAll(); if (listEl) listEl.scrollTop = s.listScrollTop ?? 0;
     },
-    handleEscape() { if (!mobileFiltersOpen || window.innerWidth > 700) return false; mobileFiltersOpen = false; syncMobileFilters(); mobileFiltersBtn?.focus({ preventScroll: true }); return true; },
+    handleEscape() {
+      if (workbench?.isOpen()) { workbench.close(true); return true; }
+      if (!mobileFiltersOpen || window.innerWidth > 700) return false;
+      mobileFiltersOpen = false; syncMobileFilters(); mobileFiltersBtn?.focus({ preventScroll: true }); return true;
+    },
     onDocumentMutated(docId, deleted) {
-      if (!deleted) return;
+      if (!deleted) { refreshDocs(); return; }
       docs = docs.filter(d => d.id !== docId); for (const [k, id] of savedMap) if (id === docId) savedMap.delete(k);
-      if (target.docId === docId) { target = { docId: docs[0]?.id ?? '', doi: '', arxivId: '', query: '' }; clearFiltersOnly(); report = null; otherCount = null; }
-      syncDocOptions(); if (mounted) renderAll();
+      if (target.docId === docId) { target = emptyCitationTarget(docs[0]?.id ?? ''); targetTitleHint = ''; clearFiltersOnly(); report = null; otherCount = null; }
+      workbench?.onDocDeleted(docId); if (mounted) renderAll();
     }
   };
 }

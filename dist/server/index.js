@@ -1762,6 +1762,31 @@ async function resolveAcademicPaper(input, ctx) {
   const degraded = /* @__PURE__ */ new Set(), work = await resolveWorkInternal(input, ctx, degraded);
   return { paper: work ? attachLibraryMatch(work.paper, ctx.docs) : null, degraded: [...degraded], fromCache: Boolean(work?.fromCache) };
 }
+async function searchAcademicPapers(rawQuery, rawLimit, ctx) {
+  const query = rawQuery.trim();
+  if (!query) return { papers: [], degraded: [] };
+  const limit = Math.min(15, Math.max(1, Math.round(typeof rawLimit === "number" && Number.isFinite(rawLimit) ? rawLimit : 8)));
+  const parsed = parseAcademicInput(query), pmid = /^pmid:?\s*(\d+)$/i.exec(query)?.[1];
+  if (parsed?.kind === "doi" || parsed?.kind === "arxiv" || pmid || shortOaId(query)) {
+    const res2 = await resolveAcademicPaper(query, ctx);
+    return { papers: res2.paper ? [res2.paper] : [], degraded: res2.degraded };
+  }
+  const degraded = /* @__PURE__ */ new Set(), qKey = normTitle(query).slice(0, 80) || query.slice(0, 80);
+  const res = await fetchJson("openalex", `oa:typeahead:${limit}:${qKey}`, oaUrl("/works", { search: query, "per-page": String(limit) }, ctx.settings), ctx, degraded, 36e5);
+  const papers = arrOf(isObject(res?.data) ? res.data.results : void 0).flatMap((r) => {
+    const w = parseOaWork(r);
+    return w ? [attachLibraryMatch(w.paper, ctx.docs)] : [];
+  });
+  if (!papers.length && degraded.has("openalex")) {
+    const epmcUrl2 = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&format=json&resultType=core&pageSize=${limit}`;
+    const fb = await fetchJson("europepmc", `epmc:typeahead:${limit}:${qKey}`, epmcUrl2, ctx, degraded, 36e5);
+    for (const row of arrOf(isObject(fb?.data) && isObject(fb.data.resultList) ? fb.data.resultList.result : void 0)) {
+      const p = parseEpmcItem(row);
+      if (p) papers.push(attachLibraryMatch(p, ctx.docs));
+    }
+  }
+  return { papers: papers.slice(0, limit), degraded: [...degraded] };
+}
 async function exploreCitationGraph(params, ctx) {
   const limit = Math.min(45, Math.max(25, Math.floor(params.limit ?? 35))), degraded = /* @__PURE__ */ new Set(), resolvedSeeds = [], seedKeySet = /* @__PURE__ */ new Set();
   for (const raw of params.seeds.slice(0, 5)) {
@@ -5109,9 +5134,13 @@ function docMatchesTarget(doc, t) {
   const tDoi = cleanDoi2(t.doi)?.toLowerCase(), dDoi = cleanDoi2(doc.doi)?.toLowerCase(), tAx = (t.arxivId ?? extractArxivId(t.doi))?.toLowerCase(), dAx = extractArxivId(doc.url, doc.doi)?.toLowerCase(), tTitle = normTitle(t.title);
   return Boolean(t.docId && doc.id === t.docId || tDoi && dDoi && tDoi === dDoi || tAx && dAx && tAx === dAx || tTitle.length >= 18 && tTitle === normTitle(doc.paperTitle || doc.title));
 }
+var isBareId = (s, doi, arxivId, pmid) => {
+  const t = s.trim(), low = t.toLowerCase();
+  return !t || Boolean(doi) && low === doi.toLowerCase() || Boolean(arxivId) && low === `arxiv:${arxivId.toLowerCase()}` || Boolean(pmid) && low === `pmid:${pmid}` || /^10\.\d{4,9}\/\S+$|^arxiv:\S+$|^pmid:?\s*\d+$|^w\d+$/i.test(t);
+};
 function enrichFromDoc(t, doc) {
   if (!doc) return t;
-  const doi = t.doi ?? cleanDoi2(doc.doi), arxivId = t.arxivId ?? extractArxivId(doc.url, doc.doi), title = t.title && t.title !== t.doi && !t.title.startsWith("arXiv:") ? t.title : doc.paperTitle || doc.title;
+  const doi = t.doi ?? cleanDoi2(doc.doi), arxivId = t.arxivId ?? extractArxivId(doc.url, doc.doi), title = t.title && !isBareId(t.title, doi, arxivId, t.pmid) ? t.title : doc.paperTitle || doc.title;
   return { ...t, docId: t.docId ?? doc.id, doi, arxivId, title, authors: t.authors.length ? t.authors : splitAuthors(doc.authors), year: t.year ?? parseYear(doc.year ?? doc.venue), sciteUrl: buildSciteUrl(doi, title) };
 }
 async function readBoundedText(res, maxChars) {
@@ -5268,12 +5297,13 @@ function computeTallies(statements) {
 async function resolveLocalTarget(deps, input, docs) {
   const docId = input.docId !== void 0 ? single(input.docId, "document ID", 512, true) : void 0;
   const query = single(input.query, "query", 500), rawDoi = single(input.doi, "DOI", 250), rawArxiv = single(input.arxivId, "arXiv ID", 64), rawTitle = single(input.title, "title", 300), parsed = query ? parseAcademicInput(query) : void 0;
-  const inDoi = cleanDoi2(rawDoi) ?? (parsed?.kind === "doi" ? parsed.doi : void 0), inArxiv = extractArxivId(rawArxiv, rawDoi) ?? (parsed?.kind === "arxiv" ? parsed.id : void 0), inTitle = rawTitle || (parsed ? "" : query);
+  const pmidDirect = /^pmid:?\s*(\d+)$/i.exec(query)?.[1];
+  const inDoi = cleanDoi2(rawDoi) ?? (parsed?.kind === "doi" ? parsed.doi : void 0), inArxiv = extractArxivId(rawArxiv, rawDoi) ?? (parsed?.kind === "arxiv" ? parsed.id : void 0), inTitle = rawTitle || (parsed || pmidDirect ? "" : query);
   const doc = docId ? await deps.library.get(docId) : docs.find((d) => docMatchesTarget(d, { doi: inDoi, arxivId: inArxiv, title: inTitle }));
   const doi = inDoi ?? cleanDoi2(doc?.doi), arxivId = inArxiv ?? extractArxivId(doc?.url, doc?.doi);
-  const title = rawTitle || doc?.paperTitle || doc?.title || (parsed ? "" : query) || doi || (arxivId ? "arXiv:" + arxivId : "");
-  if (!title && !doi && !arxivId && !docId) throw new ServiceError(400, "Provide a docId, DOI, arXiv ID, or query.");
-  return { targetKey: makeTargetKey({ doi, arxivId, title, docId: doc?.id }), ...doc ? { docId: doc.id } : {}, title, authors: splitAuthors(doc?.authors), year: parseYear(doc?.year ?? doc?.venue), ...doi ? { doi } : {}, ...arxivId ? { arxivId } : {}, sciteUrl: buildSciteUrl(doi, title) };
+  const title = rawTitle || doc?.paperTitle || doc?.title || (parsed || pmidDirect ? "" : query) || doi || (arxivId ? "arXiv:" + arxivId : "") || (pmidDirect ? "PMID:" + pmidDirect : "");
+  if (!title && !doi && !arxivId && !pmidDirect && !docId) throw new ServiceError(400, "Provide a docId, DOI, arXiv ID, or query.");
+  return { targetKey: makeTargetKey({ doi, arxivId, pmid: pmidDirect, title, docId: doc?.id }), ...doc ? { docId: doc.id } : {}, title, authors: splitAuthors(doc?.authors), year: parseYear(doc?.year ?? doc?.venue), ...doi ? { doi } : {}, ...arxivId ? { arxivId } : {}, ...pmidDirect ? { pmid: pmidDirect } : {}, sciteUrl: buildSciteUrl(doi, title) };
 }
 var readDirection = (raw) => raw === void 0 || raw === "cited_by" ? "cited_by" : raw === "references" ? "references" : (() => {
   throw new ServiceError(400, "Direction must be cited_by or references.");
@@ -5284,28 +5314,55 @@ async function analyzeCitations(deps, input, opts) {
   const limit = input.limit === void 0 ? 25 : typeof input.limit === "number" && Number.isFinite(input.limit) ? Math.min(40, Math.max(5, Math.round(input.limit))) : (() => {
     throw new ServiceError(400, "Invalid limit.");
   })();
-  const questionModel = readQuestionModel(input.questionModel), docs = await deps.library.list();
+  const questionModel = readQuestionModel(input.questionModel), docs = await deps.library.list(), explicitTitle = Boolean(single(input.title, "title", 300));
   let target = await resolveLocalTarget(deps, input, docs);
-  const existing = deps.store.withDb(false, (db) => listCitationStances(db, target.targetKey, direction)), existingMap = new Map(existing.map((r) => [r.citingKey, r])), cachedExternal = existing.filter((r) => r.source !== "local");
-  const degraded = /* @__PURE__ */ new Set(), fromCache = !forceRefresh && cachedExternal.length > 0;
-  let external = cachedExternal;
-  if (!fromCache) {
-    const ctx = { withDb: (w, run) => deps.store.withDb(w, run), settings: deps.store.settings(), fetchFn: deps.fetchFn, sleepFn: deps.sleepFn, docs, signal: opts?.signal };
-    const lookup2 = target.doi || (target.arxivId ? "arXiv:" + target.arxivId : target.title);
-    if (lookup2) {
-      const resolved = await resolveAcademicPaper(lookup2, ctx).catch(() => ({ paper: null, degraded: ["openalex"], fromCache: false }));
-      for (const d of resolved.degraded) degraded.add(d);
-      if (resolved.paper) {
-        const doi = target.doi ?? resolved.paper.doi, arxivId = target.arxivId ?? resolved.paper.arxivId, title = target.title && target.title !== target.doi && !target.title.startsWith("arXiv:") ? target.title : resolved.paper.title;
-        target = { ...target, doi, arxivId, pmid: target.pmid ?? resolved.paper.pmid, s2Id: resolved.paper.s2Id, title, authors: target.authors.length ? target.authors : resolved.paper.authors, year: target.year ?? resolved.paper.year, sciteUrl: buildSciteUrl(doi, title) };
-        if (!target.docId) target = enrichFromDoc(target, resolved.paper.docId ? docs.find((d) => d.id === resolved.paper.docId) : docs.find((d) => docMatchesTarget(d, target)));
-      }
-    }
-    external = await fetchExternalCitations(target, direction, limit, ctx, degraded, forceRefresh);
-  } else if (!target.docId) {
+  let existing = deps.store.withDb(false, (db) => listCitationStances(db, target.targetKey, direction)), existingMap = new Map(existing.map((r) => [r.citingKey, r])), cachedExternal = existing.filter((r) => r.source !== "local");
+  const degraded = /* @__PURE__ */ new Set();
+  let fromCache = !forceRefresh && cachedExternal.length > 0, external = cachedExternal;
+  const ctx = { withDb: (w, run) => deps.store.withDb(w, run), settings: deps.store.settings(), fetchFn: deps.fetchFn, sleepFn: deps.sleepFn, docs, signal: opts?.signal };
+  const applyMeta = (p, preserveKey = false) => {
+    const doi = target.doi ?? p.doi, arxivId = target.arxivId ?? p.arxivId, pmid = target.pmid ?? p.pmid;
+    const title = (target.docId || explicitTitle) && !isBareId(target.title, doi, arxivId, pmid) ? target.title : p.title || target.title;
+    target = { ...target, doi, arxivId, pmid, s2Id: target.s2Id ?? p.s2Id, title, authors: target.authors.length ? target.authors : p.authors ?? [], year: target.year ?? p.year, sciteUrl: buildSciteUrl(doi, title) };
+    if (!target.docId) target = enrichFromDoc(target, p.docId ? docs.find((d) => d.id === p.docId) : docs.find((d) => docMatchesTarget(d, target)));
+    if (!preserveKey) target = { ...target, targetKey: makeTargetKey({ doi: target.doi, arxivId: target.arxivId, pmid: target.pmid, title: target.title, docId: target.docId }) };
+  };
+  if (fromCache && !target.docId) {
     const cachedDocId = existing.find((r) => r.docId)?.docId;
     if (cachedDocId) target = enrichFromDoc(target, docs.find((d) => d.id === cachedDocId));
+    if (!target.docId && (!target.authors.length || isBareId(target.title, target.doi, target.arxivId, target.pmid))) {
+      const hit = deps.store.withDb(false, (db) => getGraphCache(db, "cit:meta:" + target.targetKey))?.value;
+      if (hit) applyMeta(hit, true);
+    }
   }
+  if (!fromCache || !target.docId && (!target.authors.length || isBareId(target.title, target.doi, target.arxivId, target.pmid))) {
+    const lookup2 = target.doi || (target.arxivId ? "arXiv:" + target.arxivId : target.pmid ? "PMID:" + target.pmid : target.title);
+    if (lookup2) {
+      const prevKey = target.targetKey;
+      const resolved = await resolveAcademicPaper(lookup2, ctx).catch(() => ({ paper: null, degraded: ["openalex"], fromCache: false }));
+      if (!fromCache) for (const d of resolved.degraded) degraded.add(d);
+      if (resolved.paper) {
+        applyMeta(resolved.paper);
+        if (!target.docId && target.title && !isBareId(target.title, target.doi, target.arxivId, target.pmid)) {
+          deps.store.withDb(true, (db) => setGraphCache(db, "cit:meta:" + target.targetKey, "openalex", { title: target.title, authors: target.authors, year: target.year, doi: target.doi, arxivId: target.arxivId, pmid: target.pmid }, TTL_CITATIONS * 60));
+        }
+        if (target.targetKey !== prevKey) {
+          const nextRows = deps.store.withDb(false, (db) => listCitationStances(db, target.targetKey, direction)), nextExt = nextRows.filter((r) => r.source !== "local");
+          if (fromCache && !nextExt.length) target = { ...target, targetKey: prevKey };
+          else {
+            existing = nextRows;
+            existingMap = new Map(existing.map((r) => [r.citingKey, r]));
+            cachedExternal = nextExt;
+            if (!forceRefresh && cachedExternal.length > 0) {
+              fromCache = true;
+              external = cachedExternal;
+            }
+          }
+        }
+      }
+    }
+  }
+  if (!fromCache) external = await fetchExternalCitations(target, direction, limit, ctx, degraded, forceRefresh);
   const local = deps.store.withDb(false, (db) => scanLocalBackCitations(target, docs, (id) => getDocPages(db, id), direction));
   const merged = /* @__PURE__ */ new Map();
   for (const s of [...local, ...external]) {
@@ -9754,6 +9811,10 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       const query = single(input.query, "query", 500) || (doc ? doc.doi || doc.url || doc.paperTitle || doc.title : "");
       if (!query) throw new ServiceError(400, "Enter a DOI, arXiv ID, or paper title.");
       return resolveAcademicPaper(query, graphCtx(await documents.list(), options?.signal));
+    },
+    "graph.search": async (input, options) => {
+      if (input.limit !== void 0 && (typeof input.limit !== "number" || !Number.isFinite(input.limit))) throw new ServiceError(400, "Invalid search limit.");
+      return searchAcademicPapers(single(input.query, "search query", 500), input.limit, graphCtx(await documents.list(), options?.signal));
     },
     "graph.explore": async (input, options) => {
       if (!Array.isArray(input.seeds) || !input.seeds.length || input.seeds.length > 10) throw new ServiceError(400, "Provide 1 to 10 seed papers.");
