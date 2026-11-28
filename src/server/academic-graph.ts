@@ -196,6 +196,23 @@ export async function resolveAcademicPaper(input: string, ctx: GraphContext): Pr
   const degraded = new Set<string>(), work = await resolveWorkInternal(input, ctx, degraded);
   return { paper: work ? attachLibraryMatch(work.paper, ctx.docs) : null, degraded: [...degraded], fromCache: Boolean(work?.fromCache) };
 }
+export async function searchAcademicPapers(rawQuery: string, rawLimit: number | undefined, ctx: GraphContext): Promise<{ papers: GraphPaper[]; degraded: string[] }> {
+  const query = rawQuery.trim();
+  if (!query) return { papers: [], degraded: [] };
+  const limit = Math.min(15, Math.max(1, Math.round(typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : 8)));
+  const parsed = parseAcademicInput(query), pmid = /^pmid:?\s*(\d+)$/i.exec(query)?.[1];
+  if (parsed?.kind === 'doi' || parsed?.kind === 'arxiv' || pmid || shortOaId(query)) {
+    const res = await resolveAcademicPaper(query, ctx);
+    return { papers: res.paper ? [res.paper] : [], degraded: res.degraded };
+  }
+  const degraded = new Set<string>(), key = `oa:typeahead:${limit}:${normTitle(query).slice(0, 80)}`;
+  const res = await fetchJson('openalex', key, oaUrl('/works', { search: query, 'per-page': String(limit) }, ctx.settings), ctx, degraded, 3_600_000);
+  const papers = arrOf(isObject(res?.data) ? res.data.results : undefined).flatMap(r => {
+    const w = parseOaWork(r);
+    return w ? [attachLibraryMatch(w.paper, ctx.docs)] : [];
+  });
+  return { papers, degraded: [...degraded] };
+}
 export async function exploreCitationGraph(params: { seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, ctx: GraphContext): Promise<GraphExploreResult> {
   const limit = Math.min(45, Math.max(25, Math.floor(params.limit ?? 35))), degraded = new Set<string>(), resolvedSeeds: ResolvedWork[] = [], seedKeySet = new Set<string>();
   for (const raw of params.seeds.slice(0, 5)) { const w = await resolveWorkInternal(raw, ctx, degraded); if (w && !seedKeySet.has(w.paper.id)) { seedKeySet.add(w.paper.id); resolvedSeeds.push(w); } }

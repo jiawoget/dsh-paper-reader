@@ -470,7 +470,7 @@ async function run(): Promise<void> {
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage), 'zh-CN Deep Search & Watchlist', ['clarify', 'watchlist']);
       await zhPage.keyboard.press('Escape'); await zhPage.locator('.wl-drawer').waitFor({ state: 'hidden' });
       await zhPage.locator('.rw-nav-btn[data-view="citations"]').click();
-      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cit-title, .cit-byline, .cit-doc-select, .cit-card-title, .cit-meta-text, .cit-ctx-text, .cit-rationale'), 'zh-CN Citations');
+      assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cit-title, .cit-byline, .cit-wb-title, .cit-recent-chip, .cit-card-title, .cit-meta-text, .cit-ctx-text, .cit-rationale'), 'zh-CN Citations');
       await zhPage.locator('.rw-nav-btn[data-view="citation-map"]').click();
       assertNoZhEnglishLeaks(await collectChromeStrings(zhPage, '.cm-seed-pill, .cm-seed-picker, .cm-crumb, .cm-row-title, .cm-row-meta'), 'zh-CN Citation Map');
       await zhPage.locator('.rw-nav-btn[data-view="field-trends"]').click();

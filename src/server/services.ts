@@ -7,7 +7,7 @@ import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/cit
 import type { ResourceReader } from './academic-intake.js';
 import { discoverDocResources, scheduleResourceDiscovery } from './doc-resources-discover.js';
 import { addDocResource, listDocResources, pendingResourceCounts, removeDocResource, updateDocResourceStatus } from './doc-resources-store.js';
-import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from './academic-graph.js';
+import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, searchAcademicPapers, type GraphContext } from './academic-graph.js';
 import { saveGraphPaper } from './paper-save.js';
 import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
 import { ensurePaperCards, runLibraryChat } from './library-chat.js';
@@ -168,6 +168,10 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       const query = single(input.query, 'query', 500) || (doc ? (doc.doi || doc.url || doc.paperTitle || doc.title) : '');
       if (!query) throw new ServiceError(400, 'Enter a DOI, arXiv ID, or paper title.');
       return resolveAcademicPaper(query, graphCtx(await documents.list(), options?.signal));
+    },
+    'graph.search': async (input, options) => {
+      if (input.limit !== undefined && (typeof input.limit !== 'number' || !Number.isFinite(input.limit))) throw new ServiceError(400, 'Invalid search limit.');
+      return searchAcademicPapers(single(input.query, 'search query', 500), input.limit, graphCtx(await documents.list(), options?.signal));
     },
     'graph.explore': async (input, options) => {
       if (!Array.isArray(input.seeds) || !input.seeds.length || input.seeds.length > 10) throw new ServiceError(400, 'Provide 1 to 10 seed papers.');

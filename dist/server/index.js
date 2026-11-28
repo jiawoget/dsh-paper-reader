@@ -1762,6 +1762,23 @@ async function resolveAcademicPaper(input, ctx) {
   const degraded = /* @__PURE__ */ new Set(), work = await resolveWorkInternal(input, ctx, degraded);
   return { paper: work ? attachLibraryMatch(work.paper, ctx.docs) : null, degraded: [...degraded], fromCache: Boolean(work?.fromCache) };
 }
+async function searchAcademicPapers(rawQuery, rawLimit, ctx) {
+  const query = rawQuery.trim();
+  if (!query) return { papers: [], degraded: [] };
+  const limit = Math.min(15, Math.max(1, Math.round(typeof rawLimit === "number" && Number.isFinite(rawLimit) ? rawLimit : 8)));
+  const parsed = parseAcademicInput(query), pmid = /^pmid:?\s*(\d+)$/i.exec(query)?.[1];
+  if (parsed?.kind === "doi" || parsed?.kind === "arxiv" || pmid || shortOaId(query)) {
+    const res2 = await resolveAcademicPaper(query, ctx);
+    return { papers: res2.paper ? [res2.paper] : [], degraded: res2.degraded };
+  }
+  const degraded = /* @__PURE__ */ new Set(), key2 = `oa:typeahead:${limit}:${normTitle(query).slice(0, 80)}`;
+  const res = await fetchJson("openalex", key2, oaUrl("/works", { search: query, "per-page": String(limit) }, ctx.settings), ctx, degraded, 36e5);
+  const papers = arrOf(isObject(res?.data) ? res.data.results : void 0).flatMap((r) => {
+    const w = parseOaWork(r);
+    return w ? [attachLibraryMatch(w.paper, ctx.docs)] : [];
+  });
+  return { papers, degraded: [...degraded] };
+}
 async function exploreCitationGraph(params, ctx) {
   const limit = Math.min(45, Math.max(25, Math.floor(params.limit ?? 35))), degraded = /* @__PURE__ */ new Set(), resolvedSeeds = [], seedKeySet = /* @__PURE__ */ new Set();
   for (const raw of params.seeds.slice(0, 5)) {
@@ -9754,6 +9771,10 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
       const query = single(input.query, "query", 500) || (doc ? doc.doi || doc.url || doc.paperTitle || doc.title : "");
       if (!query) throw new ServiceError(400, "Enter a DOI, arXiv ID, or paper title.");
       return resolveAcademicPaper(query, graphCtx(await documents.list(), options?.signal));
+    },
+    "graph.search": async (input, options) => {
+      if (input.limit !== void 0 && (typeof input.limit !== "number" || !Number.isFinite(input.limit))) throw new ServiceError(400, "Invalid search limit.");
+      return searchAcademicPapers(single(input.query, "search query", 500), input.limit, graphCtx(await documents.list(), options?.signal));
     },
     "graph.explore": async (input, options) => {
       if (!Array.isArray(input.seeds) || !input.seeds.length || input.seeds.length > 10) throw new ServiceError(400, "Provide 1 to 10 seed papers.");

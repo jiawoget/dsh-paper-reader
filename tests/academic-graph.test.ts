@@ -8,9 +8,12 @@ import {
   computeClusterHulls, computeShortestPathToSeed, detectCitationClusters, edgePairKey, extractClusterLabel, selectBackboneEdges
 } from '../src/shared/graph-clusters.js';
 import { buildCitationGraphEdges, computeCitationMapLayout, rankEarlierByCoCitation, reconstructInvertedAbstract, timelineCitationScale } from '../src/shared/graph-layout.js';
+import {
+  canonicalCitationTargetKey, CITATIONS_RECENT_KEY, parseDirectCitationTarget, parseRecentCitations, upsertRecentCitations, type RecentCitationEntry
+} from '../src/reader/research/citations-workbench.js';
 import { filterLibraryPapers, PAPER_PICKER_VISIBLE_CAP } from '../src/reader/research/paper-picker.js';
 import type { DocumentInfo, GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
-import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, type GraphContext } from '../src/server/academic-graph.js';
+import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, searchAcademicPapers, type GraphContext } from '../src/server/academic-graph.js';
 import { Library } from '../src/server/library.js';
 import { ReaderStore } from '../src/server/reader-store.js';
 import { ensureResearchSchema, getGraphCache, setGraphCache } from '../src/server/research-store.js';
@@ -361,4 +364,60 @@ test('citation clustering, labels, shortest path to seed, backbone edges, hulls,
   assert.ok(extractClusterLabel(cjk, cjk).length <= 24 && extractClusterLabel(longEn, longEn).length <= 24);
   const ph = computeShortestPathToSeed([mk('S', 'Seed', 10, 2023, true), mk('T', 'Target', 5, 2024)], [{ source: 'S', target: 'PHANTOM', kind: 'cites' }, { source: 'PHANTOM', target: 'T', kind: 'cites' }], 'T');
   assert.deepEqual([...ph.nodeIds], ['T']);
+});
+
+test('searchAcademicPapers handles blank, direct DOI/arXiv, OpenAlex search with library match, and offline degradation', async () => {
+  const db = new DatabaseSync(':memory:');
+  ensureResearchSchema(db);
+  const docs: DocumentInfo[] = [
+    { id: 'doc-lib', kind: 'pdf', title: 'Attention Is All You Need', doi: '10.48550/arXiv.1706.03762', url: 'https://arxiv.org/abs/1706.03762' },
+    { id: 'doc-doi', kind: 'pdf', title: 'Local DOI Match', doi: '10.1000/local-hit' }
+  ];
+  const seenUrls: string[] = [];
+  const fetchFn: typeof fetch = async input => {
+    const url = String(input); seenUrls.push(url);
+    if (url.includes('10.1000%2Flocal-hit')) return jsonRes(makeOa('W301', 'Local DOI Match', 2024, 90, [], { doi: 'https://doi.org/10.1000/local-hit' }));
+    if (url.includes('10.48550/arxiv.1706.03762')) return jsonRes(makeOa('W302', 'Attention Is All You Need', 2017, 90000, [], { doi: 'https://doi.org/10.48550/arXiv.1706.03762' }));
+    if (url.includes('search=attention')) return jsonRes({ results: [makeOa('W302', 'Attention Is All You Need', 2017, 90000, [], { doi: 'https://doi.org/10.48550/arXiv.1706.03762' }), makeOa('W303', 'FlashAttention', 2022, 3200, [], { doi: 'https://doi.org/10.1000/flash' })] });
+    return jsonRes({}, 404);
+  };
+  try {
+    const ctx: GraphContext = { withDb: (_, run) => run(db), fetchFn, docs, sleepFn: async () => {} };
+    assert.deepEqual(await searchAcademicPapers('   ', 8, ctx), { papers: [], degraded: [] });
+    assert.equal(seenUrls.length, 0);
+    const byDoi = await searchAcademicPapers('10.1000/local-hit', undefined, ctx);
+    assert.ok(byDoi.papers.length === 1 && byDoi.papers[0].inLibrary === true && byDoi.papers[0].docId === 'doc-doi');
+    const byArxiv = await searchAcademicPapers('https://arxiv.org/abs/1706.03762', undefined, ctx);
+    assert.ok(byArxiv.papers.length === 1 && byArxiv.papers[0].arxivId === '1706.03762' && byArxiv.papers[0].docId === 'doc-lib');
+    const bySearch = await searchAcademicPapers('attention', 99, ctx);
+    assert.ok(seenUrls.some(u => u.includes('per-page=15')) && bySearch.papers.length === 2);
+    assert.ok(bySearch.papers[0].inLibrary === true && bySearch.papers[0].docId === 'doc-lib' && bySearch.papers[1].inLibrary === false);
+    const offline = await searchAcademicPapers('offline query', 5, { ...ctx, fetchFn: async () => { throw new Error('offline'); } });
+    assert.deepEqual(offline, { papers: [], degraded: ['openalex'] });
+  } finally { db.close(); }
+});
+
+test('citations workbench recent list dedupes, caps, parses corrupt JSON, and parses direct targets', () => {
+  assert.equal(CITATIONS_RECENT_KEY, 'reader.citations.recent');
+  assert.equal(canonicalCitationTargetKey({ docId: 'd1', doi: '10.1/a' }), 'doc:d1');
+  assert.equal(canonicalCitationTargetKey({ doi: '10.48550/arXiv.1706.03762', arxivId: '1706.03762' }), 'arxiv:1706.03762');
+  let list: RecentCitationEntry[] = [];
+  for (let i = 0; i < 10; i++) list = upsertRecentCitations(list, { title: `Paper ${i}`, year: 2020 + (i % 5), doi: `10.1000/p${i}` }, 6);
+  assert.equal(list.length, 6);
+  assert.equal(list[0].title, 'Paper 9');
+  list = upsertRecentCitations(list, { title: 'Paper 5 Updated', year: 2021, docId: 'local-5', doi: '10.1000/p5' }, 6);
+  assert.equal(list.length, 6);
+  assert.ok(list[0].docId === 'local-5' && list.filter(x => x.doi === '10.1000/p5').length === 1);
+  assert.deepEqual(parseRecentCitations('{broken'), []);
+  assert.deepEqual(parseRecentCitations('{"not":"array"}'), []);
+  const roundtrip = parseRecentCitations(JSON.stringify([...list, { bad: true }, { title: '' }]));
+  assert.equal(roundtrip.length, 6);
+  assert.equal(roundtrip[0].key, list[0].key);
+  const docs: DocumentInfo[] = [{ id: 'doc-ax', kind: 'pdf', title: 'Attention', url: 'https://arxiv.org/abs/1706.03762', doi: '10.1000/exact' }];
+  assert.deepEqual(parseDirectCitationTarget('https://arxiv.org/abs/1706.03762', docs), { docId: 'doc-ax', doi: '', arxivId: '1706.03762', query: '' });
+  assert.deepEqual(parseDirectCitationTarget('10.48550/arXiv.2309.06180', docs), { docId: '', doi: '', arxivId: '2309.06180', query: '' });
+  assert.deepEqual(parseDirectCitationTarget('10.1000/exact', docs), { docId: 'doc-ax', doi: '10.1000/exact', arxivId: '', query: '' });
+  assert.deepEqual(parseDirectCitationTarget('10.1000/external-doi', docs), { docId: '', doi: '10.1000/external-doi', arxivId: '', query: '' });
+  assert.deepEqual(parseDirectCitationTarget('PMID:123456', docs), { docId: '', doi: '', arxivId: '', query: 'PMID:123456' });
+  assert.equal(parseDirectCitationTarget('Attention Is All You Need', docs), null);
 });

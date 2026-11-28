@@ -5,13 +5,14 @@ import { mkBtn } from './paper-intake.js';
 
 export const PAPER_PICKER_VISIBLE_CAP = 40;
 
-interface PaperPickerExternalItem { id: string; title: string; meta?: string; badge?: string; paper?: GraphPaper }
+export interface PaperPickerExternalItem { id: string; title: string; meta?: string; paper?: GraphPaper }
 interface PaperPickerOptions {
   docs: () => readonly DocumentInfo[]; selectedDocId?: () => string; currentReadingDocId?: () => string;
   ariaLabel?: string; placeholder?: string; searchAriaLabel?: string;
   pickerClass?: string; searchClass?: string; listClass?: string; optionClass?: string;
   onSelectDoc: (doc: DocumentInfo) => void;
   onSelectExternal?: (item: PaperPickerExternalItem) => void;
+  onSubmitRaw?: (query: string, hasOptions: boolean) => boolean;
   externalSearch?: (query: string, signal: AbortSignal) => Promise<PaperPickerExternalItem[]>;
   onClose?: (refocus: boolean) => void;
 }
@@ -56,12 +57,19 @@ export class PaperPicker {
     this.listEl = el('div', opts.listClass ?? 'pp-list'); this.listEl.setAttribute('role', 'listbox');
     this.root.append(this.searchInput, this.currentWrap, this.countEl, this.listEl);
     this.searchInput.addEventListener('input', () => { this.activeIdx = -1; this.scheduleExternal(); this.render(); });
+    this.root.addEventListener('keydown', e => {
+      if (!e.isComposing && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.opts.onClose?.(true); }
+    });
     this.searchInput.addEventListener('keydown', e => {
       if (e.isComposing) return;
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.opts.onClose?.(true); }
-      else if (e.key === 'ArrowDown' && this.optionBtns.length) { e.preventDefault(); this.moveFocus(1); }
+      if (e.key === 'ArrowDown' && this.optionBtns.length) { e.preventDefault(); this.moveFocus(1); }
       else if (e.key === 'ArrowUp' && this.optionBtns.length) { e.preventDefault(); this.moveFocus(-1); }
-      else if (e.key === 'Enter') { e.preventDefault(); (this.optionBtns[this.activeIdx] ?? this.optionBtns[0])?.click(); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (this.activeIdx >= 0 && this.optionBtns[this.activeIdx]) this.optionBtns[this.activeIdx].click();
+        else if (this.opts.onSubmitRaw?.(this.searchInput.value.trim(), this.optionBtns.length > 0)) return;
+        else this.optionBtns[0]?.click();
+      }
     });
   }
 
@@ -106,11 +114,13 @@ export class PaperPicker {
       opt.append(el('span', `${optCls}-title`, full), ...(meta ? [el('span', `${optCls}-meta`, meta)] : []));
       this.listEl.append(opt); this.optionBtns.push(opt);
     }
-    if (!items.length && !this.extLoading && !this.extItems.length) this.listEl.append(el('p', 'cm-seed-empty', researchText.pickerEmpty()));
+    const shownIds = new Set(items.map(d => d.id));
+    const extShown = this.extItems.filter(item => !item.paper?.docId || !shownIds.has(item.paper.docId));
+    if (!items.length && !this.extLoading && !extShown.length) this.listEl.append(el('p', 'cm-seed-empty', researchText.pickerEmpty()));
     if (this.extLoading) this.listEl.append(el('p', 'cm-seed-empty', researchText.pickerSearching()));
-    else if (this.extItems.length && this.opts.onSelectExternal) {
+    else if (extShown.length && this.opts.onSelectExternal) {
       this.listEl.append(el('div', 'pp-section-label', researchText.pickerExternalHeading()));
-      for (const item of this.extItems) {
+      for (const item of extShown) {
         const opt = mkBtn(`${optCls} is-external`, '', () => this.opts.onSelectExternal!(item));
         opt.setAttribute('role', 'option'); opt.dataset.extId = item.id;
         opt.append(el('span', `${optCls}-title`, item.title), ...(item.meta ? [el('span', `${optCls}-meta`, item.meta)] : []));
