@@ -254,9 +254,12 @@ async function run(): Promise<void> {
       assert.equal(await ws.locator('.cm-edge[data-kind="cites"]').first().getAttribute('marker-end'), 'url(#cm-arrow-hi)');
       await ws.locator('.cm-row[data-node-id="W3"]').hover();
       await page.waitForFunction(() => Boolean(document.querySelector('.cm-node[data-node-id="W1"].is-seed-path') && document.querySelector('.cm-node[data-node-id="W2"].is-seed-path') && document.querySelector('.cm-edge.is-seed-path')));
-      const firstClusterChip = ws.locator('.cm-cluster-chip:not([data-cluster-id="all"])').first();
+      const firstClusterChip = ws.locator('.cm-cluster-chip:not([data-cluster-id="all"])').first(), cid = (await firstClusterChip.getAttribute('data-cluster-id'))!;
+      await ws.locator(`.cm-node:not([data-cluster-id="${cid}"])`).first().click();
+      await ws.locator('.cm-detail').waitFor({ state: 'visible' });
       await firstClusterChip.click();
       assert.equal(await firstClusterChip.getAttribute('aria-pressed'), 'true');
+      assert.ok(!(await ws.locator('.cm-detail').isVisible()) && (await ws.locator(`.cm-halo[data-cluster-id="${cid}"].is-active:not(.is-dimmed)`).count()) === 1 && (await ws.locator(`.cm-node[data-cluster-id="${cid}"].is-dimmed`).count()) === 0);
       assert.ok((await ws.locator('.cm-node.is-dimmed').count()) >= 1);
       assert.ok((await ws.locator('.cm-row:not([hidden])').count()) < 8);
       await ws.locator('.cm-cluster-chip[data-cluster-id="all"]').click();

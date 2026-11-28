@@ -220,19 +220,19 @@ export class CitationMapSvg {
       const isSelf = id === activeId, isNbr = active && !isSelf && neighbors.has(id), onPath = hasPath && path.nodeIds.has(id);
       ref.group.classList.toggle('is-highlighted', isSelf); ref.group.classList.toggle('is-neighbor', isNbr);
       ref.group.classList.toggle('is-seed-path', onPath); ref.group.classList.toggle('is-selected', id === this.selectedId);
-      ref.group.classList.toggle('is-dimmed', active ? (!isSelf && !isNbr && !onPath) : Boolean(cf && ref.node.clusterId !== cf && !onPath));
+      ref.group.classList.toggle('is-dimmed', active ? (!isSelf && !isNbr && !onPath) : Boolean(cf && ref.node.clusterId !== cf));
     }
     for (const edge of this.edgeEls) {
       const hit = active && (edge.source === activeId || edge.target === activeId), onPath = hasPath && path.edgeKeys.has(edge.pairKey);
       const sameCluster = !cf || (this.refs.get(edge.source)?.node.clusterId === cf && this.refs.get(edge.target)?.node.clusterId === cf);
       edge.el.classList.toggle('is-highlighted', hit); edge.el.classList.toggle('is-seed-path', onPath);
-      edge.el.classList.toggle('is-dimmed', active ? (!hit && !onPath) : Boolean(cf && !sameCluster && !onPath));
+      edge.el.classList.toggle('is-dimmed', active ? (!hit && !onPath) : Boolean(cf && !sameCluster));
       if (edge.kind === 'cites') edge.el.setAttribute('marker-end', hit || onPath ? 'url(#cm-arrow-hi)' : 'url(#cm-arrow)');
     }
     const activeCluster = activeId ? this.refs.get(activeId)?.node.clusterId : null;
     for (const h of this.haloEls) {
       h.group.classList.toggle('is-active', Boolean(cf && cf === h.clusterId));
-      h.group.classList.toggle('is-dimmed', Boolean((cf && cf !== h.clusterId) || (active && activeCluster !== h.clusterId)));
+      h.group.classList.toggle('is-dimmed', active ? activeCluster !== h.clusterId : Boolean(cf && cf !== h.clusterId));
     }
   }
 

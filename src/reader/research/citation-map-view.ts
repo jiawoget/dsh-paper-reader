@@ -53,6 +53,7 @@ export function createCitationMapView(): ResearchViewModule {
   const openSeedPicker = () => { seedPickerOpen = true; seedPicker?.open(); syncSeedPill(); };
   const applyClusterFilter = (nextId: string | null) => {
     clusterFilter = nextId;
+    if (selectedId) closeDetail();
     svg?.setClusterFilter(nextId);
     const allowed = nextId ? new Set(clusters.find(c => c.id === nextId)?.nodeIds ?? []) : null;
     for (const [nid, row] of rowEls) row.hidden = Boolean(allowed && !allowed.has(nid));
