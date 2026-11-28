@@ -26,10 +26,14 @@
 .rt-pager { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; flex: none; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--paper); }
 .rt-pager-count { font-size: 12px; color: var(--muted); }
 .rt-empty .rt-show-all-btn { margin-top: 12px; }
+.lc-smart-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.lc-smart-btn { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: var(--radius-pill); white-space: nowrap; }
+.lc-smart-btn[data-smart="top-matching"] { background: var(--lavender); color: var(--purple); border-color: var(--quote-border); font-weight: 600; }
+.lc-group-more { justify-self: start; margin: 4px 8px; min-height: 28px; padding: 4px 8px; font-size: 12px; color: var(--purple); }
 @media (pointer: coarse), (max-width: 700px) {
   .rt-check-wrap { min-width: 44px; min-height: 44px; }
   .rt-check { width: 24px; height: 24px; }
-  .rt-seg-btn { min-height: 44px; padding: 8px 12px; }
+  .rt-seg-btn, .lc-smart-btn, .lc-group-more { min-height: 44px; padding: 8px 12px; }
 }
 @media (max-width: 700px) {
   .rt-content { flex: 1 0 auto; overflow: visible; }

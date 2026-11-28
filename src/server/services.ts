@@ -6,6 +6,7 @@ import {
 import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
 import { discoverDocResources, scheduleResourceDiscovery } from './doc-resources-discover.js';
+import { bulkDeleteDocuments, bulkUpdateDocTriage, readBulkDocIds } from './doc-meta.js';
 import { addDocResource, listDocResources, pendingResourceCounts, removeDocResource, updateDocResourceStatus } from './doc-resources-store.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, searchAcademicPapers, type GraphContext } from './academic-graph.js';
 import { saveGraphPaper } from './paper-save.js';
@@ -79,6 +80,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'library.rename': async input => ({ doc: await documents.rename(input.id, input.title) }),
     'library.updateMeta': async input => ({ doc: await documents.updateMeta(input) }),
     'library.delete': input => documents.delete(input.id),
+    'library.bulkDelete': input => bulkDeleteDocuments(documents, input.docIds),
     'library.createAbstract': async input => {
       const doc = await documents.createAbstract(input);
       await indexDoc(doc, doc.kind === 'abstract').catch(() => 0);
@@ -109,10 +111,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'library.exportRefs': async input => {
       const format = input.format;
       if (format !== 'bibtex' && format !== 'ris' && format !== 'csv') throw new ServiceError(400, 'Choose BibTeX, RIS, or CSV.');
-      const filter = input.docIds === undefined ? undefined : (() => {
-        if (!Array.isArray(input.docIds) || input.docIds.length > 1000) throw new ServiceError(400, 'Invalid document filter.');
-        return new Set(input.docIds.map(id => single(id, 'document ID', 512, true)));
-      })();
+      const filter = input.docIds === undefined ? undefined : new Set(readBulkDocIds(input.docIds, false));
       const listed = (await documents.list()).filter(d => !filter || filter.has(d.id)), metas = database.listDocMeta();
       const fullDocs = await Promise.all(listed.map(async d => {
         const full = d.id === 'pagedattention' ? d : await documents.get(d.id).catch(() => d), meta = metas.get(full.id);
@@ -122,6 +121,10 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     },
     'library.progress.save': input => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
     'library.triage': input => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
+    'library.bulkTriage': async input => {
+      const validIds = new Set((await documents.list()).map(d => d.id));
+      return database.withDb(true, db => bulkUpdateDocTriage(db, input, validIds));
+    },
     'library.search': async input => {
       const query = single(input.query, 'search query', 256);
       return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };
@@ -143,10 +146,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'pages.search': async input => {
       const query = single(input.query, 'search query', 500);
       if (!query) return { hits: [] };
-      const docIds = input.docIds === undefined ? undefined : (() => {
-        if (!Array.isArray(input.docIds) || input.docIds.length > 500) throw new ServiceError(400, 'Invalid document filter.');
-        return input.docIds.map(id => single(id, 'document ID', 512, true));
-      })();
+      const docIds = input.docIds === undefined ? undefined : readBulkDocIds(input.docIds, false);
       const limit = input.limit;
       if (limit !== undefined && (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 200)) {
         throw new ServiceError(400, 'Invalid search limit.');

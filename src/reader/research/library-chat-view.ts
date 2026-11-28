@@ -202,8 +202,10 @@ export function createLibraryChatView(): ResearchViewModule {
 
   const loadLibrary = async (initTopic?: string) => {
     const seq = ++loadSeq;
-    try { const { docs } = await api('library.list', {}); if (mounted && seq === loadSeq) { const valid = new Set(docs.map(d => d.id)); scope?.setDocs(docs, initTopic); dropSavedNotes(id => !valid.has(id)); } }
-    catch (err) { if (mounted && seq === loadSeq) toast(message(err)); }
+    try {
+      const [{ docs }, { topics }] = await Promise.all([api('library.list', {}), api('topics.list', {}).catch(() => ({ topics: [] }))]);
+      if (mounted && seq === loadSeq) { const valid = new Set(docs.map(d => d.id)); scope?.setDocs(docs, initTopic, topics); dropSavedNotes(id => !valid.has(id)); }
+    } catch (err) { if (mounted && seq === loadSeq) toast(message(err)); }
   };
 
   return {
@@ -247,7 +249,7 @@ export function createLibraryChatView(): ResearchViewModule {
       const topic = ctx.openContext()?.topic || ctx.activeTopic() || undefined;
       void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted) void loadLibrary(restored ? undefined : topic); });
     },
-    unmount() { mounted = false; events?.abort(); events = null; abortStream(); hidePopover(); modelPicker?.destroy(); modelPicker = undefined; scope = undefined; streamSlot = undefined; },
+    unmount() { mounted = false; ++loadSeq; events?.abort(); events = null; abortStream(); hidePopover(); modelPicker?.destroy(); modelPicker = undefined; scope = undefined; streamSlot = undefined; },
     saveState: (): SavedLibraryChatState => ({
       turns: turns.map(x => ({ ...x })), draft: inputEl?.value ?? draft, logScrollTop: logEl?.scrollTop ?? 0,
       scope: scope?.saveState() ?? { selectedIds: [], filter: '', open: true, collapsedSections: [], collapsedGroups: [], scrollTop: 0 }

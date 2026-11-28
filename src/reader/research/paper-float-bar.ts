@@ -47,7 +47,7 @@ export function createWorkspaceFloatCallbacks(getShell: () => ResearchShellConte
   };
 }
 
-interface PaperFloatOptions { placement?: 'auto' | 'outside'; }
+interface PaperFloatOptions { placement?: 'auto' | 'outside'; isSuppressed?: () => boolean; }
 
 export class PaperFloatBar {
   readonly root = el('div', 'pf-bar');
@@ -76,6 +76,7 @@ export class PaperFloatBar {
     if (this.activeItem === itemEl && !this.root.hidden) this.syncButtons(target);
   }
   showFor(itemEl: HTMLElement): void {
+    if (this.options?.isSuppressed?.()) { this.hide(); return; }
     if (this.busy) { if (this.activeItem === itemEl) this.cancelHide(); return; }
     const target = this.targets.get(itemEl);
     if (!target || !itemEl.isConnected) return;
@@ -152,9 +153,11 @@ export class PaperFloatBar {
   private bindEvents(): void {
     const signal = this.ac.signal;
     const staysInside = (next: EventTarget | null) => next instanceof Node && (this.root.contains(next) || Boolean(this.activeItem?.contains(next)));
+    const isCheck = (node: EventTarget | null) => node instanceof Element && Boolean(node.closest('input[type="checkbox"], .library-check-wrap, .rt-check-wrap, .lc-doc-check-wrap'));
     this.host.addEventListener('pointerover', e => {
       if ((e as PointerEvent).pointerType === 'touch') return;
       if (e.target instanceof Node && this.root.contains(e.target)) { this.cancelHide(); return; }
+      if (isCheck(e.target)) { if (!this.root.hidden) this.hide(); return; }
       const item = this.itemFromNode(e.target); if (item) this.showFor(item);
     }, { signal });
     this.host.addEventListener('pointerout', e => {
@@ -166,12 +169,13 @@ export class PaperFloatBar {
     this.root.addEventListener('pointerleave', e => { if (!staysInside((e as PointerEvent).relatedTarget)) this.scheduleHide(); }, { signal });
     this.host.addEventListener('focusin', e => {
       if (e.target instanceof Node && this.root.contains(e.target)) { this.cancelHide(); return; }
+      if (isCheck(e.target)) { if (!this.root.hidden) this.hide(); return; }
       const item = this.itemFromNode(e.target); if (item) this.showFor(item); else if (!this.root.hidden) this.hide();
     }, { signal });
     this.host.addEventListener('focusout', e => { if (!this.root.hidden && !staysInside((e as FocusEvent).relatedTarget)) this.scheduleHide(80); }, { signal });
     this.host.addEventListener('click', e => {
       if (!(e.target instanceof Element) || this.root.contains(e.target)) return;
-      if (e.target.closest('button, a[href], input, select, textarea')) { if (!this.root.hidden) this.hide(); return; }
+      if (e.target.closest('button, a[href], input, select, textarea, label')) { if (!this.root.hidden) this.hide(); return; }
       const item = this.itemFromNode(e.target); if (item) this.showFor(item);
     }, { signal });
     this.host.addEventListener('keydown', e => {

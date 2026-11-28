@@ -91,6 +91,56 @@ export function updateDocTriage(db: DatabaseSync, input: Input): DocMeta {
   });
 }
 
+export function readBulkDocIds(raw: unknown, required = true): string[] {
+  if (!Array.isArray(raw) || (required && !raw.length) || raw.length > 5000) {
+    throw new ServiceError(400, required ? 'Select between 1 and 5000 documents.' : 'Invalid document filter.');
+  }
+  return [...new Set(raw.map(id => single(id, 'document ID', 512, true)))];
+}
+
+export function bulkUpdateDocTriage(db: DatabaseSync, input: Input, validIds: ReadonlySet<string>): { updated: number } {
+  const docIds = readBulkDocIds(input.docIds, true);
+  if (input.status !== undefined && !isStatus(input.status)) throw new ServiceError(400, 'Choose unread, reading, or done.');
+  if (input.starred !== undefined && typeof input.starred !== 'boolean') throw new ServiceError(400, 'Starred must be a boolean.');
+  const addTags = input.addTags === undefined ? undefined : sanitizeTags(input.addTags);
+  const removeTags = input.removeTags === undefined ? undefined : sanitizeTags(input.removeTags);
+  if (input.status === undefined && input.starred === undefined && addTags === undefined && removeTags === undefined) {
+    throw new ServiceError(400, 'Provide tags, status, or starred to update.');
+  }
+  const removeKeys = new Set((removeTags ?? []).map(tag => tag.toLocaleLowerCase()));
+  const targets = docIds.filter(id => validIds.has(id));
+  if (!targets.length) return { updated: 0 };
+  const existing = listDocMeta(db);
+  for (const docId of targets) {
+    const prev = existing.get(docId) ?? { status: 'unread', starred: false, tags: [] };
+    let tags = prev.tags;
+    if (removeKeys.size || addTags?.length) {
+      const kept = prev.tags.filter(tag => !removeKeys.has(tag.toLocaleLowerCase()));
+      const seen = new Set(kept.map(tag => tag.toLocaleLowerCase()));
+      tags = [...kept];
+      for (const tag of addTags ?? []) {
+        const key = tag.toLocaleLowerCase();
+        if (!seen.has(key) && tags.length < 20) { seen.add(key); tags.push(tag); }
+      }
+    }
+    upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
+  }
+  return { updated: targets.length };
+}
+
+export async function bulkDeleteDocuments(
+  library: { hasSync(id: unknown): boolean; delete(id: unknown): Promise<{ id: string; deleted: boolean }> },
+  rawDocIds: unknown
+): Promise<{ deletedIds: string[]; skippedIds: string[] }> {
+  const docIds = readBulkDocIds(rawDocIds, true), deletedIds: string[] = [], skippedIds: string[] = [];
+  for (const id of docIds) {
+    if (id === 'pagedattention' || !library.hasSync(id)) { skippedIds.push(id); continue; }
+    const res = await library.delete(id);
+    if (res.deleted) deletedIds.push(id); else skippedIds.push(id);
+  }
+  return { deletedIds, skippedIds };
+}
+
 export function deleteDocMeta(db: DatabaseSync, docId: string): void {
   db.prepare('DELETE FROM doc_meta WHERE docId=?').run(docId);
 }
