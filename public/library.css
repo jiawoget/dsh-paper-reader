@@ -35,7 +35,19 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .library-results:empty { display: none; }
 .library-source:has(.library-results:empty) { min-height: 180px; display: flex; flex-direction: column; }
 .library-source:has(.library-results:empty) .library-footer { margin-top: auto; }
-.zotero-item, .library-device-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.zotero-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.library-device-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.library-check-wrap { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; cursor: pointer; border-radius: var(--radius-sm); }
+.library-check { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-solid); cursor: pointer; }
+.library-sel-strip { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--ink-muted); }
+.library-sel-count { font-variant-numeric: tabular-nums; }
+.library-sel-vis { min-height: 28px; padding: 4px 8px; font-size: 12px; }
+.library-bulk-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--quote-border); border-radius: var(--radius-md); background: var(--surface-tint); }
+.library-bulk-count { padding: 4px 8px; border-radius: var(--radius-pill); background: var(--lavender); color: var(--purple); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.library-bulk-tag-form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 1 1 200px; }
+.library-bulk-tag-in { flex: 1 1 120px; min-height: 32px; padding: 4px 8px; font-size: 13px; }
+.library-bulk-clear { margin-inline-start: auto; min-height: 28px; padding: 4px 8px; font-size: 12px; }
+.library-pager { display: flex; align-items: center; justify-content: center; padding-top: 12px; margin-top: 8px; border-top: 1px solid var(--line); }
 .zotero-item + .zotero-item, .library-results > :is(.doc-row, .library-device-item, .library-rename) + :is(.doc-row, .library-device-item, .library-rename) { border-top: 1px solid var(--line); }
 .library-item-actions { display: flex; align-items: center; gap: 3px; flex: none; }
 .library-item-actions .icon-btn { min-width: 32px; height: 32px; color: var(--ink-muted); }
@@ -89,10 +101,11 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
   .library-imports { margin: 0 0 10px; }
   .library-tabs { order: 1; }
   .library-tab, .reader-library .btn, .library-footer :is(.text-btn, a), .library-zotero-link, .reader-library :is(.search, select) { min-height: 44px; }
-  .library-device-item { grid-template-columns: minmax(0, 1fr); }
-  .library-item-actions { justify-content: flex-end; flex-wrap: wrap; gap: 4px; padding-bottom: 6px; }
+  .library-device-item { grid-template-columns: auto minmax(0, 1fr); }
+  .library-item-actions { grid-column: 1 / -1; justify-content: flex-end; flex-wrap: wrap; gap: 4px; padding-bottom: 8px; }
   .library-item-actions :is(.icon-btn, .btn) { min-width: 44px; min-height: 44px; height: 44px; }
   .library-triage-controls select { min-width: 44px; min-height: 44px; flex: 1 1 140px; }
+  .library-bulk-clear { margin-inline-start: 0; }
   .library-filters { grid-template-columns: minmax(0, 3fr) minmax(7em, 2fr); }
   .library-results { max-height: 42dvh; }
   .library-source { padding-top: 12px; }
@@ -110,6 +123,9 @@ dialog:has(.reader-library) #dialogBody { padding: 0 22px 15px; }
 .zotero-settings-test { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; font-size: 12px; }
 @media (pointer: coarse), (max-width: 700px), (max-width: 900px) and (max-height: 520px) {
   .zotero-connection .btn, .library-item-actions .icon-btn { min-width: 44px; min-height: 44px; height: 44px; }
+  .library-sel-vis, .library-bulk-clear, .library-bulk-actions :is(.btn, input), .library-pager .btn { min-width: 44px; min-height: 44px; }
+  .library-check-wrap { min-width: 44px; min-height: 44px; }
+  .library-check { width: 24px; height: 24px; }
 }
 @media (prefers-reduced-motion: no-preference) {
   :root:not([data-theme-switching]) :is(.library-tab, .library-document, .library-zotero-link, .pdf-drop-overlay) {

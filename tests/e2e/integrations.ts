@@ -443,7 +443,39 @@ async function linkedResources({ context, host, pane }: ReaderSession): Promise<
   await rtCodeChip.hover();
   await rtCodeChip.locator('.doc-res-chip-del').click();
   await rtCodeChip.waitFor({ state: 'detached' });
-  console.log('PASS 10: linked paper resources (auto-classified URL, invalid URL rejection, local companion + backlink navigation, accept/dismiss/remove, library indicator, Review Table drawer).');
+
+  const scaleIds = await Promise.all(Array.from({ length: 54 }, (_, i) => post('library.createAbstract', {
+    title: `Scale Synthetic Paper ${String(i + 1).padStart(2, '0')}`, abstract: i < 6 ? 'Scale topic sparse attention benchmark.' : 'General systems paper.'
+  }).then(r => (r.doc as { id: string }).id)));
+  await Promise.all([
+    post('topics.save', { name: 'Scale Topic', tag: 'scale-topic' }), post('library.bulkTriage', { docIds: scaleIds.slice(0, 6), addTags: ['scale-topic'] }),
+    post('library.bulkTriage', { docIds: scaleIds.slice(10, 13), starred: true }), post('library.bulkTriage', { docIds: scaleIds.slice(20, 22), addTags: ['screen:yes'] })
+  ]);
+  await pane.locator('.rw-collapse-btn').click(); await pane.locator('#library').click();
+  const dlg = pane.getByRole('dialog'), libChecks = dlg.locator('.library-device-item .library-check');
+  await dlg.getByRole('tab', { name: 'On this device', exact: true }).click(); await dlg.locator('.library-show-more').waitFor({ state: 'visible' });
+  assert.equal(await dlg.locator('.library-device-item').count(), 50); assert.match(await dlg.locator('.library-sel-count').innerText(), /1–50/);
+  await dlg.locator('.library-show-more').click(); assert.ok((await dlg.locator('.library-device-item').count()) > 50);
+  await dlg.locator('.library-tag-filter').selectOption('scale-topic'); assert.equal(await dlg.locator('.library-device-item').count(), 6);
+  await libChecks.nth(0).click(); await libChecks.nth(2).click({ modifiers: ['Shift'] });
+  await dlg.locator('.library-bulk-actions').waitFor({ state: 'visible' }); assert.equal(await dlg.locator('.library-bulk-count').innerText(), '3 selected');
+  await dlg.locator('.library-bulk-tag-btn').click(); await dlg.locator('.library-bulk-tag-in').fill('batch-ok'); await dlg.locator('.library-bulk-tag-apply').click();
+  await dlg.locator('.library-tag', { hasText: 'batch-ok' }).first().waitFor({ state: 'visible' });
+  await dlg.locator('.library-bulk-review-btn').click(); await pane.locator('.rt-grid').waitFor({ state: 'visible' });
+  await pane.locator('.rw-collapse-btn').click(); await pane.locator('#library').click();
+  await dlg.getByRole('tab', { name: 'On this device', exact: true }).click(); await dlg.locator('.library-tag-filter').selectOption('scale-topic');
+  await libChecks.nth(0).click(); await libChecks.nth(1).click(); await dlg.locator('.library-bulk-del-btn').click(); await dlg.locator('.library-bulk-del-confirm').click();
+  await dlg.locator('.library-device-item').nth(4).waitFor({ state: 'detached' }); assert.equal(await dlg.locator('.library-device-item').count(), 4); await pane.locator('#closeDialog').click();
+  await pane.getByRole('button', { name: 'Research', exact: true }).click(); await pane.locator('.rw-nav-btn[data-view="library-chat"]').click();
+  await pane.locator('.lc-cat-toggle[data-section-id="topics"]').waitFor({ state: 'visible' });
+  assert.equal(await pane.locator('.lc-cat-toggle').first().getAttribute('data-section-id'), 'topics');
+  assert.ok((await pane.locator('.lc-cat-toggle[data-section-id="completeness"]').getAttribute('aria-expanded')) === 'false' && (await pane.locator('.lc-cat-toggle[data-section-id="status"]').getAttribute('aria-expanded')) === 'false');
+  await pane.locator('.lc-group:has(input[data-group-id="tag:__untagged__"]) .lc-group-fold').click(); await pane.locator('.lc-group-more[data-group-id="tag:__untagged__"]').waitFor({ state: 'visible' });
+  assert.equal(await pane.locator('.lc-group:has(input[data-group-id="tag:__untagged__"]) .lc-doc-row').count(), 30);
+  await pane.locator('.lc-scope-search').fill('Scale Synthetic Paper'); await pane.locator('.lc-smart-btn[data-smart="top-matching"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^30 \/ /);
+  await pane.locator('.lc-smart-btn[data-smart="starred"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^3 \/ /);
+  await pane.locator('.lc-smart-btn[data-smart="included"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^2 \/ /);
+  console.log('PASS 10: linked paper resources + 500-scale library dialog & chat scope.');
 }
 
 const selected = process.argv.slice(2);

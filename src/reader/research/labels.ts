@@ -199,5 +199,25 @@ export const researchText = {
   triageRelTitle: (score: number, ai: boolean, rationale?: string) => {
     const kind = ai ? t('AI relevance', 'AI 语义相关度') : t('Keyword relevance', '关键词相关度');
     return rationale ? `${kind} ${score}% — ${rationale}` : `${kind} ${score}%`;
-  }
+  },
+  libraryBulkBar: () => t('Bulk library actions', '批量操作'),
+  libraryAddTag: () => t('Add tag', '添加标签'),
+  libraryTagInput: () => t('Tag name…', '输入标签名…'),
+  libraryApplyTag: () => t('Apply', '应用'),
+  libraryOpenReview: () => t('Open in Review Table', '在筛选表中打开'),
+  libraryDeleteN: (n: number) => t(`Delete (${n})`, `删除 (${n})`),
+  libraryConfirmDeleteN: (n: number) => t(`Confirm delete (${n})`, `确认删除 (${n})`),
+  libraryBulkTagged: (n: number, tag: string) => t(`Tagged ${n} paper${n === 1 ? '' : 's'} with "${tag}".`, `已为 ${n} 篇文献添加标签“${tag}”。`),
+  libraryBulkDeleted: (deleted: number, skipped: number) => deleted > 0 && skipped > 0
+    ? t(`Deleted ${deleted} paper${deleted === 1 ? '' : 's'} (${skipped} protected/skipped).`, `已删除 ${deleted} 篇文献（跳过 ${skipped} 篇受保护或已移除文献）。`)
+    : deleted > 0 ? t(`Deleted ${deleted} paper${deleted === 1 ? '' : 's'}.`, `已删除 ${deleted} 篇文献。`)
+    : t('Protected sample paper cannot be deleted.', '内置示例论文不可删除。'),
+  lcTopicsSection: () => t('Topics & Collections', '主题与合集'),
+  lcSmartScope: () => t('Smart scope', '智能选篇'),
+  lcTopMatching: (n: number) => t(`Top ${n} matching`, `最相关前 ${n} 篇`),
+  lcStarred: () => t('Starred', '星标文献'),
+  lcIncludedReview: () => t('Included (Review)', '已纳入（筛选表）'),
+  lcShowMoreGroup: (rem: number) => t(`Show more (${rem} remaining)`, `展开更多（剩余 ${rem} 篇）`),
+  lcSmartSelected: (n: number) => t(`Selected ${n} paper${n === 1 ? '' : 's'}.`, `已选中 ${n} 篇文献。`),
+  lcSmartEmpty: () => t('No papers match this quick scope.', '当前快捷范围下暂无匹配文献。')
 };

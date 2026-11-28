@@ -103,7 +103,7 @@ function readHistory(value: unknown): LibraryChatMessage[] {
   });
 }
 async function resolveScope(docIdsInput: unknown, deps: LibraryChatDeps): Promise<{ scopes: ScopedDoc[]; truncatedCount: number }> {
-  if (!Array.isArray(docIdsInput) || !docIdsInput.length || docIdsInput.length > 500) throw new ServiceError(400, 'Select at least one paper for Library Chat.');
+  if (!Array.isArray(docIdsInput) || !docIdsInput.length || docIdsInput.length > 5000) throw new ServiceError(400, 'Select at least one paper for Library Chat.');
   const existingIds = new Set((await deps.library.list()).map(d => d.id));
   const present = [...new Set(docIdsInput.map(raw => single(raw, 'document ID', 512, true)))].filter(id => existingIds.has(id));
   if (!present.length) throw new ServiceError(400, 'No selected papers were found in the library.');

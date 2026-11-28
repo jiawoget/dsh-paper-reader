@@ -1,6 +1,7 @@
-import type { DocumentInfo } from '../../shared/types.js';
+import { rankDocsByRelevance } from '../../shared/library-relevance.js';
+import type { DocumentInfo, TopicRecord } from '../../shared/types.js';
 import { abstractOnlyLabel } from '../abstract-view.js';
-import { el, icon, readerLabel as t } from '../ui.js';
+import { el, icon, readerLabel as t, toast } from '../ui.js';
 import { researchIcon } from './icons.js';
 import { researchText } from './labels.js';
 import { mkBtn } from './paper-intake.js';
@@ -12,13 +13,21 @@ export interface ScopeSavedState {
 interface ScopeGroup { id: string; label: string; docs: DocumentInfo[] }
 interface ScopeSection { id: string; label: string; groups: ScopeGroup[] }
 
+const AUTO_COLLAPSE_DOCS = 30, AUTO_COLLAPSE_GROUP = 25, GROUP_PAGE_SIZE = 30, SMART_SCOPE_CAP = 30;
 const docTitle = (d: DocumentInfo) => d.paperTitle || d.title;
 const docSub = (d: DocumentInfo) => [d.authors?.split(/[,;]/)[0]?.trim() || '', d.year || ''].filter(Boolean).join(' · ');
 
-function buildSections(docs: readonly DocumentInfo[]): ScopeSection[] {
+function buildSections(docs: readonly DocumentInfo[], topics: readonly TopicRecord[]): ScopeSection[] {
+  const topicGroups: ScopeGroup[] = [];
+  for (const tp of topics) {
+    const key = (tp.tag || tp.name).toLocaleLowerCase();
+    if (!key) continue;
+    const list = docs.filter(d => (d.meta?.tags ?? []).some(tag => tag.toLocaleLowerCase() === key));
+    if (list.length) topicGroups.push({ id: `topic:${tp.id}`, label: tp.name, docs: list });
+  }
   const byTag = new Map<string, DocumentInfo[]>(), untagged: DocumentInfo[] = [];
   for (const d of docs) {
-    const tags = d.meta?.tags?.filter(Boolean) ?? [];
+    const tags = (d.meta?.tags ?? []).filter(tag => Boolean(tag) && !/^screen:/i.test(tag));
     if (!tags.length) untagged.push(d);
     else for (const tag of tags) { const list = byTag.get(tag) ?? []; list.push(d); byTag.set(tag, list); }
   }
@@ -32,6 +41,7 @@ function buildSections(docs: readonly DocumentInfo[]): ScopeSection[] {
   push(stat, 'status:read', t('Read', '已读'), docs.filter(d => d.meta?.status === 'done' || d.meta?.status === 'reading'));
   push(stat, 'status:unread', t('Unread', '未读'), docs.filter(d => !d.meta?.status || d.meta.status === 'unread'));
   return [
+    { id: 'topics', label: researchText.lcTopicsSection(), groups: topicGroups },
     { id: 'tags', label: t('Collection / Tag', '课题 / 标签'), groups: tagGroups },
     { id: 'completeness', label: t('Text Completeness', '文本完整度'), groups: comp },
     { id: 'status', label: t('Reading Status', '阅读状态'), groups: stat }
@@ -43,12 +53,15 @@ export class LibraryChatScope {
   readonly backdrop = el('div', 'lc-scope-backdrop');
   private readonly badge = el('span', 'lc-scope-badge');
   private readonly search = el('input', 'search lc-scope-search');
+  private readonly topMatchBtn: HTMLButtonElement;
   private readonly body = el('div', 'lc-scope-body');
   private docs: DocumentInfo[] = [];
+  private topics: TopicRecord[] = [];
   private selected = new Set<string>();
   private collapsedSections = new Set<string>();
   private collapsedGroups = new Set<string>();
-  private initialized = false; private filter = ''; private open = innerWidth > 1080; private restoredScroll?: number;
+  private groupLimits = new Map<string, number>();
+  private initialized = false; private autoCollapsed = false; private filter = ''; private open = innerWidth > 1080; private restoredScroll?: number;
   private groupRefs: { ids: string[]; input: HTMLInputElement; count: HTMLElement }[] = [];
   private docInputs = new Map<string, HTMLInputElement[]>();
 
@@ -63,10 +76,19 @@ export class LibraryChatScope {
     head.append(titleWrap, closeBtn);
     this.search.type = 'search'; this.search.placeholder = t('Search papers…', '筛选文献…');
     this.search.ariaLabel = t('Filter papers by title, author, or tag', '按标题、作者或标签筛选文献');
-    this.search.addEventListener('input', () => { this.filter = this.search.value; this.render(); });
-    const tools = el('div', 'lc-scope-tools'), bulk = el('div', 'lc-scope-bulk');
+    this.search.addEventListener('input', () => { this.filter = this.search.value; this.groupLimits.clear(); this.syncSmartBar(); this.render(); });
+    const tools = el('div', 'lc-scope-tools'), bulk = el('div', 'lc-scope-bulk'), smart = el('div', 'lc-smart-bar');
+    smart.setAttribute('role', 'group'); smart.ariaLabel = researchText.lcSmartScope();
+    const smartBtn = (key: string, label: string, run: () => void) => { const b = mkBtn('btn lc-smart-btn', label, run); b.dataset.smart = key; return b; };
+    this.topMatchBtn = smartBtn('top-matching', researchText.lcTopMatching(SMART_SCOPE_CAP), () => this.applySmartTopMatching());
+    this.topMatchBtn.hidden = true;
+    smart.append(
+      this.topMatchBtn,
+      smartBtn('starred', researchText.lcStarred(), () => this.applySmartIds(this.docs.filter(d => Boolean(d.meta?.starred)).slice(0, SMART_SCOPE_CAP).map(d => d.id))),
+      smartBtn('included', researchText.lcIncludedReview(), () => this.applySmartIds(this.docs.filter(d => (d.meta?.tags ?? []).some(tag => /^screen:yes$/i.test(tag))).slice(0, SMART_SCOPE_CAP).map(d => d.id)))
+    );
     bulk.append(mkBtn('text-btn lc-bulk-btn', t('Select all', '全选'), () => this.selectFiltered(true)), mkBtn('text-btn lc-bulk-btn', t('Deselect all', '取消全选'), () => this.selectFiltered(false)));
-    tools.append(this.search, bulk); this.root.append(head, tools, this.body);
+    tools.append(this.search, smart, bulk); this.root.append(head, tools, this.body);
     this.root.addEventListener('keydown', e => { if (e.key === 'Escape' && this.open && innerWidth <= 1080) { e.stopPropagation(); close(); } });
     this.syncVisibility();
   }
@@ -76,15 +98,24 @@ export class LibraryChatScope {
   getAllDocs(): DocumentInfo[] { return this.docs; }
   getSelectedDocs(): DocumentInfo[] { return this.docs.filter(d => this.selected.has(d.id)); }
 
-  setDocs(docs: DocumentInfo[], initTopic?: string): void {
+  setDocs(docs: DocumentInfo[], initTopic?: string, topics?: TopicRecord[]): void {
     this.docs = docs;
+    if (topics) this.topics = topics;
     const valid = new Set(docs.map(d => d.id));
     if (!this.initialized) {
       this.initialized = true;
       const scoped = initTopic ? docs.filter(d => d.meta?.tags?.includes(initTopic)) : [];
       for (const d of (scoped.length ? scoped : docs)) this.selected.add(d.id);
     } else for (const id of [...this.selected]) if (!valid.has(id)) this.selected.delete(id);
-    this.render(); this.flushScroll(); this.opts.onChange();
+    if (!this.autoCollapsed && docs.length > AUTO_COLLAPSE_DOCS) {
+      this.autoCollapsed = true;
+      this.collapsedSections.add('completeness');
+      this.collapsedSections.add('status');
+      for (const sec of buildSections(docs, this.topics)) {
+        for (const group of sec.groups) if (group.docs.length > AUTO_COLLAPSE_GROUP) this.collapsedGroups.add(group.id);
+      }
+    }
+    this.syncSmartBar(); this.render(); this.flushScroll(); this.opts.onChange();
   }
 
   removeDoc(docId: string): void { this.docs = this.docs.filter(d => d.id !== docId); this.selected.delete(docId); this.render(); this.opts.onChange(); }
@@ -94,13 +125,23 @@ export class LibraryChatScope {
   }
 
   restoreState(s: ScopeSavedState): void {
-    this.initialized = true; this.selected = new Set(s.selectedIds ?? []); this.filter = s.filter ?? '';
+    this.initialized = true; this.autoCollapsed = true; this.selected = new Set(s.selectedIds ?? []); this.filter = s.filter ?? '';
     this.search.value = this.filter; this.open = Boolean(s.open);
     this.collapsedSections = new Set(s.collapsedSections ?? []); this.collapsedGroups = new Set(s.collapsedGroups ?? []);
-    this.restoredScroll = s.scrollTop ?? 0; this.syncVisibility(); this.render(); this.flushScroll();
+    this.restoredScroll = s.scrollTop ?? 0; this.syncSmartBar(); this.syncVisibility(); this.render(); this.flushScroll();
   }
 
   private flushScroll(): void { if (this.restoredScroll !== undefined && this.docs.length) { this.body.scrollTop = this.restoredScroll; this.restoredScroll = undefined; } }
+  private syncSmartBar(): void { this.topMatchBtn.hidden = !this.filter.trim(); }
+  private applySmartIds(ids: string[]): void {
+    if (!ids.length) { toast(researchText.lcSmartEmpty()); return; }
+    this.selected = new Set(ids); this.syncChecks(); this.opts.onChange(); toast(researchText.lcSmartSelected(ids.length));
+  }
+  private applySmartTopMatching(): void {
+    const q = this.filter.trim(); if (!q) return;
+    const picked = rankDocsByRelevance(q, this.docs).filter(m => m.score > 0).slice(0, SMART_SCOPE_CAP).map(m => m.docId);
+    this.applySmartIds(picked);
+  }
 
   private filteredDocs(): DocumentInfo[] {
     const q = this.filter.trim().toLowerCase();
@@ -132,7 +173,7 @@ export class LibraryChatScope {
       this.syncChecks(); return;
     }
     const toggleSet = (set: Set<string>, id: string) => { if (set.has(id)) set.delete(id); else set.add(id); this.render(); };
-    for (const sec of buildSections(matched)) {
+    for (const sec of buildSections(matched, this.topics)) {
       if (!sec.groups.length) continue;
       const box = el('section', 'lc-cat'), collapsed = this.collapsedSections.has(sec.id), toggle = el('button', 'lc-cat-toggle');
       toggle.type = 'button'; toggle.dataset.sectionId = sec.id; toggle.setAttribute('aria-expanded', String(!collapsed));
@@ -150,8 +191,8 @@ export class LibraryChatScope {
           foldBtn.append(icon(gCollapsed ? 'next' : 'down', 14)); foldBtn.addEventListener('click', () => toggleSet(this.collapsedGroups, group.id));
           gHead.append(gLabel, foldBtn); gWrap.append(gHead); this.groupRefs.push({ ids, input: gCheck, count: gCount });
           if (!gCollapsed) {
-            const dList = el('div', 'lc-group-docs');
-            for (const doc of group.docs) {
+            const dList = el('div', 'lc-group-docs'), limit = this.groupLimits.get(group.id) ?? GROUP_PAGE_SIZE, visible = group.docs.slice(0, limit);
+            for (const doc of visible) {
               const title = docTitle(doc), row = el('div', 'lc-doc-row'), checkWrap = el('label', 'lc-doc-check-wrap'), cb = el('input', 'lc-check');
               const openBtn = el('button', 'lc-doc-open'), meta = el('span', 'lc-doc-meta');
               cb.type = 'checkbox'; cb.dataset.docId = doc.id; cb.ariaLabel = `${researchText.selectPaper()}: ${title}`;
@@ -165,6 +206,12 @@ export class LibraryChatScope {
               openBtn.addEventListener('click', () => this.opts.onOpenDoc?.(doc.id));
               row.append(checkWrap, openBtn); dList.append(row);
               this.opts.onAttachRow?.(row, doc);
+            }
+            const remaining = group.docs.length - visible.length;
+            if (remaining > 0) {
+              const moreBtn = mkBtn('text-btn lc-group-more', researchText.lcShowMoreGroup(remaining), () => { this.groupLimits.set(group.id, limit + GROUP_PAGE_SIZE); this.render(); });
+              moreBtn.dataset.groupId = group.id;
+              dList.append(moreBtn);
             }
             gWrap.append(dList);
           }

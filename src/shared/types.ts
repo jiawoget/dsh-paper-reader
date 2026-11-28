@@ -206,11 +206,13 @@ export interface Operations {
   'library.rename': [{ id: string; title: string }, { doc: DocumentInfo }];
   'library.updateMeta': [{ id: string; paperTitle?: string; authors?: string | string[]; venue?: string; year?: string; doi?: string }, { doc: DocumentInfo }];
   'library.delete': [{ id: string }, { id: string; deleted: boolean }];
+  'library.bulkDelete': [{ docIds: string[] }, { deletedIds: string[]; skippedIds: string[] }];
   'library.createAbstract': [CreateAbstractInput, { doc: DocumentInfo }];
   'library.importRefs': [{ text: string; format?: BulkRefFormat | 'auto'; tag?: string }, { created: number; existing: number; skipped: number; docs: DocumentInfo[] }];
   'library.exportRefs': [{ docIds?: string[]; format: BulkRefFormat }, { format: BulkRefFormat; filename: string; content: string; count: number }];
   'library.progress.save': [{ docId: string; lastPage?: number; pageCount?: number; scrollFraction?: number }, { meta: DocMeta }];
   'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[] }, { meta: DocMeta }];
+  'library.bulkTriage': [{ docIds: string[]; addTags?: string[]; removeTags?: string[]; status?: DocStatus; starred?: boolean }, { updated: number }];
   'library.search': [{ query: string }, { hits: LibrarySearchHit[] }];
   'pages.index': [{ docId?: string; force?: boolean }, { indexed: number; pages: number }];
   'pages.search': [{ query: string; docIds?: string[]; limit?: number }, { hits: DocPageHit[] }];

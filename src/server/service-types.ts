@@ -179,11 +179,13 @@ export interface ServiceResults {
   'library.rename': Operations['library.rename'][1];
   'library.updateMeta': Operations['library.updateMeta'][1];
   'library.delete': Operations['library.delete'][1];
+  'library.bulkDelete': Operations['library.bulkDelete'][1];
   'library.createAbstract': Operations['library.createAbstract'][1];
   'library.importRefs': Operations['library.importRefs'][1];
   'library.exportRefs': Operations['library.exportRefs'][1];
   'library.progress.save': Operations['library.progress.save'][1];
   'library.triage': Operations['library.triage'][1];
+  'library.bulkTriage': Operations['library.bulkTriage'][1];
   'library.search': Operations['library.search'][1];
   'pages.index': Operations['pages.index'][1];
   'pages.search': Operations['pages.search'][1];

@@ -1366,19 +1366,25 @@ function searchDocPagesFts(db, query, opts) {
   const fts = buildFtsQuery(query);
   if (!fts) return [];
   const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 40)));
-  const docIds = opts?.docIds?.filter(Boolean);
+  const docIds = opts?.docIds ? [...new Set(opts.docIds.filter(Boolean))] : void 0;
   if (opts?.docIds && !docIds?.length) return [];
-  const filterSql = docIds?.length ? ` AND doc_pages_fts.docId IN (${docIds.map(() => "?").join(",")})` : "";
-  const sql = `SELECT doc_pages_fts.docId AS docId, doc_pages_fts.page AS page, p.text AS text, bm25(doc_pages_fts) AS score
-    FROM doc_pages_fts JOIN doc_pages p ON p.docId = doc_pages_fts.docId AND p.page = doc_pages_fts.page
-    WHERE doc_pages_fts MATCH ?${filterSql} ORDER BY score ASC, doc_pages_fts.docId ASC, doc_pages_fts.page ASC LIMIT ?`;
-  const params = docIds?.length ? [fts, ...docIds, limit] : [fts, limit];
-  return db.prepare(sql).all(...params).map((row) => ({
-    docId: String(row.docId ?? ""),
-    page: Number(row.page),
-    snippet: makeSnippet(String(row.text ?? ""), query),
-    score: Number(row.score ?? 0)
-  }));
+  const runSlice = (ids) => {
+    const filterSql = ids?.length ? ` AND doc_pages_fts.docId IN (${ids.map(() => "?").join(",")})` : "";
+    const sql = `SELECT doc_pages_fts.docId AS docId, doc_pages_fts.page AS page, p.text AS text, bm25(doc_pages_fts) AS score
+      FROM doc_pages_fts JOIN doc_pages p ON p.docId = doc_pages_fts.docId AND p.page = doc_pages_fts.page
+      WHERE doc_pages_fts MATCH ?${filterSql} ORDER BY score ASC, doc_pages_fts.docId ASC, doc_pages_fts.page ASC LIMIT ?`;
+    const params = ids?.length ? [fts, ...ids, limit] : [fts, limit];
+    return db.prepare(sql).all(...params).map((row) => ({
+      docId: String(row.docId ?? ""),
+      page: Number(row.page),
+      snippet: makeSnippet(String(row.text ?? ""), query),
+      score: Number(row.score ?? 0)
+    }));
+  };
+  if (!docIds || docIds.length <= 900) return runSlice(docIds);
+  const hits = [];
+  for (let i = 0; i < docIds.length; i += 900) hits.push(...runSlice(docIds.slice(i, i + 900)));
+  return hits.sort((a, b) => a.score - b.score || a.docId.localeCompare(b.docId) || a.page - b.page).slice(0, limit);
 }
 function decodeTopic(row) {
   return {
@@ -4072,6 +4078,57 @@ function updateDocTriage(db, input) {
     tags: input.tags === void 0 ? prev.tags : sanitizeTags(input.tags)
   });
 }
+function readBulkDocIds(raw, required = true) {
+  if (!Array.isArray(raw) || required && !raw.length || raw.length > 5e3) {
+    throw new ServiceError(400, required ? "Select between 1 and 5000 documents." : "Invalid document filter.");
+  }
+  return [...new Set(raw.map((id) => single(id, "document ID", 512, true)))];
+}
+function bulkUpdateDocTriage(db, input, validIds) {
+  const docIds = readBulkDocIds(input.docIds, true);
+  if (input.status !== void 0 && !isStatus(input.status)) throw new ServiceError(400, "Choose unread, reading, or done.");
+  if (input.starred !== void 0 && typeof input.starred !== "boolean") throw new ServiceError(400, "Starred must be a boolean.");
+  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags);
+  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags);
+  if (input.status === void 0 && input.starred === void 0 && addTags === void 0 && removeTags === void 0) {
+    throw new ServiceError(400, "Provide tags, status, or starred to update.");
+  }
+  const removeKeys = new Set((removeTags ?? []).map((tag) => tag.toLocaleLowerCase()));
+  const targets = docIds.filter((id) => validIds.has(id));
+  if (!targets.length) return { updated: 0 };
+  const existing = listDocMeta(db);
+  for (const docId of targets) {
+    const prev = existing.get(docId) ?? { status: "unread", starred: false, tags: [] };
+    let tags = prev.tags;
+    if (removeKeys.size || addTags?.length) {
+      const kept = prev.tags.filter((tag) => !removeKeys.has(tag.toLocaleLowerCase()));
+      const seen = new Set(kept.map((tag) => tag.toLocaleLowerCase()));
+      tags = [...kept];
+      for (const tag of addTags ?? []) {
+        const key2 = tag.toLocaleLowerCase();
+        if (!seen.has(key2) && tags.length < 20) {
+          seen.add(key2);
+          tags.push(tag);
+        }
+      }
+    }
+    upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
+  }
+  return { updated: targets.length };
+}
+async function bulkDeleteDocuments(library, rawDocIds) {
+  const docIds = readBulkDocIds(rawDocIds, true), deletedIds = [], skippedIds = [];
+  for (const id of docIds) {
+    if (id === "pagedattention" || !library.hasSync(id)) {
+      skippedIds.push(id);
+      continue;
+    }
+    const res = await library.delete(id);
+    if (res.deleted) deletedIds.push(id);
+    else skippedIds.push(id);
+  }
+  return { deletedIds, skippedIds };
+}
 function deleteDocMeta(db, docId) {
   db.prepare("DELETE FROM doc_meta WHERE docId=?").run(docId);
 }
@@ -4805,7 +4862,7 @@ function readHistory(value) {
   });
 }
 async function resolveScope(docIdsInput, deps) {
-  if (!Array.isArray(docIdsInput) || !docIdsInput.length || docIdsInput.length > 500) throw new ServiceError(400, "Select at least one paper for Library Chat.");
+  if (!Array.isArray(docIdsInput) || !docIdsInput.length || docIdsInput.length > 5e3) throw new ServiceError(400, "Select at least one paper for Library Chat.");
   const existingIds = new Set((await deps.library.list()).map((d) => d.id));
   const present = [...new Set(docIdsInput.map((raw) => single(raw, "document ID", 512, true)))].filter((id) => existingIds.has(id));
   if (!present.length) throw new ServiceError(400, "No selected papers were found in the library.");
@@ -9796,6 +9853,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "library.rename": async (input) => ({ doc: await documents.rename(input.id, input.title) }),
     "library.updateMeta": async (input) => ({ doc: await documents.updateMeta(input) }),
     "library.delete": (input) => documents.delete(input.id),
+    "library.bulkDelete": (input) => bulkDeleteDocuments(documents, input.docIds),
     "library.createAbstract": async (input) => {
       const doc = await documents.createAbstract(input);
       await indexDoc(doc, doc.kind === "abstract").catch(() => 0);
@@ -9832,10 +9890,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "library.exportRefs": async (input) => {
       const format = input.format;
       if (format !== "bibtex" && format !== "ris" && format !== "csv") throw new ServiceError(400, "Choose BibTeX, RIS, or CSV.");
-      const filter = input.docIds === void 0 ? void 0 : (() => {
-        if (!Array.isArray(input.docIds) || input.docIds.length > 1e3) throw new ServiceError(400, "Invalid document filter.");
-        return new Set(input.docIds.map((id) => single(id, "document ID", 512, true)));
-      })();
+      const filter = input.docIds === void 0 ? void 0 : new Set(readBulkDocIds(input.docIds, false));
       const listed = (await documents.list()).filter((d) => !filter || filter.has(d.id)), metas = database.listDocMeta();
       const fullDocs = await Promise.all(listed.map(async (d) => {
         const full = d.id === "pagedattention" ? d : await documents.get(d.id).catch(() => d), meta = metas.get(full.id);
@@ -9845,6 +9900,10 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     },
     "library.progress.save": (input) => withDoc(input.docId, () => ({ meta: database.saveDocProgress(input) })),
     "library.triage": (input) => withDoc(input.docId, () => ({ meta: database.updateDocTriage(input) })),
+    "library.bulkTriage": async (input) => {
+      const validIds = new Set((await documents.list()).map((d) => d.id));
+      return database.withDb(true, (db) => bulkUpdateDocTriage(db, input, validIds));
+    },
     "library.search": async (input) => {
       const query = single(input.query, "search query", 256);
       return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };
@@ -9869,10 +9928,7 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
     "pages.search": async (input) => {
       const query = single(input.query, "search query", 500);
       if (!query) return { hits: [] };
-      const docIds = input.docIds === void 0 ? void 0 : (() => {
-        if (!Array.isArray(input.docIds) || input.docIds.length > 500) throw new ServiceError(400, "Invalid document filter.");
-        return input.docIds.map((id) => single(id, "document ID", 512, true));
-      })();
+      const docIds = input.docIds === void 0 ? void 0 : readBulkDocIds(input.docIds, false);
       const limit = input.limit;
       if (limit !== void 0 && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 200)) {
         throw new ServiceError(400, "Invalid search limit.");

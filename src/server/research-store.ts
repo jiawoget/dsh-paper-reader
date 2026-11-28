@@ -109,16 +109,22 @@ export function searchDocPagesFts(db: DatabaseSync, query: string, opts?: { docI
   const fts = buildFtsQuery(query);
   if (!fts) return [];
   const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 40)));
-  const docIds = opts?.docIds?.filter(Boolean);
+  const docIds = opts?.docIds ? [...new Set(opts.docIds.filter(Boolean))] : undefined;
   if (opts?.docIds && !docIds?.length) return [];
-  const filterSql = docIds?.length ? ` AND doc_pages_fts.docId IN (${docIds.map(() => '?').join(',')})` : '';
-  const sql = `SELECT doc_pages_fts.docId AS docId, doc_pages_fts.page AS page, p.text AS text, bm25(doc_pages_fts) AS score
-    FROM doc_pages_fts JOIN doc_pages p ON p.docId = doc_pages_fts.docId AND p.page = doc_pages_fts.page
-    WHERE doc_pages_fts MATCH ?${filterSql} ORDER BY score ASC, doc_pages_fts.docId ASC, doc_pages_fts.page ASC LIMIT ?`;
-  const params: (string | number)[] = docIds?.length ? [fts, ...docIds, limit] : [fts, limit];
-  return db.prepare(sql).all(...params).map(row => ({
-    docId: String(row.docId ?? ''), page: Number(row.page), snippet: makeSnippet(String(row.text ?? ''), query), score: Number(row.score ?? 0)
-  }));
+  const runSlice = (ids?: string[]): PageFtsHit[] => {
+    const filterSql = ids?.length ? ` AND doc_pages_fts.docId IN (${ids.map(() => '?').join(',')})` : '';
+    const sql = `SELECT doc_pages_fts.docId AS docId, doc_pages_fts.page AS page, p.text AS text, bm25(doc_pages_fts) AS score
+      FROM doc_pages_fts JOIN doc_pages p ON p.docId = doc_pages_fts.docId AND p.page = doc_pages_fts.page
+      WHERE doc_pages_fts MATCH ?${filterSql} ORDER BY score ASC, doc_pages_fts.docId ASC, doc_pages_fts.page ASC LIMIT ?`;
+    const params: (string | number)[] = ids?.length ? [fts, ...ids, limit] : [fts, limit];
+    return db.prepare(sql).all(...params).map(row => ({
+      docId: String(row.docId ?? ''), page: Number(row.page), snippet: makeSnippet(String(row.text ?? ''), query), score: Number(row.score ?? 0)
+    }));
+  };
+  if (!docIds || docIds.length <= 900) return runSlice(docIds);
+  const hits: PageFtsHit[] = [];
+  for (let i = 0; i < docIds.length; i += 900) hits.push(...runSlice(docIds.slice(i, i + 900)));
+  return hits.sort((a, b) => a.score - b.score || a.docId.localeCompare(b.docId) || a.page - b.page).slice(0, limit);
 }
 
 function decodeTopic(row: Row): TopicRecord {
