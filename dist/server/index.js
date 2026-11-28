@@ -612,11 +612,14 @@ function splitLines(text2, limit) {
 }
 function splitTableRows(cells, limit) {
   const groups = [];
+  const maxCols = Math.max(1, Math.floor(limit / 2));
   let cur = [], curLen = 0;
   for (const rawRow of cells) {
-    let row = rawRow, rowText = row.join("	");
+    let row = rawRow.length > maxCols ? rawRow.slice(0, maxCols) : rawRow;
+    if (!row.some(Boolean)) continue;
+    let rowText = row.join("	");
     if (rowText.length > limit) {
-      const cap = Math.max(32, Math.floor((limit - row.length) / Math.max(1, row.length)));
+      const cap = Math.max(1, Math.floor((limit - row.length + 1) / Math.max(1, row.length)));
       row = row.map((c) => c.slice(0, cap));
       rowText = row.join("	");
     }
@@ -728,10 +731,10 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
   const paragraphs = [];
   const layout = {};
   let ids = [], parts = [];
-  let containsPick = false, pickedIndex = -1, title = "";
+  let containsPick = false, pickedIndex = -1, h1Count = 0, title = "";
   let current = "p", total = 0;
   function add(text2, info, spans = []) {
-    if (!text2) return;
+    if (!text2.trim()) return;
     total += text2.length;
     if (total > maxChars || paragraphs.length >= maxBlocks || text2.length > maxBlockChars) throw new Error("This article is too long to open in the reader.");
     const index = paragraphs.length;
@@ -740,7 +743,10 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
     if (ids.length) info.ids = [...new Set(ids)].slice(0, 80);
     if (spans.length) info.spans = spans;
     if (info.kind !== "p" || info.ids || info.spans) layout["p-" + (index + 1)] = info;
-    if (info.kind === "h1" && !title) title = text2;
+    if (info.kind === "h1") {
+      h1Count++;
+      if (!title) title = text2;
+    }
     ids = [];
     containsPick = false;
   }
@@ -823,7 +829,7 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
       let rows2 = function(row) {
         if (tag(row) === "tr") {
           const values = Array.from(children(row)).filter((cell) => ["th", "td"].includes(tag(cell))).map((cell) => clean(plain(cell)));
-          if (values.length) cells.push(values);
+          if (values.some(Boolean)) cells.push(values);
         } else if (["tbody", "thead", "tfoot", "table"].includes(tag(row))) for (const child of children(row)) rows2(child);
       };
       var rows = rows2;
@@ -831,7 +837,10 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
       rows2(node);
       if (cells.length) {
         const limit = Math.min(maxBlockChars, 2e4);
-        for (const group of splitTableRows(cells, limit)) add(group.map((row) => row.join("	")).join("\n"), { kind: "table", cells: group });
+        for (const group of splitTableRows(cells, limit)) {
+          const text2 = group.map((row) => row.join("	")).join("\n");
+          if (text2.trim()) add(text2, { kind: "table", cells: group });
+        }
       }
       return;
     }
@@ -843,8 +852,8 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
     else if (found.includes("ltx_equation") || found.includes("ltx_eqn_row") || (name2 === "div" || name2 === "p") && found.includes("math")) next = "equation";
     else if (found.includes("ltx_authors") || found.includes("author")) next = "byline";
     if (name2 === "a") {
-      const link3 = articleUrl(attr(node, "href") || "", base);
-      if (link3) inline = { kind: "link", value: link3.href };
+      const link2 = articleUrl(attr(node, "href") || "", base);
+      if (link2) inline = { kind: "link", value: link2.href };
     } else if (!inline && ["code", "em", "strong", "b", "i"].includes(name2)) {
       inline = { kind: name2 === "b" || name2 === "strong" ? "strong" : name2 === "code" ? "code" : "em" };
     }
@@ -872,10 +881,12 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
   const publisher = firstMeta("citation_publisher", "dc.publisher", "dcterms.publisher");
   const abstract = firstMeta("citation_abstract", "dcterms.abstract", "dc.description", "description", "og:description");
   const pdfUrl = articleUrl(firstMeta("citation_pdf_url"), base)?.href;
+  const titleTail = title && pageTitle.toLowerCase().startsWith(title.toLowerCase()) ? pageTitle.slice(title.length).match(/^(?:\s*:\s+|\s+-\s+|\s*[—–|]\s*)(.+)$/)?.[1]?.trim() : "";
+  const resolvedTitle = h1Count > 1 && !paperTitle && pageTitle ? titleTail || pageTitle : title || paperTitle || pageTitle || new URL(address2).hostname;
   return {
     article: {
       url: address2,
-      title: title || paperTitle || pageTitle || new URL(address2).hostname,
+      title: resolvedTitle,
       paragraphs,
       articleLayout: layout,
       ...paperTitle ? { paperTitle } : {},
@@ -1674,11 +1685,11 @@ function readGraphPaperInput(raw) {
 }
 
 // src/server/library-chat.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 
 // src/server/library.ts
-import { createHash as createHash3, randomUUID as randomUUID4 } from "node:crypto";
-import { mkdir as mkdir3, link as link2, readFile as readFile2, readdir, rm as rm3, writeFile as writeFile3 } from "node:fs/promises";
+import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdir as mkdir3, link, readFile as readFile2, readdir, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { existsSync as existsSync2, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path4 from "node:path";
@@ -1694,29 +1705,38 @@ var cleanHeading = (text2) => text2.replace(/\s+/g, " ").trim().slice(0, 160);
 var sumChars = (items) => items.reduce((sum, x) => sum + x.length, 0);
 var itemsChars = (items) => items.reduce((sum, x) => sum + x.text.length, 0);
 function toSlug(raw, fallback) {
-  const cleaned = raw.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^[_-]+|[_-]+$/g, "").slice(0, 80);
-  return cleaned && /^[\p{L}\p{N}]/u.test(cleaned) ? cleaned : fallback;
+  const cleaned = [...raw.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^[_-]+|[_-]+$/g, "")].slice(0, 80).join("");
+  return bookSlug(cleaned) ? cleaned : fallback;
 }
 function shouldShardArticle(article, opts) {
   return article.paragraphs.length > (opts?.maxBlocks ?? DEFAULT_MAX_BLOCKS) || sumChars(article.paragraphs) > (opts?.maxChars ?? DEFAULT_MAX_CHARS);
 }
 function splitByH3(group) {
   const sub = [];
-  let cur;
+  let cur, curHeadingOnly = false;
   for (const item of group.items) {
-    if (item.block?.kind === "h3") {
+    const kind = item.block?.kind;
+    if (kind === "h3") {
       const heading = cleanHeading(item.text) || group.title;
-      if (cur && cur.items.every((x) => x.block?.kind === "h1" || x.block?.kind === "h2")) {
+      if (cur && curHeadingOnly) {
         cur.title = heading;
         cur.items.push(item);
+        curHeadingOnly = false;
       } else {
         if (cur?.items.length) sub.push(cur);
         cur = { title: heading, chapterId: group.chapterId, chapterTitle: group.chapterTitle, items: [item] };
+        curHeadingOnly = false;
       }
       continue;
     }
-    if (!cur) cur = { title: group.title, chapterId: group.chapterId, chapterTitle: group.chapterTitle, items: [item] };
-    else cur.items.push(item);
+    const isH12 = kind === "h1" || kind === "h2";
+    if (!cur) {
+      cur = { title: group.title, chapterId: group.chapterId, chapterTitle: group.chapterTitle, items: [item] };
+      curHeadingOnly = isH12;
+    } else {
+      cur.items.push(item);
+      if (!isH12) curHeadingOnly = false;
+    }
   }
   if (cur?.items.length) sub.push(cur);
   return sub;
@@ -1758,11 +1778,11 @@ function boundGroups(groups, maxBlocks, maxChars, chunkBlocks, chunkChars) {
 function shardArticle(article, opts) {
   const maxBlocks = Math.max(1, opts?.maxBlocks ?? DEFAULT_MAX_BLOCKS), maxChars = Math.max(1e3, opts?.maxChars ?? DEFAULT_MAX_CHARS);
   const chunkBlocks = Math.max(1, opts?.chunkBlocks ?? DEFAULT_CHUNK_BLOCKS), chunkChars = Math.max(1e3, opts?.chunkChars ?? DEFAULT_CHUNK_CHARS);
-  const items = article.paragraphs.map((text2, idx) => ({ text: text2, block: article.articleLayout?.["p-" + (idx + 1)] }));
+  const items = article.paragraphs.map((text2, idx) => ({ text: text2, block: article.articleLayout?.["p-" + (idx + 1)], sourceIndex: idx }));
   const docTitle = cleanHeading(article.title) || "Document";
   let chapterSeq = 0, chapterTitle = docTitle, chapterId = toSlug("ch-0-" + docTitle, "ch-0");
   const groups = [];
-  let current;
+  let current, currentOnlyH1 = false;
   for (const item of items) {
     const kind = item.block?.kind;
     if (kind === "h1" || kind === "h2") {
@@ -1772,38 +1792,62 @@ function shardArticle(article, opts) {
         chapterTitle = heading;
         chapterId = toSlug(`ch-${chapterSeq}-${heading}`, `ch-${chapterSeq}`);
       }
-      if (current && current.items.every((x) => x.block?.kind === "h1")) {
+      if (current && currentOnlyH1) {
         current.title = heading;
         current.chapterId = chapterId;
         current.chapterTitle = chapterTitle;
         current.items.push(item);
+        currentOnlyH1 = kind === "h1";
       } else {
         if (current?.items.length) groups.push(current);
         current = { title: heading, chapterId, chapterTitle, items: [item] };
+        currentOnlyH1 = kind === "h1";
       }
-    } else if (!current) current = { title: chapterTitle, chapterId, chapterTitle, items: [item] };
-    else current.items.push(item);
+    } else if (!current) {
+      current = { title: chapterTitle, chapterId, chapterTitle, items: [item] };
+      currentOnlyH1 = false;
+    } else {
+      current.items.push(item);
+      currentOnlyH1 = false;
+    }
   }
   if (current?.items.length) groups.push(current);
+  if (groups.length > 1 && groups[0].chapterId.startsWith("ch-0")) {
+    const nextChapter = groups.find((g) => g.chapterId !== groups[0].chapterId);
+    if (nextChapter && groups[0].chapterTitle.toLowerCase() === nextChapter.chapterTitle.toLowerCase()) {
+      const label = nextChapter.chapterTitle.toLowerCase() === "overview" ? "Preface" : "Overview";
+      const oldId = groups[0].chapterId, newId = "ch-0-" + label.toLowerCase();
+      for (const g of groups) {
+        if (g.chapterId !== oldId) break;
+        if (g.title.toLowerCase() === nextChapter.chapterTitle.toLowerCase()) g.title = label;
+        g.chapterTitle = label;
+        g.chapterId = newId;
+      }
+    }
+  }
   const bounded = boundGroups(groups, maxBlocks, maxChars, chunkBlocks, chunkChars);
   const parsedUrl = articleUrl(article.url), baseUrl = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : "";
   const bookSlugValue = toSlug(docTitle || parsedUrl?.hostname || "doc", "doc");
   const sections = [], bookSections = [], anchorPages = {};
-  let anchorCount = 0;
+  let anchorCount = 0, target;
   for (let i = 0; i < bounded.length; i++) {
     const group = bounded[i], page = i + 1;
     const paragraphs = [], articleLayout = {};
     let firstAnchor = "";
     for (let j = 0; j < group.items.length; j++) {
-      const { text: text2, block } = group.items[j], key2 = "p-" + (j + 1);
+      const { text: text2, block, sourceIndex } = group.items[j], key2 = "p-" + (j + 1);
+      if (sourceIndex === opts?.targetIndex) target = { page, anchor: key2 };
       paragraphs.push(text2);
       if (!block) continue;
       articleLayout[key2] = block;
-      for (const id of block.ids ?? []) {
-        if (!firstAnchor) firstAnchor = id;
-        if (id && !FORBIDDEN_KEYS.has(id) && !Object.hasOwn(anchorPages, id) && anchorCount < MAX_ANCHOR_ENTRIES) {
-          anchorPages[id] = page;
-          anchorCount++;
+      if (Array.isArray(block.ids)) {
+        for (const id of block.ids) {
+          if (typeof id !== "string") continue;
+          if (!firstAnchor) firstAnchor = id;
+          if (id && !FORBIDDEN_KEYS.has(id) && !Object.hasOwn(anchorPages, id) && anchorCount < MAX_ANCHOR_ENTRIES) {
+            anchorPages[id] = page;
+            anchorCount++;
+          }
         }
       }
     }
@@ -1813,7 +1857,7 @@ function shardArticle(article, opts) {
     bookSections.push(meta);
     sections.push({ ...meta, paragraphs, articleLayout });
   }
-  return { slug: bookSlugValue, sections, bookSections, anchorPages };
+  return { slug: bookSlugValue, sections, bookSections, anchorPages, ...target ? { target } : {} };
 }
 
 // src/shared/translation-quality.ts
@@ -1971,7 +2015,7 @@ async function extractDocumentPages(doc, pdfBytes, readSection) {
     for (let i = 0; i < doc.book.sections.length; i++) {
       const page = i + 1, sec = doc.book.sections[i];
       const saved = readSection?.(page) ?? (doc.sectionPage === page ? doc : void 0);
-      const body = saved?.paragraphs?.map((p) => p.trim()).filter(Boolean).join("\n\n") ?? "";
+      const body = saved?.paragraphs?.filter((_, idx) => saved.articleLayout?.[`p-${idx + 1}`]?.kind !== "image").map((p) => p.trim()).filter(Boolean).join("\n\n") ?? "";
       const text2 = body || [i === 0 ? doc.title : "", sec.chapterTitle, sec.title].filter(Boolean).join("\n");
       if (text2) pages.push({ page, text: text2 });
     }
@@ -2094,9 +2138,9 @@ function readArticleLayout(raw, paragraphs) {
           result2.value = span.value;
         }
         if (span.kind === "link") {
-          const link3 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
-          if (!link3) fail("Invalid article link.");
-          result2.value = link3.href;
+          const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
+          if (!link2) fail("Invalid article link.");
+          result2.value = link2.href;
         }
         return result2;
       });
@@ -2117,23 +2161,16 @@ function readArticleLayout(raw, paragraphs) {
 }
 
 // src/server/book-import.ts
-import { createHash as createHash2, randomUUID as randomUUID3 } from "node:crypto";
-import { link, mkdir as mkdir2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir2 } from "node:fs/promises";
 import path3 from "node:path";
 var MAX_SHARDED_CHARS = 16e6;
-var sha256 = (value) => createHash2("sha256").update(value).digest("hex");
-async function writeOnce(file, content) {
-  const temp = `${file}.${process.pid}.${randomUUID3()}.tmp`;
-  await writeFile2(temp, content, { flag: "wx" });
-  try {
-    try {
-      await link(temp, file);
-    } catch (error) {
-      if (!(isRecord(error) && error.code === "EEXIST")) throw error;
-    }
-  } finally {
-    await rm2(temp, { force: true });
+function checkPreShardLayout(raw, count) {
+  if (!isRecord(raw)) fail("Invalid article layout.");
+  for (const [key2, value] of Object.entries(raw)) {
+    if (!/^p-[1-9]\d{0,4}$/.test(key2) || Number(key2.slice(2)) > count || !isRecord(value) || typeof value.kind !== "string") fail("Invalid article block.");
+    if (value.ids !== void 0 && (!Array.isArray(value.ids) || !value.ids.every((id) => typeof id === "string"))) fail("Invalid article anchors.");
   }
+  return raw;
 }
 async function importShardedBook(library, input) {
   const { sharded } = input;
@@ -2142,7 +2179,7 @@ async function importShardedBook(library, input) {
   const parsedUrl = input.url ? articleUrl(input.url) : void 0;
   const safeUrl3 = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : void 0;
   const identity = input.identityKey ?? JSON.stringify([safeUrl3 ?? "", cleanTitle, sharded.sections.map((s) => [s.slug, s.paragraphs])]);
-  const id = "book-" + sha256(identity);
+  const id = "book-" + hash(identity);
   const documentsDir = path3.join(library.root, "documents"), sectionsDir = path3.join(documentsDir, "book-sections", id);
   await mkdir2(sectionsDir, { recursive: true });
   const prepared = sharded.sections.map((section) => {
@@ -2150,7 +2187,7 @@ async function importShardedBook(library, input) {
     return { slug: section.slug, paragraphs: section.paragraphs, articleLayout: readArticleLayout(section.articleLayout, section.paragraphs) };
   });
   for (const section of prepared) {
-    await writeOnce(path3.join(sectionsDir, sha256(section.slug) + ".json"), JSON.stringify({ paragraphs: section.paragraphs, articleLayout: section.articleLayout }));
+    await writeOnce(path3.join(sectionsDir, hash(section.slug) + ".json"), JSON.stringify({ paragraphs: section.paragraphs, articleLayout: section.articleLayout }));
   }
   const book = {
     slug: sharded.slug,
@@ -2170,16 +2207,23 @@ async function importShardedBook(library, input) {
   };
   await writeOnce(path3.join(documentsDir, id + ".json"), JSON.stringify(catalog));
   const fragment = input.fragment;
-  const page = fragment && Object.hasOwn(sharded.anchorPages, fragment) ? sharded.anchorPages[fragment] : defaultPage;
+  const page = sharded.target?.page ?? (fragment && Object.hasOwn(sharded.anchorPages, fragment) ? sharded.anchorPages[fragment] : defaultPage);
   const loaded = await library.bookSection(id, page);
-  const anchor = fragment && Object.entries(loaded.articleLayout ?? {}).find(([, block]) => block.ids?.includes(fragment))?.[0];
+  const anchor = sharded.target?.anchor ?? (fragment && Object.entries(loaded.articleLayout ?? {}).find(([, block]) => block.ids?.includes(fragment))?.[0]);
   return { doc: loaded, page, ...anchor ? { anchor } : {} };
 }
 async function importShardedWebArticle(library, input, url, paragraphs) {
   let chars = 0;
   for (const p of paragraphs) chars += p.length;
   if (!paragraphs.length || chars > MAX_SHARDED_CHARS) fail("The article is empty or too long.");
-  if (input.articleLayout !== void 0 && !isRecord(input.articleLayout)) fail("Invalid article layout.");
+  const articleLayout = input.articleLayout === void 0 ? void 0 : checkPreShardLayout(input.articleLayout, paragraphs.length);
+  let targetIndex;
+  if (input.anchor !== void 0) {
+    if (typeof input.anchor !== "string" || !/^p-[1-9]\d{0,4}$/.test(input.anchor)) fail("Invalid article anchor.");
+    const idx = Number(input.anchor.slice(2)) - 1;
+    if (idx >= paragraphs.length) fail("Invalid article anchor.");
+    targetIndex = idx;
+  }
   let fragment = url.hash.slice(1);
   try {
     fragment = decodeURIComponent(fragment);
@@ -2187,12 +2231,7 @@ async function importShardedWebArticle(library, input, url, paragraphs) {
   }
   const baseHref = url.origin + url.pathname + url.search;
   const title = typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname;
-  const sharded = shardArticle({
-    url: baseHref,
-    title,
-    paragraphs,
-    ...isRecord(input.articleLayout) ? { articleLayout: input.articleLayout } : {}
-  });
+  const sharded = shardArticle({ url: baseHref, title, paragraphs, ...articleLayout ? { articleLayout } : {} }, targetIndex === void 0 ? void 0 : { targetIndex });
   return importShardedBook(library, { ...sanitizeDocMeta(input), url: baseHref, title, sharded, ...fragment ? { fragment } : {} });
 }
 
@@ -2554,7 +2593,7 @@ var sample = {
   doi: "10.1145/3600006.3613165",
   defaultPage: 6
 };
-var hash = (bytes) => createHash3("sha256").update(bytes).digest("hex");
+var hash = (bytes) => createHash2("sha256").update(bytes).digest("hex");
 function translationCacheSlug(targetLanguage = DEFAULT_TARGET_LANGUAGE) {
   const parsed = parseTargetLanguage(targetLanguage);
   if (!parsed.ok) fail(parsed.error, 400);
@@ -2574,17 +2613,17 @@ function isFsError(error, code) {
   return isRecord(error) && error.code === code;
 }
 var validDocId = (id) => typeof id === "string" && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
-async function writeOnce2(file, bytes) {
-  const temporary = file + "." + randomUUID4() + ".tmp";
-  await writeFile3(temporary, bytes, { flag: "wx" });
+async function writeOnce(file, bytes) {
+  const temporary = file + "." + randomUUID3() + ".tmp";
+  await writeFile2(temporary, bytes, { flag: "wx" });
   try {
     try {
-      await link2(temporary, file);
+      await link(temporary, file);
     } catch (error) {
       if (!isFsError(error, "EEXIST")) throw error;
     }
   } finally {
-    await rm3(temporary, { force: true });
+    await rm2(temporary, { force: true });
   }
 }
 var pictureType = /^image\/(png|jpeg|gif|webp|avif|svg\+xml|bmp|x-icon)$/;
@@ -2609,7 +2648,7 @@ var Library = class {
   metaJobs = /* @__PURE__ */ new Map();
   async store(doc) {
     await mkdir3(this.directory, { recursive: true });
-    await writeOnce2(path4.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
+    await writeOnce(path4.join(this.directory, doc.id + ".json"), JSON.stringify(doc));
     return this.get(doc.id);
   }
   hasSync(id) {
@@ -2699,13 +2738,13 @@ var Library = class {
       const file = path4.join(this.directory, id + ".json");
       const existed = existsSync2(file);
       await Promise.all([
-        rm3(file, { force: true }),
-        rm3(path4.join(this.directory, id + ".pdf"), { force: true }),
-        rm3(path4.join(this.directory, id + ".source-url"), { force: true }),
-        rm3(path4.join(this.directory, id + ".layout.json"), { force: true }),
-        rm3(path4.join(this.directory, "book-sections", id), { recursive: true, force: true }),
-        rm3(path4.join(this.translationDir, id), { recursive: true, force: true }),
-        rm3(path4.join(this.imageDir, id), { recursive: true, force: true })
+        rm2(file, { force: true }),
+        rm2(path4.join(this.directory, id + ".pdf"), { force: true }),
+        rm2(path4.join(this.directory, id + ".source-url"), { force: true }),
+        rm2(path4.join(this.directory, id + ".layout.json"), { force: true }),
+        rm2(path4.join(this.directory, "book-sections", id), { recursive: true, force: true }),
+        rm2(path4.join(this.translationDir, id), { recursive: true, force: true }),
+        rm2(path4.join(this.imageDir, id), { recursive: true, force: true })
       ]);
       this.onDelete?.(id);
       return { id, deleted: existed };
@@ -2739,7 +2778,7 @@ var Library = class {
   }
   async saveSection(file, article) {
     await mkdir3(path4.dirname(file), { recursive: true });
-    await writeOnce2(file, JSON.stringify({ paragraphs: article.paragraphs, articleLayout: article.articleLayout }));
+    await writeOnce(file, JSON.stringify({ paragraphs: article.paragraphs, articleLayout: article.articleLayout }));
   }
   async openBook(location) {
     const url = openStaxUrl(location.book), id = "book-" + hash(url);
@@ -2817,7 +2856,7 @@ var Library = class {
     if (structured) {
       const layout = readArticleLayout(input.articleLayout, paragraphs);
       await mkdir3(this.directory, { recursive: true });
-      await writeOnce2(path4.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
+      await writeOnce(path4.join(this.directory, id + ".layout.json"), JSON.stringify(layout));
     }
     return { doc: await this.store({
       kind: "web",
@@ -2838,7 +2877,7 @@ var Library = class {
     const safeUrl3 = articleUrl(url)?.href;
     const cleanMeta = meta ? sanitizeDocMeta({ ...meta }) : {};
     await mkdir3(this.directory, { recursive: true });
-    await writeOnce2(path4.join(this.directory, id + ".pdf"), bytes);
+    await writeOnce(path4.join(this.directory, id + ".pdf"), bytes);
     const doc = await this.store({ id, kind: "pdf", title: title.trim().slice(0, 250) || "Document.pdf", ...safeUrl3 ? { url: safeUrl3 } : {}, ...cleanMeta, createdAt: (/* @__PURE__ */ new Date()).toISOString(), defaultPage: 1 });
     const missing = missingDocMeta({ ...doc }, cleanMeta);
     const needUrl = !doc.url && Boolean(safeUrl3);
@@ -2899,7 +2938,7 @@ var Library = class {
       const picture = await download(url);
       if (!pictureType.test(picture.type) || !picture.bytes.length) fail("The website did not return an illustration.", 415);
       await mkdir3(directory, { recursive: true });
-      await writeOnce2(file, Buffer.concat([Buffer.from(picture.type + "\n", "ascii"), picture.bytes]));
+      await writeOnce(file, Buffer.concat([Buffer.from(picture.type + "\n", "ascii"), picture.bytes]));
       return read();
     })();
     this.imageJobs.set(file, job);
@@ -3586,7 +3625,7 @@ var ReaderModel = class {
 };
 
 // src/server/reader-store.ts
-import { createHash as createHash4, randomInt, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash3, randomInt, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import path7 from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -3955,7 +3994,7 @@ function identityFor(kind, entry) {
   const content = kind === "note" ? [entry.text, entry.quote, entry.label] : kind === "word" ? [entry.text.toLowerCase().replace(/\s+/g, " ")] : [entry.text, entry.meaning];
   const position = [entry.docId || entry.sourceUrl, entry.page, entry.anchor];
   if (kind === "note" && entry.context) content.push(entry.context);
-  return createHash4("sha256").update(JSON.stringify([...position, ...content])).digest("hex");
+  return createHash3("sha256").update(JSON.stringify([...position, ...content])).digest("hex");
 }
 function entryFor(kind, input, prior, allowEmpty = false) {
   const next = { ...prior, ...input };
@@ -3976,7 +4015,7 @@ function entryFor(kind, input, prior, allowEmpty = false) {
     }
   }
   return {
-    id: prior?.id ?? randomUUID5(),
+    id: prior?.id ?? randomUUID4(),
     docId,
     title: stringValue(next.title, "document title", 2048),
     page,
@@ -4079,8 +4118,8 @@ var NotebookRecords = class {
     if (rows.length !== 1) return;
     const { library, itemKey } = rows[0];
     if (typeof library !== "string" || typeof itemKey !== "string" || !/^[A-Z0-9]{8}$/.test(itemKey)) return;
-    const link3 = library.startsWith("desktop/") ? "zotero://select/library/items/" + itemKey : readColumn(rows[0], "webUrl") || "https://www.zotero.org" + library + "/items/" + itemKey;
-    return { link: link3, original: readColumn(rows[0], "original") };
+    const link2 = library.startsWith("desktop/") ? "zotero://select/library/items/" + itemKey : readColumn(rows[0], "webUrl") || "https://www.zotero.org" + library + "/items/" + itemKey;
+    return { link: link2, original: readColumn(rows[0], "original") };
   }
   importChanges(run) {
     this.db.exec("SAVEPOINT native_notes");
@@ -4204,7 +4243,7 @@ var ReaderStore = class {
     const regionText = stringValue(input.regionText, "text inside selected area", 1e5, false, true);
     const label = stringValue(input.label, "screenshot label", 512, true, true);
     const { bytes } = await readRegionImage(input.image, attachments);
-    const hash3 = createHash4("sha256").update(JSON.stringify([docId, page, location, regionText, label])).update(bytes).digest("hex");
+    const hash3 = createHash3("sha256").update(JSON.stringify([docId, page, location, regionText, label])).update(bytes).digest("hex");
     const anchor = "article-" + location + "-" + hash3.slice(0, 32);
     return this.#transaction(true, (db) => {
       db.prepare(`INSERT INTO article_captures(docId,page,anchor,image,regionText,label) VALUES(?,?,?,?,?,?)
@@ -4478,7 +4517,7 @@ function yearForDoc(doc) {
 }
 function cardSourceHash(doc, pages) {
   const first = pages[0]?.text ?? "", last = pages.at(-1)?.text ?? "";
-  return createHash5("sha256").update(JSON.stringify([
+  return createHash4("sha256").update(JSON.stringify([
     doc.kind,
     doc.paperTitle || doc.title,
     doc.abstract ?? "",
@@ -6060,7 +6099,7 @@ async function resolveAcademicIntake(library, target, readResource, parseArticle
 
 // src/server/web-article.ts
 import { parse as parse2 } from "parse5";
-var LARGE_ARTICLE_LIMITS = { maxBlocks: 25e3, maxChars: 16e6, maxBlockChars: 2e4 };
+var LARGE_ARTICLE_LIMITS = { maxBlocks: 25e3, maxChars: 16e6, maxBlockChars: 24e3 };
 function parseWebArticle(html, url) {
   return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "", void 0, LARGE_ARTICLE_LIMITS).article;
 }
@@ -6849,7 +6888,7 @@ async function runDeepSearch(deps, input, onEvent, opts) {
 }
 
 // src/server/watchlist.ts
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 var isIsoDate = (s) => {
   if (!DATE_RE.test(s)) return false;
@@ -6869,7 +6908,7 @@ var listWatchlist = (deps) => ({ entries: deps.store.withDb(false, listWatchlist
 var deleteWatchlist = (input, deps) => deps.store.withDb(true, (db) => deleteWatchlistEntry(db, single(input.id, "watchlist ID", 128, true)));
 async function saveWatchlist(input, deps) {
   if (input.kind !== "topic" && input.kind !== "paper") throw new ServiceError(400, "Choose topic or paper watchlist kind.");
-  const kind = input.kind, id = input.id === void 0 ? randomUUID6() : single(input.id, "watchlist ID", 128, true), prev = deps.store.withDb(false, (db) => getWatchlistEntry(db, id));
+  const kind = input.kind, id = input.id === void 0 ? randomUUID5() : single(input.id, "watchlist ID", 128, true), prev = deps.store.withDb(false, (db) => getWatchlistEntry(db, id));
   const docId = input.docId === void 0 ? prev?.docId : single(input.docId, "document ID", 512) || void 0, doc = docId ? await deps.library.get(docId) : void 0;
   const rawQuery = input.query === void 0 ? prev?.query ?? (doc ? doc.doi || doc.paperTitle || doc.title : "") : single(input.query, "watchlist query", 500);
   const workId = input.workId === void 0 ? prev?.workId ?? (doc?.doi ? cleanDoi2(doc.doi) : void 0) : single(input.workId, "work ID", 200) || void 0;
@@ -6964,7 +7003,7 @@ async function checkWatchlist(input, deps, signal) {
 }
 
 // src/server/notebook.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
 import path11 from "node:path";
 
@@ -7091,7 +7130,7 @@ function formatHighlightsSection(annotations, options) {
 }
 
 // src/server/obsidian.ts
-import { createHash as createHash8, randomUUID as randomUUID8 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync2,
   constants as constants2,
@@ -7111,10 +7150,10 @@ import {
 import path10 from "node:path";
 
 // src/server/vault-markdown.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 
 // src/server/vault-sources.ts
-import { createHash as createHash6, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
 import path9 from "node:path";
 var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
@@ -7123,7 +7162,7 @@ function publicSource(value) {
   if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
-  const temp = path9.join(path9.dirname(file), ".source-" + randomUUID7() + ".tmp");
+  const temp = path9.join(path9.dirname(file), ".source-" + randomUUID6() + ".tmp");
   copyFileSync(original, temp, constants.COPYFILE_EXCL);
   try {
     try {
@@ -7168,7 +7207,7 @@ var VaultSources = class {
       }
       if (url && doc.kind === "pdf" && (/\.pdf$/i.test(url.pathname) || /\/pdf\//.test(url.pathname))) url.hash = "page=" + page;
       if (doc.kind === "pdf" || material?.paragraphs?.length) {
-        const id = createHash6("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
+        const id = createHash5("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
         const title = section?.title ?? doc.title.replace(/\.pdf$/i, "");
         const name2 = filenameStem(title, 64) + " - " + id + (doc.kind === "pdf" ? ".pdf" : ".md");
         const file = path9.join(vaultFolder(vault, "Sources", true), name2);
@@ -7202,7 +7241,7 @@ function portableCitation(label, targets) {
 }
 
 // src/server/vault-markdown.ts
-var key = (s) => createHash7("sha256").update(s).digest("hex").slice(0, 16);
+var key = (s) => createHash6("sha256").update(s).digest("hex").slice(0, 16);
 var firstLabel = /^\[((?:\\.|[^\]\\\r\n])+)\]/u;
 function readerUrl(raw, docId) {
   const url = URL.parse(raw);
@@ -7283,7 +7322,7 @@ function readerMarkdown(external, baseline, docId) {
 
 // src/server/obsidian.ts
 function hash2(text2) {
-  return createHash8("sha256").update(text2).digest("hex");
+  return createHash7("sha256").update(text2).digest("hex");
 }
 function filenameStem(title, max = 75) {
   let name2 = title.normalize("NFKC").replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").replace(/^[ .]+/g, "").slice(0, max).replace(/[ .]+$/g, "");
@@ -7324,13 +7363,13 @@ function source(base, docId, page, anchor, quote = "") {
 }
 function sourceText(entry, fallback, quote = "", section) {
   const saved = entry.sourceUrl ? new URL(entry.sourceUrl) : void 0;
-  const link3 = new URL(source(fallback || entry.sourceUrl, entry.docId, entry.page, entry.anchor, quote || saved?.searchParams.get("quote") || ""));
+  const link2 = new URL(source(fallback || entry.sourceUrl, entry.docId, entry.page, entry.anchor, quote || saved?.searchParams.get("quote") || ""));
   if (saved) {
-    writeTranslatedLocator(link3, readTranslatedLocator(saved));
-    writeSelectionRange(link3, readSelectionRange(saved));
+    writeTranslatedLocator(link2, readTranslatedLocator(saved));
+    writeSelectionRange(link2, readSelectionRange(saved));
   }
   const label = section ? chapterPassageLabel(section, entry.label) : "Page " + entry.page + (entry.label ? " \xB7 " + entry.label : "");
-  return "[" + markdownHeading(label) + "](<" + link3.href + ">)";
+  return "[" + markdownHeading(label) + "](<" + link2.href + ">)";
 }
 function vocabulary(base, words, chapter) {
   const rows = ["## Vocabulary"];
@@ -7404,7 +7443,7 @@ function fileContent(file) {
 }
 function writeMarkdown(file, observed, next) {
   if (observed === next) return;
-  const temp = path10.join(path10.dirname(file), ".paper-reader-" + randomUUID8() + ".tmp");
+  const temp = path10.join(path10.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
   const fd = openSync2(temp, "wx", 384);
   try {
     try {
@@ -7529,11 +7568,11 @@ function sourceFields(doc, block, previous) {
   if (!destination || destination.pathname !== "/api/paper-reader/app/index.html") {
     return { ...previous ?? { docId: doc.docId, title: doc.title, page: doc.chapter?.firstPage ?? 1, sourceUrl: doc.sourceUrl }, ...quoted };
   }
-  const link3 = new URL(address(match[2], true));
-  if (link3.searchParams.get("doc") !== doc.docId) {
+  const link2 = new URL(address(match[2], true));
+  if (link2.searchParams.get("doc") !== doc.docId) {
     throw new ServiceError(409, "A source link belongs to a different document. Check the link in the Markdown file.");
   }
-  const page = Number(link3.searchParams.get("page"));
+  const page = Number(link2.searchParams.get("page"));
   const section = doc.chapter?.sections.get(page);
   if (doc.chapter && !section) throw new ServiceError(409, "A linked note belongs to another chapter. Check its passage link.");
   let label = legacy?.[1] ?? "";
@@ -7546,8 +7585,8 @@ function sourceFields(doc, block, previous) {
     docId: doc.docId,
     title: doc.title,
     page,
-    anchor: link3.searchParams.get("anchor") || "",
-    sourceUrl: link3.href,
+    anchor: link2.searchParams.get("anchor") || "",
+    sourceUrl: link2.href,
     label,
     ...quoted
   };
@@ -7644,7 +7683,7 @@ function load(records, local, sources, stored = true) {
   });
 }
 function revision(book) {
-  return createHash9("sha256").update(notebookKey(book.local.docId, book.local.chapter)).update("\0").update(book.file || "").update("\0").update(book.markdown).update("\0").update(book.conflict ? book.local.markdown : "").digest("hex");
+  return createHash8("sha256").update(notebookKey(book.local.docId, book.local.chapter)).update("\0").update(book.file || "").update("\0").update(book.markdown).update("\0").update(book.conflict ? book.local.markdown : "").digest("hex");
 }
 var nativeUri = (file) => "obsidian://open?path=" + encodeURIComponent(file);
 function snapshot(records, book, desktopOpenAvailable) {
@@ -8901,12 +8940,12 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
 }
 
 // src/server/static-cache.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { readFile as readFile3, stat } from "node:fs/promises";
 var IMMUTABLE_PREFIXES = ["app/chunks/"];
 var LONG_CACHE_PREFIXES = ["vendor/", "app/assets/", "app/katex/"];
 function shortDigest(bytes) {
-  return createHash10("sha256").update(bytes).digest("hex").slice(0, 12);
+  return createHash9("sha256").update(bytes).digest("hex").slice(0, 12);
 }
 function etagMatches(header, etag) {
   if (!header) return false;

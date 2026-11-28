@@ -103,7 +103,7 @@ export class DocSearch {
     const sameBook = Boolean(doc.book && doc.id === this.doc.id);
     this.doc = doc; this.pdf = pdf;
     if (sameBook) return;
-    this.bookPages.delete(doc.id); this.jumpEpoch++; this.clearState();
+    this.bookPages.clear(); this.jumpEpoch++; this.clearState();
     if (!this.root.hidden && this.input.value.trim()) void this.runSearch(true);
   }
   recordTranslations(docId: string, page: number, map: Record<string, string>): void {

@@ -46,7 +46,7 @@ export async function extractDocumentPages(
     for (let i = 0; i < doc.book.sections.length; i++) {
       const page = i + 1, sec = doc.book.sections[i];
       const saved = readSection?.(page) ?? (doc.sectionPage === page ? doc : undefined);
-      const body = saved?.paragraphs?.map(p => p.trim()).filter(Boolean).join('\n\n') ?? '';
+      const body = saved?.paragraphs?.filter((_, idx) => saved.articleLayout?.[`p-${idx + 1}`]?.kind !== 'image').map(p => p.trim()).filter(Boolean).join('\n\n') ?? '';
       const text = body || [i === 0 ? doc.title : '', sec.chapterTitle, sec.title].filter(Boolean).join('\n');
       if (text) pages.push({ page, text });
     }

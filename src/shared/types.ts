@@ -238,7 +238,7 @@ export interface Operations {
   'citations.analyze': [CitationAnalyzeInput, CitationReport];
   'citations.summary': [CitationSummaryInput, CitationSummary];
   'citations.reclassify': [CitationReclassifyInput, CitationReclassifyResult];
-  'web.import': [WebArticle, OpenDocument];
+  'web.import': [WebArticle & { anchor?: string }, OpenDocument];
   'web.open': [{ url: string; arxivFormat?: ArxivFormat }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
   'book.pages': [{ docId: string }, { pages: DocPageRecord[] }];

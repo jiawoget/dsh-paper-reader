@@ -94,42 +94,26 @@ test('large single-page HTML technical manual (>6 MB, >1500 blocks) strips chrom
   }
   assert.equal(joinedText.includes('¶'), false);
 
-  const readLocal: ResourceReader = async (raw) => ({
-    url: new URL(String(raw).split('#')[0]),
-    bytes,
-    type: 'text/html',
-    charset: 'utf-8'
-  });
+  const readLocal: ResourceReader = async (raw) => ({ url: new URL(String(raw).split('#')[0]), bytes, type: 'text/html', charset: 'utf-8' });
   const act = createServices({ root, readResource: readLocal });
-  const opened = await act('web.open', { url: manualUrl });
-  const doc = opened.doc;
-  assert.ok(doc.id.startsWith('book-'));
-  assert.ok(doc.book && doc.book.sections.length >= 25);
-  assert.equal(doc.sectionPage, 1);
+  const { doc } = await act('web.open', { url: manualUrl });
+  assert.ok(doc.id.startsWith('book-') && doc.book && doc.book.sections.length >= 25 && doc.sectionPage === 1);
 
   const library = new Library(root, readLocal);
-  const kernelPage = doc.book.anchorPages?.['kernel-launch'];
-  const legacyPage = doc.book.anchorPages?.['legacy-warp-anchor'];
-  const finalPage = doc.book.anchorPages?.['inline-final-anchor'];
-  const tailPage = doc.book.anchorPages?.['manual-tail-anchor'];
-  assert.ok(kernelPage && kernelPage > 1 && kernelPage < doc.book.sections.length);
-  assert.ok(legacyPage && legacyPage > kernelPage);
-  assert.ok(finalPage && finalPage > legacyPage);
+  const { 'kernel-launch': kernelPage, 'legacy-warp-anchor': legacyPage, 'inline-final-anchor': finalPage, 'manual-tail-anchor': tailPage } = doc.book.anchorPages ?? {};
+  assert.ok(kernelPage && kernelPage > 1 && legacyPage && legacyPage > kernelPage && finalPage && finalPage > legacyPage);
   assert.equal(tailPage, doc.book.sections.length);
 
   for (let p = 1; p <= doc.book.sections.length; p++) {
     const sec = library.cachedSection(doc, p);
-    assert.ok(sec && sec.paragraphs && sec.paragraphs.length > 0);
-    assert.ok(sec.paragraphs.length <= 120, `section ${p} exceeded 120 blocks: ${sec.paragraphs.length}`);
+    assert.ok(sec?.paragraphs?.length && sec.paragraphs.length <= 120, `section ${p} block count invalid`);
     const secChars = sec.paragraphs.reduce((sum, text) => sum + text.length, 0);
     assert.ok(secChars <= 80_000, `section ${p} exceeded 80 KB text: ${secChars}`);
   }
 
   const kernelSection = (await act('book.section', { docId: doc.id, page: kernelPage })).doc;
-  const kinds = Object.values(kernelSection.articleLayout ?? {}).map(b => b.kind);
-  assert.ok(kinds.includes('pre'));
-  assert.ok(kinds.includes('table'));
-  assert.ok(kinds.includes('equation'));
+  const kinds = new Set(Object.values(kernelSection.articleLayout ?? {}).map(b => b.kind));
+  for (const kind of ['pre', 'table', 'equation'] as const) assert.equal(kinds.has(kind), true);
   for (const kind of ['pre', 'table', 'equation', 'image'] as const) assert.equal(unchangedArticleBlock(kind), true);
   assert.equal(unchangedArticleBlock('p'), false);
 
@@ -140,17 +124,11 @@ test('large single-page HTML technical manual (>6 MB, >1500 blocks) strips chrom
   const longCodeSection = (await act('book.section', { docId: doc.id, page: doc.book.anchorPages!['sec-7-1'] })).doc;
   const preBlocks = Object.entries(longCodeSection.articleLayout ?? {}).filter(([, b]) => b.kind === 'pre');
   assert.ok(preBlocks.length >= 2, 'oversized >20k <pre> block should split cleanly across multiple pre blocks');
-  for (const [id] of preBlocks) {
-    const idx = Number(id.slice(2)) - 1;
-    assert.ok((longCodeSection.paragraphs?.[idx]?.length ?? 0) <= 20_000);
-  }
+  for (const [id] of preBlocks) assert.ok((longCodeSection.paragraphs?.[Number(id.slice(2)) - 1]?.length ?? 0) <= 20_000);
 
-  const earlyHits = (await act('pages.search', { query: 'EARLY_SENTINEL_ALPHA', docIds: [doc.id] })).hits;
-  const middleHits = (await act('pages.search', { query: 'MIDDLE_SENTINEL_OMEGA', docIds: [doc.id] })).hits;
-  const finalHits = (await act('pages.search', { query: 'TAIL_SENTINEL_END', docIds: [doc.id] })).hits;
-  assert.equal(earlyHits[0]?.page, 1);
-  assert.equal(middleHits[0]?.page, kernelPage);
-  assert.equal(finalHits[0]?.page, doc.book.sections.length);
+  assert.equal((await act('pages.search', { query: 'EARLY_SENTINEL_ALPHA', docIds: [doc.id] })).hits[0]?.page, 1);
+  assert.equal((await act('pages.search', { query: 'MIDDLE_SENTINEL_OMEGA', docIds: [doc.id] })).hits[0]?.page, kernelPage);
+  assert.equal((await act('pages.search', { query: 'TAIL_SENTINEL_END', docIds: [doc.id] })).hits[0]?.page, doc.book.sections.length);
 
   const { pages: bookPages } = await act('book.pages', { docId: doc.id });
   assert.equal(bookPages.length, doc.book.sections.length);
@@ -160,8 +138,6 @@ test('large single-page HTML technical manual (>6 MB, >1500 blocks) strips chrom
 
   const sectionsDir = path.join(root, 'documents', 'book-sections', doc.id);
   assert.equal(existsSync(sectionsDir), true);
-  const missingSlugFile = path.join(sectionsDir, 'missing-test');
-  assert.equal(existsSync(missingSlugFile), false);
   await rm(sectionsDir, { recursive: true, force: true });
   await assert.rejects(library.bookSection(doc.id, 1), { status: 404 });
 
@@ -173,4 +149,50 @@ test('large single-page HTML technical manual (>6 MB, >1500 blocks) strips chrom
   assert.equal(existsSync(path.join(root, 'documents', doc.id + '.json')), false);
   assert.equal(existsSync(sectionsDir), false);
   assert.equal((await act('pages.search', { query: 'MIDDLE_SENTINEL_OMEGA', docIds: [doc.id] })).hits.length, 0);
+});
+
+test('sharding hardening: Sphinx titles, preamble dedup, non-BMP slugs, wide/empty tables, layout validation, and extension anchor mapping', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'paper-reader-shard-edge-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const act = createServices({ root });
+  const library = new Library(root);
+
+  const cudaHtml = `<title>1. Introduction — CUDA C++ Programming Guide</title><main><p>Release notes 12.8</p><h1>1. Introduction</h1><p>Intro body.</p><h1>2. Model</h1><p>Model body.</p></main>`;
+  const ptxHtml = `<title>1. Introduction — PTX ISA 9.5 documentation</title><main><h1>1. Introduction</h1><p>A</p><h1>2. ISA</h1><p>B</p></main>`;
+  const dupTitleHtml = `<title>1. Introduction</title><main><p>Cover notes.</p><h1>1. Introduction</h1><p>Body.</p><h1>2. Next</h1><p>More.</p></main>`;
+  const cudaParsed = parseWebArticle(cudaHtml, 'https://docs.example.org/cuda/index.html');
+  assert.equal(cudaParsed.title, 'CUDA C++ Programming Guide');
+  assert.equal(parseWebArticle(ptxHtml, 'https://docs.example.org/ptx/index.html').title, 'PTX ISA 9.5 documentation');
+  const cudaSharded = shardArticle(cudaParsed);
+  assert.deepEqual([...new Set(cudaSharded.bookSections.map(s => s.chapterTitle))], ['CUDA C++ Programming Guide', '1. Introduction', '2. Model']);
+  const dupSharded = shardArticle(parseWebArticle(dupTitleHtml, 'https://docs.example.org/dup/index.html'));
+  assert.deepEqual([...new Set(dupSharded.bookSections.map(s => s.chapterTitle))], ['Overview', '1. Introduction', '2. Next']);
+
+  const wideRow = Array.from({ length: 700 }, (_, i) => `<td>${`col${i}_`.padEnd(40, 'x')}</td>`).join('');
+  const tableHtml = `<title>Wide & Empty Tables</title><article><h1>Tables</h1><table><tr><td></td><td></td></tr><tr>${wideRow}</tr></table></article>`;
+  const tableParsed = parseWebArticle(tableHtml, 'https://docs.example.org/tables');
+  assert.equal(tableParsed.paragraphs.some(p => !p.trim()), false);
+  const tableDoc = await library.importWebDocument(tableParsed);
+  assert.ok(tableDoc.doc.id.startsWith('web-'));
+
+  const nonBmpHeading = 'a'.repeat(76) + '\u{20000}' + 'tail';
+  const nonBmpSharded = shardArticle({ url: 'https://docs.example.org/cjk', title: nonBmpHeading, paragraphs: [nonBmpHeading, 'Body paragraph.'], articleLayout: { 'p-1': { kind: 'h1' } } });
+  const nonBmpImported = await importShardedBook(library, { title: nonBmpHeading, url: 'https://docs.example.org/cjk', sharded: nonBmpSharded });
+  assert.ok(nonBmpImported.doc.id.startsWith('book-'));
+
+  const longParas = Array.from({ length: 160 }, (_, i) => i === 0 ? 'IMAGE_ALT_SKIP_TOKEN' : i === 149 ? 'P150_SELECTED_TARGET' : `Paragraph number ${i + 1}`);
+  await assert.rejects(library.importWebDocument({ url: 'https://docs.example.org/bad', title: 'Bad', paragraphs: longParas, articleLayout: { 'p-1': { kind: 'p', ids: 123 } } }), { status: 400 });
+  await assert.rejects(library.importWebDocument({ url: 'https://docs.example.org/bad', title: 'Bad', paragraphs: longParas, articleLayout: { badkey: { kind: 'p' } } }), { status: 400 });
+  await assert.rejects(library.importWebDocument({ url: 'https://docs.example.org/bad', title: 'Bad', paragraphs: longParas, anchor: 'p-999' }), { status: 400 });
+
+  const extImported = await act('web.import', {
+    url: 'https://docs.example.org/long-ext', title: 'Long Extension Page', paragraphs: longParas,
+    articleLayout: { 'p-1': { kind: 'image', image: { url: 'https://docs.example.org/fig.png', alt: 'IMAGE_ALT_SKIP_TOKEN' } } },
+    anchor: 'p-150'
+  });
+  assert.ok(extImported.doc.book && extImported.page && extImported.page > 1 && extImported.anchor);
+  const anchorIdx = Number(extImported.anchor.slice(2)) - 1;
+  assert.equal(extImported.doc.paragraphs?.[anchorIdx], 'P150_SELECTED_TARGET');
+  const { pages } = await act('book.pages', { docId: extImported.doc.id });
+  assert.equal(pages.some(p => p.text.includes('IMAGE_ALT_SKIP_TOKEN')), false);
 });

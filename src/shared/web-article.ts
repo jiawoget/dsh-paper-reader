@@ -68,11 +68,14 @@ function splitLines(text: string, limit: number): string[] {
 
 function splitTableRows(cells: string[][], limit: number): string[][][] {
   const groups: string[][][] = [];
+  const maxCols = Math.max(1, Math.floor(limit / 2));
   let cur: string[][] = [], curLen = 0;
   for (const rawRow of cells) {
-    let row = rawRow, rowText = row.join('\t');
+    let row = rawRow.length > maxCols ? rawRow.slice(0, maxCols) : rawRow;
+    if (!row.some(Boolean)) continue;
+    let rowText = row.join('\t');
     if (rowText.length > limit) {
-      const cap = Math.max(32, Math.floor((limit - row.length) / Math.max(1, row.length)));
+      const cap = Math.max(1, Math.floor((limit - row.length + 1) / Math.max(1, row.length)));
       row = row.map(c => c.slice(0, cap)); rowText = row.join('\t');
     }
     if (cur.length && curLen + rowText.length + 1 > limit) { groups.push(cur); cur = []; curLen = 0; }
@@ -181,10 +184,10 @@ export function extractArticle<N>(
   const paragraphs: string[] = [];
   const layout: ArticleLayout = {};
   let ids: string[] = [], parts: { text: string; span?: Pick<ArticleSpan, 'kind' | 'value'> }[] = [];
-  let containsPick = false, pickedIndex = -1, title = '';
+  let containsPick = false, pickedIndex = -1, h1Count = 0, title = '';
   let current: ArticleKind = 'p', total = 0;
   function add(text: string, info: ArticleBlock, spans: ArticleSpan[] = []): void {
-    if (!text) return;
+    if (!text.trim()) return;
     total += text.length;
     if (total > maxChars || paragraphs.length >= maxBlocks || text.length > maxBlockChars) throw new Error('This article is too long to open in the reader.');
     const index = paragraphs.length;
@@ -193,7 +196,7 @@ export function extractArticle<N>(
     if (ids.length) info.ids = [...new Set(ids)].slice(0, 80);
     if (spans.length) info.spans = spans;
     if (info.kind !== 'p' || info.ids || info.spans) layout['p-' + (index + 1)] = info;
-    if (info.kind === 'h1' && !title) title = text;
+    if (info.kind === 'h1') { h1Count++; if (!title) title = text; }
     ids = []; containsPick = false;
   }
   function flush(): void {
@@ -269,13 +272,16 @@ export function extractArticle<N>(
       function rows(row: N): void {
         if (tag(row) === 'tr') {
           const values = Array.from(children(row)).filter(cell => ['th', 'td'].includes(tag(cell))).map(cell => clean(plain(cell)));
-          if (values.length) cells.push(values);
+          if (values.some(Boolean)) cells.push(values);
         } else if (['tbody', 'thead', 'tfoot', 'table'].includes(tag(row))) for (const child of children(row)) rows(child);
       }
       rows(node);
       if (cells.length) {
         const limit = Math.min(maxBlockChars, 20_000);
-        for (const group of splitTableRows(cells, limit)) add(group.map(row => row.join('\t')).join('\n'), { kind: 'table', cells: group });
+        for (const group of splitTableRows(cells, limit)) {
+          const text = group.map(row => row.join('\t')).join('\n');
+          if (text.trim()) add(text, { kind: 'table', cells: group });
+        }
       }
       return;
     }
@@ -313,10 +319,13 @@ export function extractArticle<N>(
   const publisher = firstMeta('citation_publisher', 'dc.publisher', 'dcterms.publisher');
   const abstract = firstMeta('citation_abstract', 'dcterms.abstract', 'dc.description', 'description', 'og:description');
   const pdfUrl = articleUrl(firstMeta('citation_pdf_url'), base)?.href;
+  const titleTail = title && pageTitle.toLowerCase().startsWith(title.toLowerCase())
+    ? pageTitle.slice(title.length).match(/^(?:\s*:\s+|\s+-\s+|\s*[—–|]\s*)(.+)$/)?.[1]?.trim() : '';
+  const resolvedTitle = h1Count > 1 && !paperTitle && pageTitle ? (titleTail || pageTitle) : (title || paperTitle || pageTitle || new URL(address).hostname);
   return {
     article: {
       url: address,
-      title: title || paperTitle || pageTitle || new URL(address).hostname,
+      title: resolvedTitle,
       paragraphs,
       articleLayout: layout,
       ...(paperTitle ? { paperTitle } : {}),

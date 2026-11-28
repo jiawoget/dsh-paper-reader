@@ -23,7 +23,7 @@ export const sample: DocumentInfo = {
   paperTitle: 'Efficient Memory Management for Large Language Model Serving with PagedAttention',
   url: 'https://arxiv.org/abs/2309.06180', doi: '10.1145/3600006.3613165', defaultPage: 6
 };
-const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+export const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 export function translationCacheSlug(targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE): string {
   const parsed = parseTargetLanguage(targetLanguage);
   if (!parsed.ok) fail(parsed.error, 400);
@@ -40,7 +40,7 @@ export function fail(message: string, status = 400): never { throw Object.assign
 function isFsError(error: unknown, code: string): boolean { return isRecord(error) && error.code === code; }
 const validDocId = (id: unknown): id is string => typeof id === 'string' && (id === sample.id || /^(pdf|web|book|abs)-[a-f0-9]{64}$/.test(id));
 
-async function writeOnce(file: string, bytes: Buffer | string): Promise<void> {
+export async function writeOnce(file: string, bytes: Buffer | string): Promise<void> {
   const temporary = file + '.' + randomUUID() + '.tmp';
   await writeFile(temporary, bytes, { flag: 'wx' });
   try {

@@ -1,4 +1,4 @@
-import type { Operations, SourceRecord } from '../shared/types.js';
+import type { DocumentInfo, Operations, SourceRecord } from '../shared/types.js';
 import { action, askWorker, errorText, extChinese, extLabel as t, getOrigin, readerAddress } from './protocol.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { cardStyle } from './card-style.js';
@@ -33,6 +33,14 @@ export class WebSource {
     this.importing ??= this.importSource().catch(error => { this.importing = undefined; throw error; });
     return this.importing;
   }
+  private async bookRecord(doc: DocumentInfo, number: number, anchor: string, fallbackLabel = ''): Promise<SourceRecord> {
+    const local = new URL(readerAddress(await getOrigin(), doc.id, anchor, this.bookPage));
+    if (this.pick) local.searchParams.set('quote', this.pick.text.slice(0, 1024));
+    return this.bookSource = {
+      docId: doc.id, title: doc.title, page: number, anchor,
+      label: doc.book!.sections[number - 1]?.title || fallbackLabel, sourceUrl: local.href
+    };
+  }
   private async importSource(): Promise<SourceRecord> {
     if (openStaxLocation(this.url)) {
       const {doc, page, anchor: fragment} = await action('web.open', {url:this.url});
@@ -52,15 +60,18 @@ export class WebSource {
         if(best.length!==1)throw Error(t('Open this section in the reader and select the passage there to save its exact location.', '请在阅读器中打开本节并选中这段，以保存精确位置。'));
         anchor=best[0].id;
       }
-      const local = new URL(readerAddress(await getOrigin(),doc.id,anchor,this.bookPage));
-      if(this.pick)local.searchParams.set('quote',this.pick.text.slice(0,1024));
-      return this.bookSource={docId:doc.id,title:doc.title,page:number,anchor,label:doc.book.sections[number-1].title,sourceUrl:local.href};
+      return this.bookRecord(doc, number, anchor);
     }
-    return action('web.import', this.page.article).then(({ doc }) => {
-      if (!doc?.id) throw new Error(t('DSH did not return an article ID. Try again.', 'DSH 未返回文章编号，请重试。'));
-      this.docId=doc.id;
-      return this.record();
-    });
+    const { article, anchor: pickedAnchor, label } = this.page;
+    const { doc, page, anchor } = await action('web.import', this.pick ? { ...article, anchor: pickedAnchor } : article);
+    if (!doc?.id) throw new Error(t('DSH did not return an article ID. Try again.', 'DSH 未返回文章编号，请重试。'));
+    this.docId = doc.id;
+    if (doc.book) {
+      const number = page || doc.defaultPage || 1;
+      this.bookPage = number;
+      return this.bookRecord(doc, number, anchor || (this.pick ? 'p-1' : ''), label);
+    }
+    return this.record();
   }
 
   async open(): Promise<void> {
