@@ -249,7 +249,7 @@ export function createLibraryChatView(): ResearchViewModule {
       const topic = ctx.openContext()?.topic || ctx.activeTopic() || undefined;
       void Promise.resolve().then(() => Promise.resolve()).then(() => { if (mounted) void loadLibrary(restored ? undefined : topic); });
     },
-    unmount() { mounted = false; events?.abort(); events = null; abortStream(); hidePopover(); modelPicker?.destroy(); modelPicker = undefined; scope = undefined; streamSlot = undefined; },
+    unmount() { mounted = false; ++loadSeq; events?.abort(); events = null; abortStream(); hidePopover(); modelPicker?.destroy(); modelPicker = undefined; scope = undefined; streamSlot = undefined; },
     saveState: (): SavedLibraryChatState => ({
       turns: turns.map(x => ({ ...x })), draft: inputEl?.value ?? draft, logScrollTop: logEl?.scrollTop ?? 0,
       scope: scope?.saveState() ?? { selectedIds: [], filter: '', open: true, collapsedSections: [], collapsedGroups: [], scrollTop: 0 }

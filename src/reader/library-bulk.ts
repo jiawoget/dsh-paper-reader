@@ -5,8 +5,9 @@ import { button, el, message, toast } from './ui.js';
 interface BulkCallbacks {
   onShowMore: () => void;
   onAddTag: (docIds: string[], tag: string) => Promise<void>;
-  onOpenReview: (docIds: string[]) => void;
+  onOpenReview: () => void;
   onDelete: (docIds: string[]) => Promise<void>;
+  onSelectionChange?: (count: number) => void;
 }
 
 export class LibraryBulkController {
@@ -31,6 +32,7 @@ export class LibraryBulkController {
   }
 
   bindList(list: HTMLElement): void { this.listHost = list; }
+  hasSelection(): boolean { return this.selected.size > 0; }
   remove(docId: string): void {
     this.selected.delete(docId); if (this.lastClickedId === docId) this.lastClickedId = null;
     this.confirmingDelete = false; this.sync();
@@ -89,6 +91,7 @@ export class LibraryBulkController {
       for (const cb of this.listHost.querySelectorAll<HTMLInputElement>('.library-check[data-doc-id]')) cb.checked = this.selected.has(cb.dataset.docId!);
     }
     const n = this.selected.size;
+    this.cb.onSelectionChange?.(n);
     this.selVisBtn.disabled = this.visibleIds.length === 0 || this.busy;
     this.bulkEl.hidden = n === 0;
     if (!n) { this.confirmingDelete = false; this.tagOpen = false; this.bulkEl.replaceChildren(); return; }
@@ -100,8 +103,9 @@ export class LibraryBulkController {
       this.bulkEl.replaceChildren(count, confirmBtn, cancelBtn); cancelBtn.focus({ preventScroll: true }); return;
     }
     if (this.tagOpen) {
+      const prevTag = this.bulkEl.querySelector<HTMLInputElement>('.library-bulk-tag-in')?.value ?? '';
       const form = el('form', 'library-bulk-tag-form'), input = el('input', 'search library-bulk-tag-in');
-      input.type = 'text'; input.maxLength = 40; input.required = true;
+      input.type = 'text'; input.maxLength = 40; input.required = true; input.value = prevTag;
       input.ariaLabel = input.placeholder = researchText.libraryTagInput();
       const applyBtn = el('button', 'btn primary library-bulk-tag-apply', researchText.libraryApplyTag());
       applyBtn.type = 'submit'; applyBtn.disabled = this.busy;
@@ -114,10 +118,10 @@ export class LibraryBulkController {
       form.append(input, applyBtn, cancelBtn); this.bulkEl.replaceChildren(count, form); input.focus(); return;
     }
     const tagBtn = button(researchText.libraryAddTag(), () => { this.tagOpen = true; this.sync(); }, 'btn library-bulk-tag-btn');
-    const reviewBtn = button(researchText.libraryOpenReview(), () => this.cb.onOpenReview(ids), 'btn library-bulk-review-btn');
+    const reviewBtn = button(researchText.libraryOpenReview(), () => this.cb.onOpenReview(), 'btn library-bulk-review-btn');
     const delBtn = button(researchText.libraryDeleteN(n), () => { this.confirmingDelete = true; this.sync(); }, 'btn library-delete-confirm library-bulk-del-btn');
     const clearBtn = button(researchText.triageClearSel(), () => this.clear(), 'text-btn library-bulk-clear');
-    tagBtn.disabled = reviewBtn.disabled = delBtn.disabled = this.busy;
+    tagBtn.disabled = reviewBtn.disabled = delBtn.disabled = clearBtn.disabled = this.busy;
     this.bulkEl.replaceChildren(count, tagBtn, reviewBtn, delBtn, clearBtn);
   }
 }

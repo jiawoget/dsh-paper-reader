@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { LIBRARY_PAGE_SIZE, rankDocsByRelevance, slicePage } from '../src/shared/library-relevance.js';
+import { filterDocsByQuery, LIBRARY_PAGE_SIZE, rankDocsByRelevance, slicePage } from '../src/shared/library-relevance.js';
 import type { DocumentInfo } from '../src/shared/types.js';
 import { ReaderStore } from '../src/server/reader-store.js';
 import { replaceDocPages } from '../src/server/research-store.js';
@@ -52,6 +52,12 @@ test('520-paper BM25 relevance ranking runs in < 50ms and slicePage bounds pages
   assert.ok(top3.has(docs[17].id) && top3.has(docs[243].id) && top3.has(docs[489].id) && ranked[0].score > ranked[3].score);
   const firstPage = slicePage(ranked, LIBRARY_PAGE_SIZE), secondPage = slicePage(ranked, 100);
   assert.deepEqual([firstPage.shown, firstPage.total, firstPage.hasMore, secondPage.shown, secondPage.hasMore], [50, 520, true, 100, true]);
+  const multiWord = filterDocsByQuery('sparse kv cache', docs);
+  assert.deepEqual(multiWord.slice(0, 3).map(d => d.id), ranked.slice(0, 3).map(r => r.docId));
+  assert.equal(multiWord.length, rankDocsByRelevance('sparse kv cache', docs).filter(r => r.score > 0).length);
+  assert.ok(filterDocsByQuery('quant', docs).length > 0 && filterDocsByQuery('2022', docs).length > 0);
+  assert.equal(filterDocsByQuery('zzzznonexistent999', docs).length, 0);
+  assert.equal(filterDocsByQuery('   ', docs).length, 520);
 });
 
 test('library.bulkTriage updates atomically and library.bulkDelete cascades SQLite while skipping pagedattention', async () => {

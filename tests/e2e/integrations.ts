@@ -458,7 +458,7 @@ async function linkedResources({ context, host, pane }: ReaderSession): Promise<
   await dlg.locator('.library-show-more').click(); assert.ok((await dlg.locator('.library-device-item').count()) > 50);
   await dlg.locator('.library-tag-filter').selectOption('scale-topic'); assert.equal(await dlg.locator('.library-device-item').count(), 6);
   await libChecks.nth(0).click(); await libChecks.nth(2).click({ modifiers: ['Shift'] });
-  await dlg.locator('.library-bulk-actions').waitFor({ state: 'visible' }); assert.equal(await dlg.locator('.library-bulk-count').innerText(), '3 selected');
+  await dlg.locator('.library-bulk-actions').waitFor({ state: 'visible' }); assert.equal(await dlg.locator('.library-bulk-count').innerText(), '3 selected'); assert.equal(await dlg.locator('.pf-bar').isHidden(), true);
   await dlg.locator('.library-bulk-tag-btn').click(); await dlg.locator('.library-bulk-tag-in').fill('batch-ok'); await dlg.locator('.library-bulk-tag-apply').click();
   await dlg.locator('.library-tag', { hasText: 'batch-ok' }).first().waitFor({ state: 'visible' });
   await dlg.locator('.library-bulk-review-btn').click(); await pane.locator('.rt-grid').waitFor({ state: 'visible' });
@@ -469,10 +469,10 @@ async function linkedResources({ context, host, pane }: ReaderSession): Promise<
   await pane.getByRole('button', { name: 'Research', exact: true }).click(); await pane.locator('.rw-nav-btn[data-view="library-chat"]').click();
   await pane.locator('.lc-cat-toggle[data-section-id="topics"]').waitFor({ state: 'visible' });
   assert.equal(await pane.locator('.lc-cat-toggle').first().getAttribute('data-section-id'), 'topics');
-  assert.ok((await pane.locator('.lc-cat-toggle[data-section-id="completeness"]').getAttribute('aria-expanded')) === 'false' && (await pane.locator('.lc-cat-toggle[data-section-id="status"]').getAttribute('aria-expanded')) === 'false');
-  await pane.locator('.lc-group:has(input[data-group-id="tag:__untagged__"]) .lc-group-fold').click(); await pane.locator('.lc-group-more[data-group-id="tag:__untagged__"]').waitFor({ state: 'visible' });
+  for (const sec of ['tags', 'completeness', 'status']) assert.equal(await pane.locator(`.lc-cat-toggle[data-section-id="${sec}"]`).getAttribute('aria-expanded'), 'false');
+  await pane.locator('.lc-cat-toggle[data-section-id="tags"]').click(); await pane.locator('.lc-group:has(input[data-group-id="tag:__untagged__"]) .lc-group-fold').click(); await pane.locator('.lc-group-more[data-group-id="tag:__untagged__"]').waitFor({ state: 'visible' });
   assert.equal(await pane.locator('.lc-group:has(input[data-group-id="tag:__untagged__"]) .lc-doc-row').count(), 30);
-  await pane.locator('.lc-scope-search').fill('Scale Synthetic Paper'); await pane.locator('.lc-smart-btn[data-smart="top-matching"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^30 \/ /);
+  await pane.locator('.lc-scope-search').fill('scale systems paper'); assert.ok((await pane.locator('.lc-doc-row').count()) > 0); await pane.locator('.lc-smart-btn[data-smart="top-matching"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^30 \/ /);
   await pane.locator('.lc-smart-btn[data-smart="starred"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^3 \/ /);
   await pane.locator('.lc-smart-btn[data-smart="included"]').click(); assert.match(await pane.locator('.lc-scope-pill').innerText(), /^2 \/ /);
   console.log('PASS 10: linked paper resources + 500-scale library dialog & chat scope.');

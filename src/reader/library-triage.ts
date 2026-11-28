@@ -56,6 +56,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
   let syncTags: (() => void) | null = null;
   const bulk = new LibraryBulkController({
     onShowMore: () => { pageLimit += LIBRARY_PAGE_SIZE; rerender?.(); },
+    onSelectionChange: () => floatBar.hide(),
     onAddTag: async (docIds, tag) => {
       const clean = tag.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
       if (!clean) return;
@@ -90,7 +91,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
     onAskAi: async target => { if (target.doc) { await read(target.doc); app.openPaperChat?.(); } },
     onCitations: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citations', { docId: target.doc.id }); } },
     onCitationMap: target => { if (target.doc) { closeDialog(); app.openResearchWorkspace?.('citation-map', { seedDocId: target.doc.id }); } }
-  }, { placement: 'outside' });
+  }, { placement: 'outside', isSuppressed: () => bulk.hasSelection() });
 
   let searchTimer = 0, searchSeq = 0;
   let pendingCounts: Record<string, number> = {};

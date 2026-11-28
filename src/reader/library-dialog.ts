@@ -139,7 +139,7 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
     exportWrap.append(expBtn);
   }
   const bulkBar = el('div', 'library-bulk-bar'); bulkBar.append(importRefsBtn, refsFile, exportWrap);
-  const holder = el('div'); root.append(toolbar, bulkBar, importStatus, form, holder);
+  const holder = el('div', 'library-holder'); root.append(toolbar, bulkBar, importStatus, form, holder);
   const zotero = el('button', 'library-tab', 'Zotero');
   zotero.id = 'library-tab-zotero';
   zotero.dataset.source = 'zotero';

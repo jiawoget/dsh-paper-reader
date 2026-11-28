@@ -70,3 +70,20 @@ export function rankDocsByRelevance(query: string, docs: readonly DocumentInfo[]
     .sort((a, b) => b.score - a.score || b.raw - a.raw || a.idx - b.idx)
     .map(({ docId, score, matchedTerms }) => ({ docId, score, matchedTerms }));
 }
+export function filterDocsByQuery(query: string, docs: readonly DocumentInfo[]): DocumentInfo[] {
+  const q = query.trim();
+  if (!q) return [...docs];
+  const byId = new Map(docs.map(d => [d.id, d])), ranked: DocumentInfo[] = [], seen = new Set<string>();
+  for (const m of rankDocsByRelevance(q, docs)) {
+    if (m.score <= 0) break;
+    const doc = byId.get(m.docId);
+    if (doc) { ranked.push(doc); seen.add(doc.id); }
+  }
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  for (const d of docs) {
+    if (seen.has(d.id)) continue;
+    const hay = `${d.paperTitle || d.title} ${d.authors ?? ''} ${d.year ?? ''} ${(d.meta?.tags ?? []).join(' ')}`.toLowerCase();
+    if (tokens.every(tok => hay.includes(tok))) ranked.push(d);
+  }
+  return ranked;
+}

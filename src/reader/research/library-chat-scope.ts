@@ -1,4 +1,4 @@
-import { rankDocsByRelevance } from '../../shared/library-relevance.js';
+import { filterDocsByQuery } from '../../shared/library-relevance.js';
 import type { DocumentInfo, TopicRecord } from '../../shared/types.js';
 import { abstractOnlyLabel } from '../abstract-view.js';
 import { el, icon, readerLabel as t, toast } from '../ui.js';
@@ -109,9 +109,11 @@ export class LibraryChatScope {
     } else for (const id of [...this.selected]) if (!valid.has(id)) this.selected.delete(id);
     if (!this.autoCollapsed && docs.length > AUTO_COLLAPSE_DOCS) {
       this.autoCollapsed = true;
+      const sections = buildSections(docs, this.topics);
       this.collapsedSections.add('completeness');
       this.collapsedSections.add('status');
-      for (const sec of buildSections(docs, this.topics)) {
+      if (sections[0].groups.length > 0) this.collapsedSections.add('tags');
+      for (const sec of sections) {
         for (const group of sec.groups) if (group.docs.length > AUTO_COLLAPSE_GROUP) this.collapsedGroups.add(group.id);
       }
     }
@@ -138,14 +140,12 @@ export class LibraryChatScope {
     this.selected = new Set(ids); this.syncChecks(); this.opts.onChange(); toast(researchText.lcSmartSelected(ids.length));
   }
   private applySmartTopMatching(): void {
-    const q = this.filter.trim(); if (!q) return;
-    const picked = rankDocsByRelevance(q, this.docs).filter(m => m.score > 0).slice(0, SMART_SCOPE_CAP).map(m => m.docId);
-    this.applySmartIds(picked);
+    if (!this.filter.trim()) return;
+    this.applySmartIds(this.filteredDocs().slice(0, SMART_SCOPE_CAP).map(d => d.id));
   }
 
   private filteredDocs(): DocumentInfo[] {
-    const q = this.filter.trim().toLowerCase();
-    return q ? this.docs.filter(d => `${docTitle(d)} ${d.authors ?? ''} ${d.year ?? ''} ${(d.meta?.tags ?? []).join(' ')}`.toLowerCase().includes(q)) : this.docs;
+    return this.filter.trim() ? filterDocsByQuery(this.filter, this.docs) : this.docs;
   }
 
   private selectFiltered(on: boolean): void {
@@ -172,17 +172,19 @@ export class LibraryChatScope {
       this.body.append(el('p', 'lc-scope-empty', this.docs.length ? t('No papers match this filter.', '没有符合筛选条件的文献。') : t('No papers in your local library yet.', '本地文献库暂无文献。')));
       this.syncChecks(); return;
     }
+    const searching = Boolean(this.filter.trim()), activeSections = buildSections(matched, this.topics).filter(s => s.groups.length > 0);
+    const forceOpenSec = searching && activeSections.every(s => this.collapsedSections.has(s.id)) ? activeSections[0]?.id ?? '' : '';
     const toggleSet = (set: Set<string>, id: string) => { if (set.has(id)) set.delete(id); else set.add(id); this.render(); };
-    for (const sec of buildSections(matched, this.topics)) {
-      if (!sec.groups.length) continue;
-      const box = el('section', 'lc-cat'), collapsed = this.collapsedSections.has(sec.id), toggle = el('button', 'lc-cat-toggle');
+    for (const sec of activeSections) {
+      const box = el('section', 'lc-cat'), collapsed = sec.id === forceOpenSec ? false : this.collapsedSections.has(sec.id), toggle = el('button', 'lc-cat-toggle');
       toggle.type = 'button'; toggle.dataset.sectionId = sec.id; toggle.setAttribute('aria-expanded', String(!collapsed));
       toggle.append(icon(collapsed ? 'next' : 'down', 14), el('span', 'lc-cat-name', sec.label));
       toggle.addEventListener('click', () => toggleSet(this.collapsedSections, sec.id)); box.append(toggle);
       if (!collapsed) {
-        const list = el('div', 'lc-cat-groups');
+        const list = el('div', 'lc-cat-groups'), topId = matched[0]?.id;
+        const forceOpenGrp = searching && sec.groups.every(g => this.collapsedGroups.has(g.id)) ? (sec.groups.find(g => g.docs.some(d => d.id === topId)) ?? sec.groups[0])?.id ?? '' : '';
         for (const group of sec.groups) {
-          const gWrap = el('div', 'lc-group'), gCollapsed = this.collapsedGroups.has(group.id), gHead = el('div', 'lc-group-head');
+          const gWrap = el('div', 'lc-group'), gCollapsed = group.id === forceOpenGrp ? false : this.collapsedGroups.has(group.id), gHead = el('div', 'lc-group-head');
           const gLabel = el('label', 'lc-group-check'), gCheck = el('input', 'lc-check'), ids = group.docs.map(d => d.id), gCount = el('span', 'lc-group-count'), foldBtn = el('button', 'icon-btn lc-group-fold');
           gCheck.type = 'checkbox'; gCheck.dataset.groupId = group.id;
           gCheck.addEventListener('change', () => { const allSel = ids.every(id => this.selected.has(id)); for (const id of ids) { if (allSel) this.selected.delete(id); else this.selected.add(id); } this.syncChecks(); this.opts.onChange(); });
