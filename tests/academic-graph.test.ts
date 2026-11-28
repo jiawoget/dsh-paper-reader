@@ -446,6 +446,7 @@ test('analyzeCitations resolves canonical keys/metadata for PMID, OpenAlex ID, a
     if (url.includes('/works/pmid:123456')) return jsonRes(makeOa('W123', 'Real Clinical Trial Paper', 2023, 410, [], { doi: 'https://doi.org/10.1056/NEJMoa123456', ids: { pmid: 'https://pubmed.ncbi.nlm.nih.gov/123456' } }));
     if (url.includes('/works/W2741809807')) return jsonRes(makeOa('W2741809807', 'Real OpenAlex Work Title', 2021, 95, [], { doi: 'https://doi.org/10.1000/oa-real' }));
     if (url.includes('search=attention')) return jsonRes({ results: [makeOa('W302', 'Attention Is All You Need', 2017, 90000, [], { doi: 'https://doi.org/10.48550/arXiv.1706.03762' })] });
+    if (url.includes('10.48550/arxiv.2401.88888')) return jsonRes(makeOa('W888', 'Pure Preprint Distributed Systems Evaluation Paper', 2024, 15));
     if (url.includes('semanticscholar.org') && url.includes('/citations')) return jsonRes(s2Cit('s2-1', 'Citing Followup'));
     return jsonRes({}, 404);
   };
@@ -462,4 +463,10 @@ test('analyzeCitations resolves canonical keys/metadata for PMID, OpenAlex ID, a
   assert.ok(byRaw.target.title === 'Attention Is All You Need' && byRaw.target.targetKey === 'arxiv:1706.03762');
   const cachedRaw = await analyzeCitations({ ...deps, fetchFn: async () => { throw new Error('offline'); } }, { doi: '10.48550/arXiv.1706.03762', arxivId: '1706.03762' });
   assert.ok(cachedRaw.fromCache && cachedRaw.target.title === 'Attention Is All You Need' && cachedRaw.target.year === 2017 && cachedRaw.target.authors.length === 2);
+  const byPreprint = await analyzeCitations(deps, { arxivId: '2401.88888' });
+  assert.ok(byPreprint.target.targetKey === 'arxiv:2401.88888' && !byPreprint.target.doi && byPreprint.statements.length === 1);
+  const imported = await library.importWeb({ url: 'https://dl.acm.org/doi/10.1145/9999999.7777777', title: 'Pure Preprint Distributed Systems Evaluation Paper', doi: '10.1145/9999999.7777777', paragraphs: ['Evaluates distributed systems.'] });
+  const reopened = await analyzeCitations({ ...deps, fetchFn: async () => { throw new Error('offline'); } }, { arxivId: '2401.88888' });
+  assert.ok(reopened.fromCache && reopened.target.targetKey === 'arxiv:2401.88888' && reopened.target.docId === imported.id && reopened.target.doi === '10.1145/9999999.7777777');
+  assert.ok(reopened.statements.length === 1 && reopened.statements[0]?.targetKey === reopened.target.targetKey);
 });

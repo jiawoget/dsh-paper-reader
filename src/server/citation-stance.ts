@@ -99,8 +99,7 @@ const isBareId = (s: string, doi?: string, arxivId?: string, pmid?: string): boo
 function enrichFromDoc(t: TargetMeta, doc: DocumentInfo | undefined): TargetMeta {
   if (!doc) return t;
   const doi = t.doi ?? cleanDoi(doc.doi), arxivId = t.arxivId ?? extractArxivId(doc.url, doc.doi), title = t.title && !isBareId(t.title, doi, arxivId, t.pmid) ? t.title : (doc.paperTitle || doc.title);
-  const docId = t.docId ?? doc.id;
-  return { ...t, targetKey: makeTargetKey({ doi, arxivId, pmid: t.pmid, title, docId }), docId, doi, arxivId, title, authors: t.authors.length ? t.authors : splitAuthors(doc.authors), year: t.year ?? parseYear(doc.year ?? doc.venue), sciteUrl: buildSciteUrl(doi, title) };
+  return { ...t, docId: t.docId ?? doc.id, doi, arxivId, title, authors: t.authors.length ? t.authors : splitAuthors(doc.authors), year: t.year ?? parseYear(doc.year ?? doc.venue), sciteUrl: buildSciteUrl(doi, title) };
 }
 async function readBoundedText(res: Response, maxChars: number): Promise<string> {
   if (!res.body) return (await res.text()).slice(0, maxChars);
@@ -250,18 +249,19 @@ export async function analyzeCitations(deps: CitationDeps, input: Input, opts?: 
   const degraded = new Set<string>();
   let fromCache = !forceRefresh && cachedExternal.length > 0, external: CitationStatement[] = cachedExternal;
   const ctx: GraphContext = { withDb: (w, run) => deps.store.withDb(w, run), settings: deps.store.settings(), fetchFn: deps.fetchFn, sleepFn: deps.sleepFn, docs, signal: opts?.signal };
-  const applyMeta = (p: { title?: string; authors?: string[]; year?: number; doi?: string; arxivId?: string; pmid?: string; s2Id?: string; docId?: string }) => {
+  const applyMeta = (p: { title?: string; authors?: string[]; year?: number; doi?: string; arxivId?: string; pmid?: string; s2Id?: string; docId?: string }, preserveKey = false) => {
     const doi = target.doi ?? p.doi, arxivId = target.arxivId ?? p.arxivId, pmid = target.pmid ?? p.pmid;
     const title = (target.docId || explicitTitle) && !isBareId(target.title, doi, arxivId, pmid) ? target.title : (p.title || target.title);
-    target = { ...target, targetKey: makeTargetKey({ doi, arxivId, pmid, title, docId: target.docId }), doi, arxivId, pmid, s2Id: target.s2Id ?? p.s2Id, title, authors: target.authors.length ? target.authors : (p.authors ?? []), year: target.year ?? p.year, sciteUrl: buildSciteUrl(doi, title) };
+    target = { ...target, doi, arxivId, pmid, s2Id: target.s2Id ?? p.s2Id, title, authors: target.authors.length ? target.authors : (p.authors ?? []), year: target.year ?? p.year, sciteUrl: buildSciteUrl(doi, title) };
     if (!target.docId) target = enrichFromDoc(target, p.docId ? docs.find(d => d.id === p.docId) : docs.find(d => docMatchesTarget(d, target)));
+    if (!preserveKey) target = { ...target, targetKey: makeTargetKey({ doi: target.doi, arxivId: target.arxivId, pmid: target.pmid, title: target.title, docId: target.docId }) };
   };
   if (fromCache && !target.docId) {
     const cachedDocId = existing.find(r => r.docId)?.docId;
     if (cachedDocId) target = enrichFromDoc(target, docs.find(d => d.id === cachedDocId));
     if (!target.docId && (!target.authors.length || isBareId(target.title, target.doi, target.arxivId, target.pmid))) {
       const hit = deps.store.withDb(false, db => getGraphCache<Partial<TargetMeta>>(db, 'cit:meta:' + target.targetKey))?.value;
-      if (hit) applyMeta(hit);
+      if (hit) applyMeta(hit, true);
     }
   }
   if (!fromCache || (!target.docId && (!target.authors.length || isBareId(target.title, target.doi, target.arxivId, target.pmid)))) {
