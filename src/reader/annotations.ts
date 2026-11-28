@@ -2,7 +2,7 @@ import type { AnnotationColor, PaperAnnotation } from '../shared/annotations.js'
 import type { BookInfo, SourceRecord } from '../shared/types.js';
 import { readTranslatedLocator } from '../shared/source-link.js';
 import { ANNOTATION_COLORS, buildColorPalette, buildEmptyMarksNotice, buildMarksFilters, colorMeaning, filterAnnotations, highlightName, type AnnotationFilter, type MarksFilterControls } from './annotation-colors.js';
-import { api, button, byId, el, icon, message, readerLabel as label, sourceUrl, toast } from './ui.js';
+import { api, button, byId, el, icon, message, readerLabel as label, removeLabel, sourceUrl, toast } from './ui.js';
 
 type Point = NonNullable<PaperAnnotation['point']>;
 const storageKey = (docId: string) => 'reader.annotation-drafts.' + docId;
@@ -276,7 +276,7 @@ export class AnnotationWorkspace {
       this.closeEditor(false);
       await this.controls.cite(saved,visibleQuote(saved)||saved.text||label('Page note','页边笔记'));
     },'btn','arrow');
-    const remove=button(label('Remove','移除'),()=>{
+    const remove=button(removeLabel(),()=>{
       problem.replaceChildren(el('p','',label('Remove this mark? Citations in your notes will still open its source.','移除此标记？笔记中的引用仍可回到出处。')),
         button(label('Remove mark','移除标记'),()=>this.remove(note,true),'btn'),button(label('Keep mark','保留标记'),()=>problem.replaceChildren(),'text-btn'));
     },'text-btn annotation-remove');

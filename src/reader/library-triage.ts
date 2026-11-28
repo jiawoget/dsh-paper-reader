@@ -1,6 +1,6 @@
 import { LIBRARY_PAGE_SIZE, slicePage } from '../shared/library-relevance.js';
 import { openStaxLocation } from '../shared/openstax.js';
-import { collectLibraryTags, mergeTags, normalizeTag } from '../shared/tags.js';
+import { collectLibraryTags, isInternalTag, mergeTags, normalizeTag } from '../shared/tags.js';
 import type { DocStatus, DocumentInfo, LibrarySearchHit, LibrarySearchKind, TopicRecord } from '../shared/types.js';
 import { abstractOnlyLabel } from './abstract-view.js';
 import { localBookPlace } from './book-position.js';
@@ -58,7 +58,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
   let syncTags: (() => void) | null = null;
   const applyBulkTag = async (docIds: string[], tag: string, mode: 'add' | 'remove') => {
     const clean = normalizeTag(tag);
-    if (!clean) return;
+    if (!clean || isInternalTag(clean)) return;
     const res = await api('library.bulkTriage', mode === 'add' ? { docIds, addTags: [clean] } : { docIds, removeTags: [clean] });
     const idSet = new Set(docIds);
     for (const doc of allDocs) {
@@ -237,7 +237,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           onMetaUpdated: meta => {
             doc.meta = meta; if (app.doc.id === doc.id) app.doc.meta = meta;
             syncTagOptions(); app.notifyDocumentMutated?.(doc.id);
-            if (tagSelect.value) render();
+            if (tagSelect.value && !meta.tags.some(t => t.toLocaleLowerCase() === tagSelect.value.toLocaleLowerCase())) render();
           }
         });
         main.append(row, rowTags);

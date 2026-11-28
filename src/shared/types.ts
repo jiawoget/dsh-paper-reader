@@ -211,7 +211,7 @@ export interface Operations {
   'library.importRefs': [{ text: string; format?: BulkRefFormat | 'auto'; tag?: string }, { created: number; existing: number; skipped: number; docs: DocumentInfo[] }];
   'library.exportRefs': [{ docIds?: string[]; format: BulkRefFormat }, { format: BulkRefFormat; filename: string; content: string; count: number }];
   'library.progress.save': [{ docId: string; lastPage?: number; pageCount?: number; scrollFraction?: number }, { meta: DocMeta }];
-  'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[] }, { meta: DocMeta }];
+  'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[]; addTags?: string[]; removeTags?: string[] }, { meta: DocMeta }];
   'library.bulkTriage': [{ docIds: string[]; addTags?: string[]; removeTags?: string[]; status?: DocStatus; starred?: boolean }, { updated: number }];
   'library.suggestTags': [{ docId: string }, { tags: string[]; source: 'ai' | 'offline' }];
   'library.search': [{ query: string }, { hits: LibrarySearchHit[] }];

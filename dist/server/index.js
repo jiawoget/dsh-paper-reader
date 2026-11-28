@@ -3986,7 +3986,7 @@ function deleteAnnotation(db, input) {
 var MAX_DOC_TAGS = 20;
 var MAX_TAG_LEN = 40;
 var STOPWORDS = new Set(
-  "the and for with from that this into over under through using via based paper study method methods approach approaches results result analysis towards toward large novel new efficient effective fast high low multi deep model models learning data work works propose proposed show shows achieve achieves improve improves across between without within their these those such more most than also only when where while which what have been were will would could should can are was not our its per all any one two use used abstract section figure table benchmark evaluation".split(" ")
+  "the and for with from that this into over under through using via based paper study method methods approach approaches results result analysis towards toward large novel new efficient effective fast high low multi deep model models learning data work works propose proposed show shows achieve achieves improve improves across between without within their these those such more most than also only when where while which what have been were will would could should can are was not our its per all any one two use used abstract section figure table benchmark evaluation you your who how why".split(" ")
 );
 var isInternalTag = (tag) => /^screen:/i.test(tag);
 var normalizeTag = (raw) => raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_TAG_LEN);
@@ -4159,21 +4159,20 @@ function saveDocProgress(db, input) {
     ...nextScroll !== void 0 && { scrollFraction: nextScroll }
   });
 }
-function sanitizeTags(raw) {
+function sanitizeTags(raw, allowInternal = true) {
   if (!Array.isArray(raw) || raw.length > 50 || !raw.every((item) => typeof item === "string")) throw new ServiceError(400, "Tags must be an array of strings.");
-  return normalizeTagList(raw);
+  return allowInternal ? normalizeTagList(raw) : normalizeTagList(raw).filter((tag) => !isInternalTag(tag));
 }
 function updateDocTriage(db, input) {
   const docId = single(input.docId, "document ID", 512, true);
   if (input.status !== void 0 && !isStatus(input.status)) throw new ServiceError(400, "Choose unread, reading, or done.");
   if (input.starred !== void 0 && typeof input.starred !== "boolean") throw new ServiceError(400, "Starred must be a boolean.");
+  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags, false);
+  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags, false);
   const prev = listDocMeta(db, docId).get(docId) ?? { status: "unread", starred: false, tags: [] };
-  return upsertMeta(db, docId, {
-    ...prev,
-    status: input.status ?? prev.status,
-    starred: input.starred ?? prev.starred,
-    tags: input.tags === void 0 ? prev.tags : sanitizeTags(input.tags)
-  });
+  let tags = input.tags === void 0 ? prev.tags : sanitizeTags(input.tags);
+  if (addTags?.length || removeTags?.length) tags = mergeTags(tags, { remove: removeTags, add: addTags });
+  return upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
 }
 function readBulkDocIds(raw, required = true) {
   if (!Array.isArray(raw) || required && !raw.length || raw.length > 5e3) {
@@ -4185,8 +4184,8 @@ function bulkUpdateDocTriage(db, input, validIds) {
   const docIds = readBulkDocIds(input.docIds, true);
   if (input.status !== void 0 && !isStatus(input.status)) throw new ServiceError(400, "Choose unread, reading, or done.");
   if (input.starred !== void 0 && typeof input.starred !== "boolean") throw new ServiceError(400, "Starred must be a boolean.");
-  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags);
-  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags);
+  const addTags = input.addTags === void 0 ? void 0 : sanitizeTags(input.addTags, false);
+  const removeTags = input.removeTags === void 0 ? void 0 : sanitizeTags(input.removeTags, false);
   if (input.status === void 0 && input.starred === void 0 && addTags === void 0 && removeTags === void 0) {
     throw new ServiceError(400, "Provide tags, status, or starred to update.");
   }

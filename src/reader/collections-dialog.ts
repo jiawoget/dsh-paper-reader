@@ -1,5 +1,5 @@
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
-import { api, bindTablist, button, byId, el, modal, readerLabel as label, safeWeb, type ReaderPort } from './ui.js';
+import { api, bindTablist, button, byId, el, modal, readerLabel as label, removeLabel, safeWeb, type ReaderPort } from './ui.js';
 
 const close = () => byId<HTMLDialogElement>('dialog').close();
 
@@ -47,7 +47,7 @@ export function collectionsDialog(app: ReaderPort, tab: 'vocabulary' | 'history'
         } else { const link = safeWeb(word.sourceUrl); if (link) window.open(link, '_blank', 'noopener'); }
       }, 'text-btn', 'arrow'));
       if (activeTab === 'vocabulary') {
-        actions.append(button(label('Remove', '移除'), async () => {
+        actions.append(button(removeLabel(), async () => {
           await api('vocab.delete', { id: word.id });
           await app.refresh();
           display();

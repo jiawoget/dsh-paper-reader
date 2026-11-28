@@ -43,8 +43,8 @@ dialog[open]:has(.reader-library) #dialogBody, .reader-library, .library-holder,
 .zotero-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; }
 .library-device-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 4px; }
 .library-doc-main { display: grid; gap: 4px; min-width: 0; }
-.library-row-tags { padding: 0 6px 8px 36px; min-width: 0; }
-.library-check-wrap { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; margin-top: 14px; cursor: pointer; border-radius: var(--radius-sm); }
+.library-row-tags { padding: 0 8px 8px 36px; min-width: 0; }
+.library-check-wrap { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; margin-top: 12px; cursor: pointer; border-radius: var(--radius-sm); }
 .library-check { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-solid); cursor: pointer; }
 .library-sel-strip { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--ink-muted); }
 .library-sel-count { font-variant-numeric: tabular-nums; }
@@ -67,7 +67,7 @@ dialog[open]:has(.reader-library) #dialogBody, .reader-library, .library-holder,
 .library-bulk-clear { margin-inline-start: auto; min-height: 28px; padding: 4px 8px; font-size: 12px; }
 .library-pager { display: flex; align-items: center; justify-content: center; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--line); }
 .zotero-item + .zotero-item, .library-results > :is(.doc-row, .library-device-item, .library-rename) + :is(.doc-row, .library-device-item, .library-rename) { border-top: 1px solid var(--line); }
-.library-item-actions { display: flex; align-items: center; gap: 3px; flex: none; margin-top: 10px; }
+.library-item-actions { display: flex; align-items: center; gap: 3px; flex: none; margin-top: 8px; }
 .library-item-actions .icon-btn { min-width: 32px; height: 32px; color: var(--ink-muted); }
 .library-item-actions .icon-btn:hover { color: var(--accent); background: var(--lavender); }
 .library-star[aria-pressed="true"] { color: var(--accent); }

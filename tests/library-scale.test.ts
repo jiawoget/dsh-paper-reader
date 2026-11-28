@@ -80,6 +80,11 @@ test('library.bulkTriage updates atomically and library.bulkDelete cascades SQLi
     const metaA = (await svc('library.list', {})).docs.find(d => d.id === a.id)?.meta;
     assert.deepEqual(metaA?.tags, ['Priority', 'Verified']);
     assert.equal(metaA?.status, 'reading'); assert.equal(metaA?.starred, true);
+    await svc('library.triage', { docId: c.id, tags: ['screen:yes', 'Alpha'] });
+    const atomicC = (await svc('library.triage', { docId: c.id, addTags: ['Beta', 'screen:no'], removeTags: ['screen:yes', 'alpha'] })).meta;
+    assert.deepEqual(atomicC.tags, ['screen:yes', 'Beta']);
+    await svc('library.bulkTriage', { docIds: [c.id], addTags: ['screen:maybe', 'Gamma'], removeTags: ['screen:yes'] });
+    assert.deepEqual((await svc('library.list', {})).docs.find(d => d.id === c.id)?.meta?.tags, ['screen:yes', 'Beta', 'Gamma']);
 
     await assert.rejects(() => svc('library.bulkTriage', { docIds: [] }), hasHttpStatus(400));
     await assert.rejects(() => svc('library.bulkTriage', { docIds: [a.id] }), hasHttpStatus(400));

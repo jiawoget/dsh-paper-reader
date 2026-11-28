@@ -1,5 +1,5 @@
 import type { DocResourceKind } from '../../shared/doc-resources.js';
-import { readerLabel as t } from '../ui.js';
+import { readerLabel as t, removeLabel } from '../ui.js';
 
 export const RESEARCH_VIEWS = [
   { id: 'deep-search', en: 'Deep Search', zh: '深度检索', dense: false },
@@ -217,7 +217,7 @@ export const researchText = {
   libraryBulkTagged: (n: number, tag: string) => t(`Tagged ${n} paper${n === 1 ? '' : 's'} with "${tag}".`, `已为 ${n} 篇文献添加标签“${tag}”。`),
   libraryBulkUntagged: (n: number, tag: string) => t(`Removed "${tag}" from ${n} paper${n === 1 ? '' : 's'}.`, `已从 ${n} 篇文献移除标签“${tag}”。`),
   libraryAddMode: () => t('Add', '添加'),
-  libraryRemoveMode: () => t('Remove tag', '移除标签'),
+  libraryRemoveMode: removeLabel,
   libraryBulkNoTags: () => t('No tags on selected papers.', '所选文献暂无标签。'),
   tagAddBtn: () => t('+ Tag', '+ 标签'),
   tagManageLabel: () => t('Manage tags', '管理标签'),

@@ -5,7 +5,7 @@ export const MAX_TAG_LEN = 40;
 export interface TagStat { tag: string; count: number; label?: string }
 
 const STOPWORDS = new Set(
-  'the and for with from that this into over under through using via based paper study method methods approach approaches results result analysis towards toward large novel new efficient effective fast high low multi deep model models learning data work works propose proposed show shows achieve achieves improve improves across between without within their these those such more most than also only when where while which what have been were will would could should can are was not our its per all any one two use used abstract section figure table benchmark evaluation'.split(' ')
+  'the and for with from that this into over under through using via based paper study method methods approach approaches results result analysis towards toward large novel new efficient effective fast high low multi deep model models learning data work works propose proposed show shows achieve achieves improve improves across between without within their these those such more most than also only when where while which what have been were will would could should can are was not our its per all any one two use used abstract section figure table benchmark evaluation you your who how why'.split(' ')
 );
 
 export const isInternalTag = (tag: string): boolean => /^screen:/i.test(tag);
@@ -60,11 +60,11 @@ export function collectLibraryTags(docs: readonly DocumentInfo[], topics?: reado
   return out.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
 
-export function filterTagStats(stats: readonly TagStat[], query: string, limit = 24): { items: TagStat[]; total: number; hiddenCount: number; createTag: string | null } {
+export function filterTagStats(stats: readonly TagStat[], query: string, limit = 24): { items: TagStat[]; hiddenCount: number; createTag: string | null } {
   const clean = normalizeTag(query), needle = clean.toLocaleLowerCase();
   const matched = needle ? stats.filter(s => s.tag.toLocaleLowerCase().includes(needle) || (s.label?.toLocaleLowerCase().includes(needle) ?? false)) : stats;
   const items = matched.slice(0, limit), exact = Boolean(needle && stats.some(s => s.tag.toLocaleLowerCase() === needle));
-  return { items, total: matched.length, hiddenCount: Math.max(0, matched.length - items.length), createTag: clean && !isInternalTag(clean) && !exact ? clean : null };
+  return { items, hiddenCount: Math.max(0, matched.length - items.length), createTag: clean && !isInternalTag(clean) && !exact ? clean : null };
 }
 
 export function suggestOfflineTags(doc: Pick<DocumentInfo, 'title' | 'paperTitle' | 'abstract' | 'venue' | 'meta'>, taxonomy: readonly TagStat[], limit = 4): string[] {

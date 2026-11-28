@@ -141,7 +141,7 @@ export class ReviewTableInspector {
     this.retryBtn.hidden = isScreening; this.setBusy(this.busy); this.cb.onAttachPaperHead?.(this.headEl, doc);
   }
   showPaper(doc: DocumentInfo, docs?: readonly DocumentInfo[], topics?: readonly TopicRecord[]): void {
-    this.target = null; this.paperDoc = doc; this.backdrop.hidden = this.root.hidden = false;
+    closeTagPopover(); this.target = null; this.paperDoc = doc; this.backdrop.hidden = this.root.hidden = false;
     this.cellBody.hidden = this.cellFoot.hidden = true; this.paperBody.hidden = this.paperFoot.hidden = false;
     this.root.setAttribute('aria-label', researchText.paperSummary());
     this.titleEl.textContent = doc.paperTitle || doc.title;

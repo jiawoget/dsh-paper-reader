@@ -72,20 +72,21 @@ export function saveDocProgress(db: DatabaseSync, input: Input): DocMeta {
   });
 }
 
-function sanitizeTags(raw: unknown): string[] {
+function sanitizeTags(raw: unknown, allowInternal = true): string[] {
   if (!Array.isArray(raw) || raw.length > 50 || !raw.every(item => typeof item === 'string')) throw new ServiceError(400, 'Tags must be an array of strings.');
-  return normalizeTagList(raw);
+  return allowInternal ? normalizeTagList(raw) : normalizeTagList(raw).filter(tag => !isInternalTag(tag));
 }
 
 export function updateDocTriage(db: DatabaseSync, input: Input): DocMeta {
   const docId = single(input.docId, 'document ID', 512, true);
   if (input.status !== undefined && !isStatus(input.status)) throw new ServiceError(400, 'Choose unread, reading, or done.');
   if (input.starred !== undefined && typeof input.starred !== 'boolean') throw new ServiceError(400, 'Starred must be a boolean.');
+  const addTags = input.addTags === undefined ? undefined : sanitizeTags(input.addTags, false);
+  const removeTags = input.removeTags === undefined ? undefined : sanitizeTags(input.removeTags, false);
   const prev = listDocMeta(db, docId).get(docId) ?? { status: 'unread', starred: false, tags: [] };
-  return upsertMeta(db, docId, {
-    ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred,
-    tags: input.tags === undefined ? prev.tags : sanitizeTags(input.tags)
-  });
+  let tags = input.tags === undefined ? prev.tags : sanitizeTags(input.tags);
+  if (addTags?.length || removeTags?.length) tags = mergeTags(tags, { remove: removeTags, add: addTags });
+  return upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
 }
 
 export function readBulkDocIds(raw: unknown, required = true): string[] {
@@ -99,8 +100,8 @@ export function bulkUpdateDocTriage(db: DatabaseSync, input: Input, validIds: Re
   const docIds = readBulkDocIds(input.docIds, true);
   if (input.status !== undefined && !isStatus(input.status)) throw new ServiceError(400, 'Choose unread, reading, or done.');
   if (input.starred !== undefined && typeof input.starred !== 'boolean') throw new ServiceError(400, 'Starred must be a boolean.');
-  const addTags = input.addTags === undefined ? undefined : sanitizeTags(input.addTags);
-  const removeTags = input.removeTags === undefined ? undefined : sanitizeTags(input.removeTags);
+  const addTags = input.addTags === undefined ? undefined : sanitizeTags(input.addTags, false);
+  const removeTags = input.removeTags === undefined ? undefined : sanitizeTags(input.removeTags, false);
   if (input.status === undefined && input.starred === undefined && addTags === undefined && removeTags === undefined) {
     throw new ServiceError(400, 'Provide tags, status, or starred to update.');
   }

@@ -18,12 +18,14 @@ interface ActivePopover {
 
 let mountSeq = 0;
 let activePopover: ActivePopover | null = null;
-const tagListeners = new Set<(docId: string, meta: DocMeta) => void>();
+const tagListeners = new Set<{ alive: () => boolean; notify: (docId: string, meta: DocMeta) => void }>();
+const pruneListeners = (): void => { for (const e of tagListeners) if (!e.alive()) tagListeners.delete(e); };
 
 export const isTagPopoverOpen = (): boolean => activePopover !== null;
-export function broadcastDocTags(docId: string, meta: DocMeta): void { for (const fn of [...tagListeners]) fn(docId, meta); }
+export function broadcastDocTags(docId: string, meta: DocMeta): void { pruneListeners(); for (const e of [...tagListeners]) e.notify(docId, meta); }
 
 export function closeTagPopover(restoreFocus = false): void {
+  pruneListeners();
   const cur = activePopover;
   if (!cur) return;
   activePopover = null; cur.aiCtrl?.abort(); cur.ac.abort(); cur.root.remove();
@@ -39,8 +41,8 @@ function positionPopover(pop: HTMLElement, trigger: HTMLButtonElement, dialog: H
   const vw = window.innerWidth || 1024, vh = window.innerHeight || 768;
   const box = dialog ? dialog.getBoundingClientRect() : { left: 0, top: 0, right: vw, bottom: vh, width: vw, height: vh };
   const margin = 12, maxW = Math.min(320, Math.max(220, Math.floor(box.width - margin * 2)));
-  pop.style.width = `${maxW}px`;
-  const pr = pop.getBoundingClientRect(), pw = Math.min(pr.width || maxW, maxW), ph = pr.height || 200;
+  pop.style.width = `${maxW}px`; pop.style.maxHeight = '';
+  const pr = pop.getBoundingClientRect(), pw = Math.min(pr.width || maxW, maxW), ph = Math.max(pr.height, pop.scrollHeight) || 200;
   const left = Math.max(box.left + margin, Math.min(tr.left, box.right - pw - margin));
   const minTop = Math.max(8, box.top + 8), maxBottom = Math.min(vh - 8, box.bottom - 8);
   const spaceBelow = maxBottom - tr.bottom - 6, spaceAbove = tr.top - minTop - 6;
@@ -51,6 +53,7 @@ function positionPopover(pop: HTMLElement, trigger: HTMLButtonElement, dialog: H
 }
 
 export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): void {
+  pruneListeners();
   const token = String(++mountSeq), doc = opts.doc;
   container.dataset.tpSeq = token;
   const alive = () => container.isConnected && container.dataset.tpSeq === token;
@@ -59,7 +62,7 @@ export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): 
   if (opts.heading) root.append(el('h3', 'tp-head', opts.heading));
   root.append(inline); container.replaceChildren(root);
 
-  let busy = false;
+  let busy = false, metaVersion = 0;
   const trigger = el('button', 'tp-trigger');
   trigger.type = 'button'; trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-haspopup', 'dialog');
   trigger.ariaLabel = researchText.tagManageLabel();
@@ -71,8 +74,11 @@ export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): 
     if (patch.add?.length && next.length === current.length && current.length >= MAX_DOC_TAGS) { toast(researchText.tagLimitReached()); return false; }
     busy = true;
     try {
-      const { meta } = await api('library.triage', { docId: doc.id, tags: next });
-      doc.meta = meta; broadcastDocTags(doc.id, meta); opts.onMetaUpdated?.(meta); return true;
+      const { meta } = await api('library.triage', { docId: doc.id, ...(patch.add?.length ? { addTags: patch.add } : {}), ...(patch.remove?.length ? { removeTags: patch.remove } : {}) });
+      metaVersion++; doc.meta = meta; broadcastDocTags(doc.id, meta); opts.onMetaUpdated?.(meta);
+      const keys = new Set(meta.tags.map(t => t.toLocaleLowerCase()));
+      if ((patch.add ?? []).some(t => !keys.has(normalizeTag(t).toLocaleLowerCase())) && meta.tags.length >= MAX_DOC_TAGS) { toast(researchText.tagLimitReached()); return false; }
+      return true;
     } catch (error) { toast(message(error)); return false; } finally { busy = false; }
   };
 
@@ -87,17 +93,20 @@ export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): 
     inline.append(trigger);
   };
 
-  const listener = (docId: string, meta: DocMeta) => {
-    if (!alive()) { tagListeners.delete(listener); return; }
-    if (docId !== doc.id) return;
-    doc.meta = meta; renderStrip();
-    if (activePopover?.docId === doc.id) activePopover.refresh();
+  const entry = {
+    alive,
+    notify: (docId: string, meta: DocMeta) => {
+      if (!alive()) { tagListeners.delete(entry); return; }
+      if (docId !== doc.id) return;
+      metaVersion++; doc.meta = meta; renderStrip();
+      if (activePopover?.docId === doc.id) activePopover.refresh();
+    }
   };
-  tagListeners.add(listener); renderStrip();
+  tagListeners.add(entry); renderStrip();
 
   const openPopover = (): void => {
     if (activePopover?.trigger === trigger) { closeTagPopover(true); return; }
-    closeTagPopover(false);
+    closeTagPopover(false); document.dispatchEvent(new CustomEvent('tp:open'));
     const dialog = trigger.closest<HTMLDialogElement>('dialog[open]'), host = dialog ?? document.body;
     const ac = new AbortController(), { signal } = ac, pop = el('div', 'tp-popover');
     pop.setAttribute('role', 'dialog'); pop.ariaLabel = researchText.tagManageLabel();
@@ -130,11 +139,11 @@ export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): 
     const createSlot = el('div', 'tp-create-slot'), sugSec = el('div', 'tp-sec tp-sug-sec'), listSec = el('div', 'tp-sec tp-list-sec');
     pop.append(head, createSlot, sugSec, listSec);
 
-    const toggleTag = async (tag: string, forceAdd = false): Promise<void> => {
+    const toggleTag = async (tag: string, forceAdd = false): Promise<boolean> => {
       const clean = normalizeTag(tag);
-      if (!clean || isInternalTag(clean)) return;
+      if (!clean || isInternalTag(clean)) return false;
       const key = clean.toLocaleLowerCase(), has = visibleTags(doc).some(t => t.toLocaleLowerCase() === key);
-      if ((forceAdd && has) || !await commitTags(has ? { remove: [clean] } : { add: [clean] })) return;
+      if ((forceAdd && has) || !await commitTags(has ? { remove: [clean] } : { add: [clean] })) return false;
       if (!opts.getTaxonomy) {
         const idx = localTax.findIndex(s => s.tag.toLocaleLowerCase() === key);
         if (idx >= 0) { const n = Math.max(0, localTax[idx].count + (has ? -1 : 1)); if (!n && !localTax[idx].label) localTax.splice(idx, 1); else localTax[idx] = { ...localTax[idx], count: n }; }
@@ -142,8 +151,9 @@ export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): 
         localTax.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
       }
       if (activePopover?.root === pop) renderBody();
+      return true;
     };
-    const commitFromInput = (tag: string, forceAdd: boolean) => void toggleTag(tag, forceAdd).then(() => { input.value = ''; renderBody(); input.focus({ preventScroll: true }); });
+    const commitFromInput = (tag: string, forceAdd: boolean) => void toggleTag(tag, forceAdd).then(ok => { if (ok && activePopover?.root === pop) { input.value = ''; renderBody(); input.focus({ preventScroll: true }); } });
 
     const renderBody = (): void => {
       const query = input.value, currentKeys = new Set(visibleTags(doc).map(t => t.toLocaleLowerCase()));
@@ -193,11 +203,13 @@ export function mountTagPicker(container: HTMLElement, opts: TagPickerOptions): 
     activePopover = { root: pop, trigger, docId: doc.id, ac, refresh: renderBody };
     trigger.setAttribute('aria-expanded', 'true'); host.append(pop); renderBody(); input.focus({ preventScroll: true });
     if (!opts.getTaxonomy) {
+      const openVersion = metaVersion;
       void Promise.all([api('library.list', {}), api('topics.list', {}).catch(() => ({ topics: [] }))]).then(([{ docs }, { topics }]) => {
         if (activePopover?.root !== pop) return;
         const fresh = docs.find(d => d.id === doc.id);
-        if (fresh?.meta) { doc.meta = fresh.meta; renderStrip(); }
-        localTax = collectLibraryTags(docs, topics); renderBody();
+        if (fresh?.meta && metaVersion === openVersion) { doc.meta = fresh.meta; renderStrip(); }
+        localTax = collectLibraryTags(metaVersion === openVersion ? docs : docs.map(d => d.id === doc.id ? { ...d, meta: doc.meta } : d), topics);
+        renderBody();
       }).catch(() => undefined);
     }
   };

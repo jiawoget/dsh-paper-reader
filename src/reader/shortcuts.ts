@@ -127,7 +127,7 @@ export function installShortcuts(actions: ShortcutActions): { open: () => void }
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || openDialog) return;
     if (e.shiftKey && e.key !== '?' && e.key !== '+') return;
     if (actions.isCapturing() || actions.isPlacingPin() || !byId('menu').hidden || byId('rail').hasAttribute('aria-modal')) return;
-    if (e.target instanceof Element && e.target.closest('#card,#selectionDock,.doc-search,.annotation-popover,input,textarea,select,dialog,#menu,.desk-split,.paper-chat-grip,[contenteditable]:not([contenteditable="false"]),.cm-editor')) return;
+    if (e.target instanceof Element && e.target.closest('#card,#selectionDock,.doc-search,.annotation-popover,.tp-popover,input,textarea,select,dialog,#menu,.desk-split,.paper-chat-grip,[contenteditable]:not([contenteditable="false"]),.cm-editor')) return;
     if (e.key === '?') { e.preventDefault(); open(); return; }
     const caret = document.getSelection()?.focusNode;
     const inPdfText = Boolean(caret?.parentElement?.closest('.pdf-native-text,.pdf-reading-text'));

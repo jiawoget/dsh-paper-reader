@@ -19,7 +19,7 @@ import { bundledPdfUrl, loadPdfView } from './pdf-loader.js';
 import { collectionsDialog } from './collections-dialog.js';
 import { notesPanel, readingPackBar } from './notes-panel.js';
 import { referencePanel } from './reference-panel.js';
-import { broadcastDocTags } from './tag-picker.js';
+import { broadcastDocTags, closeTagPopover } from './tag-picker.js';
 import { settingsDialog } from './settings-dialog.js';
 import { installShortcuts } from './shortcuts.js';
 import { libraryDialog } from './library-dialog.js';
@@ -129,7 +129,7 @@ class Reader implements ReaderPort {
   });
   private readonly research = new ResearchWorkspace({
     activeDocId: () => this.doc.id,
-    prepareOpen: () => { this.card.close(); this.closeMenu(); this.cancelCapture(false); this.cancelPin(); this.marks.closePageEditor(); },
+    prepareOpen: () => { closeTagPopover(); this.card.close(); this.closeMenu(); this.cancelCapture(false); this.cancelPin(); this.marks.closePageEditor(); },
     capturePosition: () => this.readingPosition(true),
     restorePosition: anchor => this.restoreReading(anchor),
     inspectFromWorkspace: (target, returnAnchor) => this.inspectFromWorkspace(target, returnAnchor),
@@ -333,7 +333,7 @@ class Reader implements ReaderPort {
   }
   repaintNotes():void {
     const body=byId('railBody');
-    const contents=this.tab==='contents';
+    const contents=this.tab==='contents'; if(this.tab!=='reference')closeTagPopover();
     this.desk.setContents(contents);
     byId('contentsPanel').hidden=!contents;
     body.hidden=contents;
@@ -380,7 +380,7 @@ class Reader implements ReaderPort {
     this.cancelPin();this.marks.closePageEditor();
     const readingLink=Boolean(anchor && !options?.fromContents && !outlineLocation(anchor));
     if(readingLink)this.desk.dismissDrawer();
-    this.card.close();
+    closeTagPopover(); this.card.close();
     if(readingLink || id!==this.loadedId || options?.forceReload) {
       this.readingText=false;
       this.updatePageFormat();
