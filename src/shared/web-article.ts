@@ -1,6 +1,6 @@
 import { openStaxLocation } from './openstax.js';
 
-type ArticleKind = 'p' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'pre' | 'quote' | 'list' | 'caption' | 'image' | 'equation' | 'table' | 'byline';
+type ArticleKind = 'p' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'pre' | 'quote' | 'list' | 'caption' | 'image' | 'equation' | 'table' | 'byline' | 'notes';
 export interface ArticleSpan {
   start: number;
   end: number;

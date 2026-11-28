@@ -90,7 +90,7 @@ function stripFrontmatter(raw: string): MarkdownFrontmatter {
 }
 
 export function cleanFilenameTitle(filename: string | undefined): string {
-  const stem = path.basename((filename || '').trim()).replace(/\.(?:markdown|md|html|htm|pdf)$/i, '');
+  const stem = path.basename((filename || '').trim()).replace(/\.(?:markdown|md|html|htm|pdf|pptx|docx|ppt)$/i, '');
   return stem.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
 }
 

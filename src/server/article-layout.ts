@@ -7,7 +7,7 @@ export function readArticleLayout(raw: unknown, paragraphs: string[]): ArticleLa
   for (const [id, value] of Object.entries(raw)) {
     if (!/^p-[1-9]\d{0,3}$/.test(id) || !isRecord(value)) fail('Invalid article block.');
     const text = paragraphs[Number(id.slice(2)) - 1];
-    if (!text || typeof value.kind !== 'string' || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline)$/.test(value.kind)) fail('Invalid article block.');
+    if (!text || typeof value.kind !== 'string' || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline|notes)$/.test(value.kind)) fail('Invalid article block.');
     const block: ArticleBlock = { kind: value.kind as ArticleBlock['kind'] };
     if (value.ids !== undefined) {
       if (!Array.isArray(value.ids) || value.ids.length > 80 || !value.ids.every(id => typeof id === 'string' && id.length <= 256)) fail('Invalid article anchors.');
@@ -40,7 +40,7 @@ export function readArticleLayout(raw: unknown, paragraphs: string[]): ArticleLa
     }
     if (block.kind === 'image') {
       const image = value.image;
-      if (!isRecord(image) || typeof image.url !== 'string' || !articleUrl(image.url) || typeof image.alt !== 'string' || image.alt.length > 1024) fail('Invalid article illustration.');
+      if (!isRecord(image) || typeof image.url !== 'string' || (!articleUrl(image.url) && !/^local:(?!.*\.\.)[a-zA-Z0-9._/-]{1,200}$/.test(image.url)) || typeof image.alt !== 'string' || image.alt.length > 1024) fail('Invalid article illustration.');
       block.image = { url: image.url, alt: image.alt };
     }
     if (block.kind === 'table') {

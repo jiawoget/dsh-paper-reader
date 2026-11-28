@@ -1,6 +1,6 @@
 // src/server/index.ts
 import { existsSync as existsSync5, readdirSync } from "node:fs";
-import path15 from "node:path";
+import path16 from "node:path";
 import os from "node:os";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
@@ -2123,7 +2123,7 @@ function readArticleLayout(raw, paragraphs) {
   for (const [id, value] of Object.entries(raw)) {
     if (!/^p-[1-9]\d{0,3}$/.test(id) || !isRecord(value)) fail("Invalid article block.");
     const text2 = paragraphs[Number(id.slice(2)) - 1];
-    if (!text2 || typeof value.kind !== "string" || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline)$/.test(value.kind)) fail("Invalid article block.");
+    if (!text2 || typeof value.kind !== "string" || !/^(p|h[1-6]|pre|quote|list|caption|image|equation|table|byline|notes)$/.test(value.kind)) fail("Invalid article block.");
     const block = { kind: value.kind };
     if (value.ids !== void 0) {
       if (!Array.isArray(value.ids) || value.ids.length > 80 || !value.ids.every((id2) => typeof id2 === "string" && id2.length <= 256)) fail("Invalid article anchors.");
@@ -2154,7 +2154,7 @@ function readArticleLayout(raw, paragraphs) {
     }
     if (block.kind === "image") {
       const image = value.image;
-      if (!isRecord(image) || typeof image.url !== "string" || !articleUrl(image.url) || typeof image.alt !== "string" || image.alt.length > 1024) fail("Invalid article illustration.");
+      if (!isRecord(image) || typeof image.url !== "string" || !articleUrl(image.url) && !/^local:(?!.*\.\.)[a-zA-Z0-9._/-]{1,200}$/.test(image.url) || typeof image.alt !== "string" || image.alt.length > 1024) fail("Invalid article illustration.");
       block.image = { url: image.url, alt: image.alt };
     }
     if (block.kind === "table") {
@@ -2172,6 +2172,19 @@ import { mkdir as mkdir2 } from "node:fs/promises";
 import path3 from "node:path";
 var MAX_SHARDED_CHARS = 16e6;
 var cleanDocTitle = (raw) => raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
+async function writeLocalMedia(dir, layout, media) {
+  if (!media?.size) return;
+  let madeDir = false;
+  for (const [anchor, block] of Object.entries(layout)) {
+    const asset = block.kind === "image" && block.image ? media.get(block.image.url) : void 0;
+    if (!asset) continue;
+    if (!madeDir) {
+      await mkdir2(dir, { recursive: true });
+      madeDir = true;
+    }
+    await writeOnce(path3.join(dir, anchor), Buffer.concat([Buffer.from(asset.mime + "\n", "ascii"), asset.bytes]));
+  }
+}
 function checkPreShardLayout(raw, count) {
   if (!isRecord(raw)) fail("Invalid article layout.");
   for (const [key2, value] of Object.entries(raw)) {
@@ -2186,7 +2199,8 @@ async function importShardedBook(library, input) {
   const cleanTitle = cleanDocTitle(input.title);
   const parsedUrl = input.url ? articleUrl(input.url) : void 0;
   const safeUrl3 = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : void 0;
-  const identity = input.identityKey ?? JSON.stringify([safeUrl3 ?? "", cleanTitle, sharded.sections.map((s) => [s.slug, s.paragraphs])]);
+  const mediaKeys = input.media?.size ? [...input.media.keys()].sort() : void 0;
+  const identity = input.identityKey ?? JSON.stringify([safeUrl3 ?? "", cleanTitle, sharded.sections.map((s) => [s.slug, s.paragraphs]), ...mediaKeys ? [mediaKeys] : []]);
   const id = "book-" + hash(identity);
   const documentsDir = path3.join(library.root, "documents"), sectionsDir = path3.join(documentsDir, "book-sections", id);
   await mkdir2(sectionsDir, { recursive: true });
@@ -2194,8 +2208,10 @@ async function importShardedBook(library, input) {
     if (!bookSlug(section.slug) || !section.paragraphs.length) fail("Invalid sharded book section.");
     return { slug: section.slug, paragraphs: section.paragraphs, articleLayout: readArticleLayout(section.articleLayout, section.paragraphs) };
   });
-  for (const section of prepared) {
+  for (let i = 0; i < prepared.length; i++) {
+    const section = prepared[i];
     await writeOnce(path3.join(sectionsDir, hash(section.slug) + ".json"), JSON.stringify({ paragraphs: section.paragraphs, articleLayout: section.articleLayout }));
+    await writeLocalMedia(path3.join(library.root, "article-images", id, String(i + 1)), section.articleLayout, input.media);
   }
   const book = {
     slug: sharded.slug,
@@ -2242,20 +2258,23 @@ async function importShardedWebArticle(library, input, url, paragraphs) {
   const sharded = shardArticle({ url: baseHref, title, paragraphs, ...articleLayout ? { articleLayout } : {} }, targetIndex === void 0 ? void 0 : { targetIndex });
   return importShardedBook(library, { ...sanitizeDocMeta(input), url: baseHref, title, sharded, ...fragment ? { fragment } : {} });
 }
-async function importLocalArticle(library, article) {
+async function importLocalArticle(library, article, media) {
   let chars = 0;
   for (const p of article.paragraphs) chars += p.length;
   if (!article.paragraphs.length || chars > MAX_SHARDED_CHARS) fail("The document is empty or too long.");
   const cleanTitle = cleanDocTitle(article.title);
   const meta = sanitizeDocMeta({ ...article });
   if (shouldShardArticle(article)) {
-    return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: "", title: cleanTitle }) });
+    return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: "", title: cleanTitle }), ...media ? { media } : {} });
   }
-  const id = "web-" + hash(JSON.stringify(["local", cleanTitle, article.paragraphs]));
+  const mediaKeys = media?.size ? [...media.keys()].sort() : void 0;
+  const id = "web-" + hash(JSON.stringify(["local", cleanTitle, article.paragraphs, ...mediaKeys ? [mediaKeys] : []]));
   const documentsDir = path3.join(library.root, "documents");
   await mkdir2(documentsDir, { recursive: true });
   if (article.articleLayout) {
-    await writeOnce(path3.join(documentsDir, id + ".layout.json"), JSON.stringify(readArticleLayout(article.articleLayout, article.paragraphs)));
+    const layout = readArticleLayout(article.articleLayout, article.paragraphs);
+    await writeOnce(path3.join(documentsDir, id + ".layout.json"), JSON.stringify(layout));
+    await writeLocalMedia(path3.join(library.root, "article-images", id), layout, media);
   }
   const record = {
     id,
@@ -2969,7 +2988,7 @@ var Library = class {
       const metadata = await this.get(id);
       const doc = book ? await this.readSection(metadata, page, true) : metadata;
       const url = doc.articleLayout?.[anchor]?.image?.url;
-      if (!url) fail("This illustration is not part of the saved article.", 404);
+      if (!url || !articleUrl(url)) fail("This illustration is not part of the saved article.", 404);
       const picture = await download(url);
       if (!pictureType.test(picture.type) || !picture.bytes.length) fail("The website did not return an illustration.", 415);
       await mkdir3(directory, { recursive: true });
@@ -5724,7 +5743,7 @@ function registerPaperReaderTools(ctx, deps) {
 }
 
 // src/server/file-import.ts
-import path10 from "node:path";
+import path11 from "node:path";
 
 // src/server/academic-intake.ts
 var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
@@ -5968,7 +5987,7 @@ function stripFrontmatter(raw) {
   return meta;
 }
 function cleanFilenameTitle(filename) {
-  const stem = path9.basename((filename || "").trim()).replace(/\.(?:markdown|md|html|htm|pdf)$/i, "");
+  const stem = path9.basename((filename || "").trim()).replace(/\.(?:markdown|md|html|htm|pdf|pptx|docx|ppt)$/i, "");
   return stem.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
 }
 function parseMarkdownArticle(raw, filename) {
@@ -5988,8 +6007,363 @@ function parseMarkdownArticle(raw, filename) {
   };
 }
 
+// src/server/ooxml-parser.ts
+import path10 from "node:path";
+
+// src/server/zip-reader.ts
+import { inflateRawSync } from "node:zlib";
+var MAX_ENTRIES = 2e3;
+var MAX_ENTRY_BYTES = 16 * 1024 * 1024;
+var MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+var RATIO_FLOOR = 65536;
+var MAX_RATIO = 100;
+var SIG_EOCD = 101010256;
+var SIG_CD = 33639248;
+var SIG_LFH = 67324752;
+function findEocd(bytes) {
+  if (bytes.length < 22) fail("This file is not a valid ZIP archive.", 400);
+  const minPos = Math.max(0, bytes.length - 22 - 65535);
+  for (let pos = bytes.length - 22; pos >= minPos; pos--) {
+    if (bytes.readUInt32LE(pos) === SIG_EOCD && bytes.readUInt16LE(pos + 20) === bytes.length - (pos + 22)) return pos;
+  }
+  fail("This file is not a valid ZIP archive.", 400);
+}
+function assertSafeEntryName(name2) {
+  if (!name2 || name2.includes("\0") || name2.includes("\\") || name2.startsWith("/") || /^[a-zA-Z]:/.test(name2) || name2.split("/").some((seg) => seg === "..")) fail("The archive contains an unsafe entry path.", 400);
+}
+function openZip(bytes) {
+  const eocd = findEocd(bytes);
+  const totalEntries = bytes.readUInt16LE(eocd + 10), cdSize = bytes.readUInt32LE(eocd + 12), cdOffset = bytes.readUInt32LE(eocd + 16);
+  if (bytes.readUInt16LE(eocd + 4) !== 0 || bytes.readUInt16LE(eocd + 6) !== 0 || bytes.readUInt16LE(eocd + 8) !== totalEntries) {
+    fail("Multi-disk ZIP archives are not supported.", 415);
+  }
+  if (totalEntries === 65535 || cdSize === 4294967295 || cdOffset === 4294967295) fail("ZIP64 archives are not supported.", 415);
+  if (totalEntries > MAX_ENTRIES) fail("This archive contains too many entries.", 413);
+  if (cdOffset + cdSize > eocd) fail("The archive central directory is damaged.", 400);
+  const entries = /* @__PURE__ */ new Map();
+  let pos = cdOffset, declaredTotal = 0;
+  const cdEnd = cdOffset + cdSize;
+  for (let i = 0; i < totalEntries; i++) {
+    if (pos + 46 > cdEnd || bytes.readUInt32LE(pos) !== SIG_CD) fail("The archive central directory is damaged.", 400);
+    const flags = bytes.readUInt16LE(pos + 8), method = bytes.readUInt16LE(pos + 10);
+    if ((flags & 1) !== 0) fail("Password-protected archives are not supported.", 415);
+    if (method !== 0 && method !== 8) fail("Unsupported ZIP compression method.", 415);
+    const compressed = bytes.readUInt32LE(pos + 20), uncompressed = bytes.readUInt32LE(pos + 24);
+    const nameLen = bytes.readUInt16LE(pos + 28), extraLen = bytes.readUInt16LE(pos + 30), commentLen = bytes.readUInt16LE(pos + 32);
+    const localOffset = bytes.readUInt32LE(pos + 42);
+    if (pos + 46 + nameLen + extraLen + commentLen > cdEnd) fail("The archive entry header is truncated.", 400);
+    const name2 = bytes.toString(flags & 2048 ? "utf8" : "latin1", pos + 46, pos + 46 + nameLen);
+    assertSafeEntryName(name2);
+    if (uncompressed > MAX_ENTRY_BYTES) fail("An archive entry exceeds the 16 MB limit.", 413);
+    declaredTotal += uncompressed;
+    if (declaredTotal > MAX_TOTAL_BYTES) fail("The archive exceeds the 64 MB uncompressed limit.", 413);
+    if (method === 0 && compressed !== uncompressed || method === 8 && compressed === 0 && uncompressed > 0) fail("Invalid archive entry size.", 400);
+    if (uncompressed > RATIO_FLOOR && compressed > 0 && uncompressed / compressed > MAX_RATIO) fail("The archive exceeds the safe compression ratio.", 413);
+    if (localOffset + 30 > eocd) fail("The archive entry offset is out of bounds.", 400);
+    if (!name2.endsWith("/")) {
+      if (entries.has(name2)) fail("The archive contains duplicate entries.", 400);
+      entries.set(name2, { method, compressed, uncompressed, localOffset });
+    }
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  const cache = /* @__PURE__ */ new Map();
+  let extractedTotal = 0;
+  function read(name2) {
+    const cached = cache.get(name2);
+    if (cached) return cached;
+    const entry = entries.get(name2);
+    if (!entry) return;
+    if (entry.localOffset + 30 > bytes.length || bytes.readUInt32LE(entry.localOffset) !== SIG_LFH) fail("The archive local header is damaged.", 400);
+    const dataStart = entry.localOffset + 30 + bytes.readUInt16LE(entry.localOffset + 26) + bytes.readUInt16LE(entry.localOffset + 28);
+    if (dataStart + entry.compressed > bytes.length) fail("The archive entry payload is truncated.", 400);
+    if (extractedTotal + entry.uncompressed > MAX_TOTAL_BYTES) fail("The archive exceeds the 64 MB uncompressed limit.", 413);
+    const raw = bytes.subarray(dataStart, dataStart + entry.compressed);
+    let out;
+    if (entry.method === 0) out = Buffer.from(raw);
+    else {
+      const ratioCap = entry.compressed > 0 ? Math.max(RATIO_FLOOR, entry.compressed * MAX_RATIO) : 0;
+      const maxOutputLength = Math.min(MAX_ENTRY_BYTES, MAX_TOTAL_BYTES - extractedTotal, ratioCap);
+      try {
+        out = inflateRawSync(raw, { maxOutputLength });
+      } catch (err) {
+        if (isRecord(err) && err.code === "ERR_BUFFER_TOO_LARGE") fail("The archive exceeds safe decompression limits.", 413);
+        fail("The compressed archive entry is corrupted.", 400);
+      }
+    }
+    if (out.length !== entry.uncompressed) fail("The archive entry size does not match its header.", 400);
+    if (out.length > RATIO_FLOOR && entry.compressed > 0 && out.length / entry.compressed > MAX_RATIO) fail("The archive exceeds the safe compression ratio.", 413);
+    extractedTotal += out.length;
+    cache.set(name2, out);
+    return out;
+  }
+  return { names: () => [...entries.keys()], read, readText: (name2) => {
+    const buf = read(name2);
+    return buf ? new TextDecoder("utf-8").decode(buf) : void 0;
+  } };
+}
+
+// src/server/ooxml-parser.ts
+var MAX_EXTRACTED_CHARS = 16e6;
+var MAX_BLOCKS = 25e3;
+var MAX_BLOCK_CHARS = 2e4;
+var MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+var SKIP_SLIDE_PH = /* @__PURE__ */ new Set(["sldnum", "ftr", "dt", "hdr", "sldimg"]);
+var PNG_SIG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+var cleanLine = (raw) => raw.replace(/\s+/g, " ").trim();
+var tagRe = (tag, flags = "g") => new RegExp(`<${tag}(?:\\s[^>]*)?(?<!\\/)>([\\s\\S]*?)<\\/${tag}>`, flags);
+function decodeXml2(raw) {
+  return raw.replace(/&(?:#x([0-9a-fA-F]+)|#(\d+)|(amp|lt|gt|quot|apos));/g, (_, hex, dec, named) => {
+    if (hex || dec) {
+      const code = Number.parseInt(hex || dec, hex ? 16 : 10);
+      return Number.isFinite(code) && code > 0 && code <= 1114111 ? String.fromCodePoint(code) : "";
+    }
+    return named === "amp" ? "&" : named === "lt" ? "<" : named === "gt" ? ">" : named === "quot" ? '"' : "'";
+  });
+}
+function xmlAttr(tag, name2) {
+  const m = new RegExp(`(?:^|\\s)${name2.replace(":", "\\:")}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tag);
+  return m ? decodeXml2(m[1] ?? m[2] ?? "") : "";
+}
+function extractRuns(xml, prefix2, multiline = false) {
+  const re = new RegExp(`<${prefix2}:(?:(t)(?:\\s[^>]*)?(?<!\\/)>([\\s\\S]*?)<\\/${prefix2}:t>|(br|tab)\\b[^>]*>)`, "g");
+  let out = "";
+  for (const m of xml.matchAll(re)) out += m[1] ? decodeXml2(m[2] ?? "") : m[3] === "br" ? "\n" : " ";
+  return multiline ? out.split("\n").map((l) => l.replace(/[ \t\r]+/g, " ").trim()).filter(Boolean).join("\n") : cleanLine(out);
+}
+function parseRels(xml, baseDir) {
+  const rels = /* @__PURE__ */ new Map();
+  for (const m of (xml ?? "").matchAll(/<Relationship\b[^>]*>/g)) {
+    const tag = m[0];
+    if (xmlAttr(tag, "TargetMode").toLowerCase() === "external") continue;
+    const id = xmlAttr(tag, "Id"), rawTarget = xmlAttr(tag, "Target"), type = xmlAttr(tag, "Type");
+    const resolved = rawTarget.startsWith("/") ? rawTarget.replace(/^\/+/, "") : path10.posix.normalize(path10.posix.join(baseDir, rawTarget));
+    if (id && rawTarget && resolved && !resolved.startsWith("..") && !resolved.startsWith("/")) rels.set(id, { target: resolved, type });
+  }
+  return rels;
+}
+function detectRasterMime(bytes) {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_SIG)) return { mime: "image/png", ext: "png" };
+  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return { mime: "image/jpeg", ext: "jpg" };
+  if (bytes.length >= 6 && /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("ascii"))) return { mime: "image/gif", ext: "gif" };
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return { mime: "image/webp", ext: "webp" };
+}
+function makeMediaRegistry(archive) {
+  const media = /* @__PURE__ */ new Map(), urlByEntry = /* @__PURE__ */ new Map();
+  return {
+    media,
+    addBlip(col2, rels, blipTag, rawAlt, fallbackAlt) {
+      const entryPath = rels.get(xmlAttr(blipTag, "r:embed"))?.target;
+      if (!entryPath) return;
+      let url = urlByEntry.get(entryPath);
+      if (!url) {
+        const bytes = archive.read(entryPath);
+        const detected = bytes?.length && bytes.length <= MAX_MEDIA_BYTES ? detectRasterMime(bytes) : void 0;
+        if (!bytes || !detected) return;
+        url = `local:${hash(bytes).slice(0, 16)}.${detected.ext}`;
+        media.set(url, { mime: detected.mime, bytes });
+        urlByEntry.set(entryPath, url);
+      }
+      const alt = cleanLine(rawAlt).slice(0, 1024);
+      col2.add(alt || fallbackAlt, { kind: "image", image: { url, alt } });
+    }
+  };
+}
+function makeCollector() {
+  const paragraphs = [], layout = {};
+  let totalChars = 0;
+  function pushSingle(text2, block) {
+    if (!text2.trim()) return;
+    totalChars += text2.length;
+    if (totalChars > MAX_EXTRACTED_CHARS || paragraphs.length >= MAX_BLOCKS) fail("This document is too long to open in the reader.", 413);
+    paragraphs.push(text2);
+    if (block.kind !== "p" || block.ids || block.image || block.cells) layout["p-" + paragraphs.length] = block;
+  }
+  return {
+    paragraphs,
+    layout,
+    add(text2, block) {
+      if (text2.length <= MAX_BLOCK_CHARS || block.kind === "image" || block.kind === "table") {
+        pushSingle(text2, block);
+        return;
+      }
+      for (let i = 0; i < text2.length; i += MAX_BLOCK_CHARS) {
+        const piece = text2.slice(i, i + MAX_BLOCK_CHARS).trim();
+        if (piece) pushSingle(piece, { kind: block.kind });
+      }
+    }
+  };
+}
+function extractXmlTable(collector, xml, prefix2) {
+  const trRe = tagRe(`${prefix2}:tr`), tcRe = tagRe(`${prefix2}:tc`), pRe = tagRe(`${prefix2}:p`), delRe = tagRe("w:del");
+  let chunk = [], len = 0;
+  const flush = () => {
+    if (!chunk.length) return;
+    const text2 = chunk.map((r) => r.join("	")).join("\n");
+    if (text2.trim()) collector.add(text2, { kind: "table", cells: chunk });
+    chunk = [];
+    len = 0;
+  };
+  for (const tr of xml.matchAll(trRe)) {
+    let row = [...tr[1].matchAll(tcRe)].map((tc) => [...(prefix2 === "w" ? tc[1].replace(delRe, "") : tc[1]).matchAll(pRe)].map((p) => extractRuns(p[1], prefix2)).filter(Boolean).join(" "));
+    if (!row.some(Boolean)) continue;
+    let rowText = row.join("	");
+    if (rowText.length > MAX_BLOCK_CHARS) {
+      const cap = Math.max(1, Math.floor((MAX_BLOCK_CHARS - row.length + 1) / Math.max(1, row.length)));
+      row = row.map((c) => c.slice(0, cap));
+      rowText = row.join("	");
+    }
+    if (chunk.length && len + rowText.length + 1 > MAX_BLOCK_CHARS) flush();
+    chunk.push(row);
+    len += rowText.length + (chunk.length > 1 ? 1 : 0);
+  }
+  flush();
+}
+function readCoreMeta(archive) {
+  const xml = archive.readText("docProps/core.xml") ?? "";
+  const title = cleanLine(decodeXml2(tagRe("dc:title", "").exec(xml)?.[1] ?? ""));
+  const authors = cleanLine(decodeXml2(tagRe("dc:creator", "").exec(xml)?.[1] ?? ""));
+  return { ...title ? { title: title.slice(0, 250) } : {}, ...authors ? { authors: authors.slice(0, 300) } : {} };
+}
+function toSafeSlug(raw, fallback) {
+  const cleaned = [...raw.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^[_-]+|[_-]+$/g, "")].slice(0, 80).join("");
+  return bookSlug(cleaned) ? cleaned : fallback;
+}
+function parsePptxBuffer(bytes, filename) {
+  const archive = openZip(bytes);
+  const presXml = archive.readText("ppt/presentation.xml"), presRels = parseRels(archive.readText("ppt/_rels/presentation.xml.rels"), "ppt");
+  const slidePaths = [];
+  for (const m of (presXml ?? "").matchAll(/<p:sldId\b[^>]*>/g)) {
+    const target = presRels.get(xmlAttr(m[0], "r:id"))?.target;
+    if (target && !slidePaths.includes(target)) slidePaths.push(target);
+  }
+  if (!slidePaths.length) slidePaths.push(...archive.names().filter((n) => /^ppt\/slides\/slide\d+\.xml$/i.test(n)).sort((a, b) => Number(/(\d+)\.xml$/i.exec(a)?.[1] ?? 0) - Number(/(\d+)\.xml$/i.exec(b)?.[1] ?? 0)));
+  if (!slidePaths.length) fail("No slides were found in this PowerPoint file.", 415);
+  const core = readCoreMeta(archive), mediaReg = makeMediaRegistry(archive), apRe = tagRe("a:p"), spRe = tagRe("p:sp");
+  const rawSlides = [];
+  for (let i = 0; i < slidePaths.length; i++) {
+    const slidePath = slidePaths[i], xml = archive.readText(slidePath);
+    if (!xml) continue;
+    const rels = parseRels(archive.readText(path10.posix.join(path10.posix.dirname(slidePath), "_rels", path10.posix.basename(slidePath) + ".rels")), path10.posix.dirname(slidePath));
+    const col2 = makeCollector(), bodyXml = tagRe("p:spTree", "").exec(xml)?.[1] ?? xml;
+    let slideTitle = "";
+    for (const m of bodyXml.matchAll(/<p:sp(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/p:sp>|<p:pic(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/p:pic>|<a:tbl(?:\s[^>]*)?(?<!\/)>[\s\S]*?<\/a:tbl>/g)) {
+      const node = m[0];
+      if (node.startsWith("<p:pic")) {
+        const nvPr = /<p:cNvPr\b[^>]*>/.exec(node)?.[0] ?? "";
+        mediaReg.addBlip(col2, rels, /<a:blip\b[^>]*>/.exec(node)?.[0] ?? "", xmlAttr(nvPr, "descr") || xmlAttr(nvPr, "name"), "Slide illustration");
+        continue;
+      }
+      if (node.startsWith("<a:tbl")) {
+        extractXmlTable(col2, node, "a");
+        continue;
+      }
+      const phTag = /<p:ph\b[^>]*>/.exec(node)?.[0] ?? "", phType = xmlAttr(phTag, "type").toLowerCase();
+      if (SKIP_SLIDE_PH.has(phType)) continue;
+      const texts = [...node.matchAll(apRe)].map((p) => ({ xml: p[1], text: extractRuns(p[1], "a") })).filter((p) => p.text);
+      const isTitle = phType === "title" || phType === "ctrtitle", isBody = phType === "body" || phType === "obj" || !phType && /idx="/.test(phTag);
+      for (const { xml: pXml, text: text2 } of texts) {
+        if (isTitle && !slideTitle) {
+          slideTitle = text2.slice(0, 160);
+          col2.add(text2, { kind: "h1" });
+        } else if (phType === "subtitle") col2.add(text2, { kind: "byline" });
+        else col2.add(text2, { kind: !/<a:buNone\b/.test(pXml) && (/<a:buChar\b|<a:buAutoNum\b/.test(pXml) || isBody && (texts.length > 1 || /\blvl="[1-9]/.test(pXml))) ? "list" : "p" });
+      }
+    }
+    const notesRel = [...rels.values()].find((r) => r.type.endsWith("/notesSlide"));
+    const notesXml = notesRel ? archive.readText(notesRel.target) : void 0;
+    if (notesXml) {
+      const noteParts = [];
+      for (const sp of notesXml.matchAll(spRe)) {
+        if (SKIP_SLIDE_PH.has(xmlAttr(/<p:ph\b[^>]*>/.exec(sp[1])?.[0] ?? "", "type").toLowerCase())) continue;
+        for (const p of sp[1].replace(/<a:fld\b[^>]*type="slidenum"[^>]*>[\s\S]*?<\/a:fld>/gi, "").matchAll(apRe)) {
+          const text2 = extractRuns(p[1], "a", true);
+          if (text2) noteParts.push(text2);
+        }
+      }
+      if (noteParts.length) col2.add(noteParts.join("\n\n"), { kind: "notes" });
+    }
+    if (!col2.paragraphs.length) col2.add(`Slide ${i + 1}`, { kind: "h1" });
+    if (!slideTitle && !["image", "table", "notes"].includes(col2.layout["p-1"]?.kind ?? "")) slideTitle = col2.paragraphs[0].slice(0, 120);
+    rawSlides.push({ title: slideTitle || `Slide ${i + 1}`, paragraphs: col2.paragraphs, articleLayout: col2.layout });
+  }
+  if (!rawSlides.length) fail("No readable slides were found in this PowerPoint file.", 415);
+  const docTitle = core.title || (rawSlides[0].title !== "Slide 1" ? rawSlides[0].title : cleanFilenameTitle(filename));
+  const bookSections = [];
+  const sections = rawSlides.map((slide, idx) => {
+    const page = idx + 1, title = slide.title === `Slide ${page}` ? slide.title : `${page}. ${slide.title}`.slice(0, 160);
+    const meta = { slug: `slide-${page}`, title, chapterId: "slides", chapterTitle: docTitle, url: "" };
+    bookSections.push(meta);
+    return { ...meta, paragraphs: slide.paragraphs, articleLayout: slide.articleLayout };
+  });
+  return { title: docTitle, ...core.authors ? { authors: core.authors } : {}, sharded: { slug: toSafeSlug(docTitle, "slides"), sections, bookSections, anchorPages: {} }, media: mediaReg.media };
+}
+function* iterDocxBlocks(bodyXml) {
+  let tblDepth = 0, pDepth = 0, start = -1;
+  for (const m of bodyXml.matchAll(/<(\/?)w:(tbl|p)(?=[\s/>])[^>]*>/g)) {
+    const tag = m[0], close = m[1] === "/", name2 = m[2];
+    if (!close && tag.endsWith("/>")) continue;
+    if (!tblDepth && !pDepth) {
+      if (!close) {
+        start = m.index;
+        if (name2 === "tbl") tblDepth = 1;
+        else pDepth = 1;
+      }
+    } else if (tblDepth && name2 === "tbl") {
+      tblDepth += close ? -1 : 1;
+      if (!tblDepth) {
+        yield { kind: "tbl", xml: bodyXml.slice(start, m.index + tag.length) };
+        start = -1;
+      }
+    } else if (pDepth && name2 === "p") {
+      pDepth += close ? -1 : 1;
+      if (!pDepth) {
+        yield { kind: "p", xml: bodyXml.slice(start, m.index + tag.length) };
+        start = -1;
+      }
+    }
+  }
+}
+function docxParagraphKind(pXml) {
+  const pPr = tagRe("w:pPr", "").exec(pXml)?.[1] ?? "";
+  const style = xmlAttr(/<w:pStyle\b[^>]*>/.exec(pPr)?.[0] ?? "", "w:val").trim();
+  const headingMatch = /^(?:heading|标题)\s*([1-6])$/i.exec(style) ?? /^([1-6])$/.exec(style);
+  if (headingMatch) return "h" + headingMatch[1];
+  if (/^title$/i.test(style)) return "h1";
+  if (/^subtitle$/i.test(style)) return "byline";
+  const outline = xmlAttr(/<w:outlineLvl\b[^>]*>/.exec(pPr)?.[0] ?? "", "w:val");
+  if (/^[0-5]$/.test(outline)) return "h" + (Number(outline) + 1);
+  return /quote|blocktext/i.test(style) ? "quote" : /caption/i.test(style) ? "caption" : /<w:numPr\b/.test(pPr) || /list/i.test(style) ? "list" : "p";
+}
+function parseDocxBuffer(bytes, filename) {
+  const archive = openZip(bytes), docXml = archive.readText("word/document.xml");
+  if (!docXml) fail("This file does not contain a valid Word document.", 415);
+  const rels = parseRels(archive.readText("word/_rels/document.xml.rels"), "word");
+  const core = readCoreMeta(archive), mediaReg = makeMediaRegistry(archive), col2 = makeCollector();
+  const bodyXml = tagRe("w:body", "").exec(docXml)?.[1] ?? docXml, delRe = tagRe("w:del");
+  let firstTitle = "";
+  for (const block of iterDocxBlocks(bodyXml)) {
+    if (block.kind === "tbl") {
+      extractXmlTable(col2, block.xml, "w");
+      continue;
+    }
+    const cleaned = block.xml.replace(delRe, "");
+    const docPrs = [...cleaned.matchAll(/<wp:docPr\b[^>]*>/g)].map((m) => xmlAttr(m[0], "descr") || xmlAttr(m[0], "name"));
+    let imgIdx = 0;
+    for (const blip of cleaned.matchAll(/<a:blip\b[^>]*>/g)) mediaReg.addBlip(col2, rels, blip[0], docPrs[imgIdx++] ?? "", "Document illustration");
+    const kind = docxParagraphKind(cleaned), text2 = extractRuns(cleaned, "w", kind === "p");
+    if (!text2) continue;
+    if (kind === "h1" && !firstTitle) firstTitle = text2.slice(0, 250);
+    col2.add(text2, { kind });
+  }
+  if (!col2.paragraphs.length) fail("No readable text was found in this document.", 415);
+  return { article: { url: "", title: core.title || firstTitle || cleanFilenameTitle(filename), paragraphs: col2.paragraphs, articleLayout: col2.layout, ...core.authors ? { authors: core.authors } : {} }, media: mediaReg.media };
+}
+
 // src/server/file-import.ts
-var UNSUPPORTED_MESSAGE = "Unsupported file type. Choose a PDF, Markdown (.md), or HTML (.html) file.";
+var UNSUPPORTED_MESSAGE = "Unsupported file type. Choose a PDF, PPTX, DOCX, Markdown (.md), or HTML (.html) file.";
+var LEGACY_PPT_MESSAGE = "Legacy binary .ppt files are not supported directly. Save or export as .pptx or PDF, then import again. / \u6682\u4E0D\u652F\u6301\u65E7\u7248\u4E8C\u8FDB\u5236 .ppt \u683C\u5F0F\uFF0C\u8BF7\u53E6\u5B58\u6216\u5BFC\u51FA\u4E3A .pptx \u6216 PDF \u540E\u518D\u5BFC\u5165\u3002";
+var PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+var DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 var PDF_MAGIC = Buffer.from("%PDF-");
 var hasPdfPrefix = (bytes) => {
   const start = bytes.length >= 3 && bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191 ? 3 : 0;
@@ -6023,7 +6397,21 @@ var FORMAT_HANDLERS = {
   ".md": mdHandler,
   ".markdown": mdHandler,
   ".html": htmlHandler,
-  ".htm": htmlHandler
+  ".htm": htmlHandler,
+  ".pptx": {
+    limit: HTML_LIMIT,
+    async run({ library }, input, filename) {
+      const parsed = parsePptxBuffer(input.bytes, filename);
+      return { opened: await importShardedBook(library, { title: parsed.title, ...parsed.authors ? { authors: parsed.authors } : {}, sharded: parsed.sharded, media: parsed.media }) };
+    }
+  },
+  ".docx": {
+    limit: HTML_LIMIT,
+    async run({ library }, input, filename) {
+      const parsed = parseDocxBuffer(input.bytes, filename);
+      return { opened: await importLocalArticle(library, parsed.article, parsed.media) };
+    }
+  }
 };
 function resolveImportFilename(headers, params) {
   const raw = (headers.get("x-filename") || "").trim();
@@ -6037,13 +6425,14 @@ function resolveImportFilename(headers, params) {
   return (params.get("filename") || params.get("title") || "").trim();
 }
 function resolveExtension(filename, contentType) {
-  const ext = path10.extname(filename.trim()).toLowerCase();
+  const ext = path11.extname(filename.trim()).toLowerCase();
   if (ext) return ext;
   const mime = (contentType || "").split(";")[0].trim().toLowerCase();
-  return mime === "application/pdf" ? ".pdf" : mime === "text/markdown" || mime === "text/x-markdown" ? ".md" : mime === "text/html" || mime === "application/xhtml+xml" ? ".html" : "";
+  return mime === "application/pdf" ? ".pdf" : mime === PPTX_MIME ? ".pptx" : mime === DOCX_MIME ? ".docx" : mime === "application/vnd.ms-powerpoint" ? ".ppt" : mime === "text/markdown" || mime === "text/x-markdown" ? ".md" : mime === "text/html" || mime === "application/xhtml+xml" ? ".html" : "";
 }
 function getHandler(filename, contentType) {
   const ext = resolveExtension(filename, contentType);
+  if (ext === ".ppt") fail(LEGACY_PPT_MESSAGE, 415);
   const handler = Object.hasOwn(FORMAT_HANDLERS, ext) ? FORMAT_HANDLERS[ext] : void 0;
   if (!handler) fail(UNSUPPORTED_MESSAGE, 415);
   return { ext, handler };
@@ -6059,7 +6448,7 @@ async function indexImported(deps, doc, pdfBytes) {
   }
 }
 async function importLocalFile(deps, input) {
-  const filename = path10.basename(input.filename.trim());
+  const filename = path11.basename(input.filename.trim());
   const { ext, handler } = getHandler(filename, input.contentType);
   if (input.bytes.length > handler.limit) fail(ext === ".pdf" ? "Choose a PDF of up to 80 MB." : "Choose a file of up to 32 MB.", 413);
   if (!input.bytes.length) fail("The file is empty.", 400);
@@ -7220,7 +7609,7 @@ async function checkWatchlist(input, deps, signal) {
 // src/server/notebook.ts
 import { createHash as createHash8 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
-import path13 from "node:path";
+import path14 from "node:path";
 
 // src/shared/annotations.ts
 var ANNOTATION_COLOR_META = {
@@ -7362,7 +7751,7 @@ import {
   unlinkSync as unlinkSync2,
   writeFileSync
 } from "node:fs";
-import path12 from "node:path";
+import path13 from "node:path";
 
 // src/server/vault-markdown.ts
 import { createHash as createHash6 } from "node:crypto";
@@ -7370,14 +7759,14 @@ import { createHash as createHash6 } from "node:crypto";
 // src/server/vault-sources.ts
 import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
-import path11 from "node:path";
+import path12 from "node:path";
 var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function publicSource(value) {
   const url = value && URL.parse(value);
   if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
-  const temp = path11.join(path11.dirname(file), ".source-" + randomUUID6() + ".tmp");
+  const temp = path12.join(path12.dirname(file), ".source-" + randomUUID6() + ".tmp");
   copyFileSync(original, temp, constants.COPYFILE_EXCL);
   try {
     try {
@@ -7425,7 +7814,7 @@ var VaultSources = class {
         const id = createHash5("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
         const title = section?.title ?? doc.title.replace(/\.pdf$/i, "");
         const name2 = filenameStem(title, 64) + " - " + id + (doc.kind === "pdf" ? ".pdf" : ".md");
-        const file = path11.join(vaultFolder(vault, "Sources", true), name2);
+        const file = path12.join(vaultFolder(vault, "Sources", true), name2);
         const existing = lstatSync2(file, { throwIfNoEntry: false });
         if (existing && !existing.isFile()) throw new ServiceError(409, "The library copy in the vault must be a regular file.");
         if (!existing) {
@@ -7436,7 +7825,7 @@ var VaultSources = class {
             writeMarkdown(file, void 0, ["# " + markdownHeading(title), ...original ? ["[Original source](<" + original.href + ">)"] : [], ...paragraphs].join("\n\n") + "\n");
           }
         }
-        copy = path11.relative(folder, file).split(path11.sep).map(encodeURIComponent).join("/");
+        copy = path12.relative(folder, file).split(path12.sep).map(encodeURIComponent).join("/");
         if (doc.kind === "pdf") copy += "#page=" + page;
         else if (/^p-[1-9]\d*$/.test(anchor) && material?.paragraphs?.[Number(anchor.slice(2)) - 1]) copy += "#^" + anchor;
       }
@@ -7556,10 +7945,10 @@ function vaultFolder(vaultPath, bookSlug2, create = false) {
     segments.push(name2 === bookSlug2 ? name2 : name2 + " - " + hash2(bookSlug2).slice(0, 12));
   }
   for (const part of segments) {
-    folder = path12.join(folder, part);
+    folder = path13.join(folder, part);
     if (create) mkdirSync2(folder, { recursive: true, mode: 448 });
     const info = lstatSync3(folder, { throwIfNoEntry: false });
-    if (info && (!info.isDirectory() || path12.relative(folder, realpathSync(folder)) !== "")) {
+    if (info && (!info.isDirectory() || path13.relative(folder, realpathSync(folder)) !== "")) {
       throw new ServiceError(409, "The notebook folder must be inside the selected vault.");
     }
   }
@@ -7658,7 +8047,7 @@ function fileContent(file) {
 }
 function writeMarkdown(file, observed, next) {
   if (observed === next) return;
-  const temp = path12.join(path12.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
+  const temp = path13.join(path13.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
   const fd = openSync2(temp, "wx", 384);
   try {
     try {
@@ -7696,8 +8085,8 @@ function exportNotebook(store, input, sources, notebook) {
     try {
       const folder = vaultFolder(settings.vaultPath, void 0, true);
       const name2 = filename ?? filenameFor(title, docId);
-      if (name2 !== path12.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
-      const file = path12.join(folder, name2);
+      if (name2 !== path13.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
+      const file = path13.join(folder, name2);
       const observed = fileContent(file);
       const doc = sources.doc ?? { id: docId, kind: "pdf", title, ...supplied ? { url: supplied } : {} };
       const liveMarks = annotations.filter(isLiveAnnotation);
@@ -7864,16 +8253,16 @@ function load(records, local, sources, stored = true) {
     let name2;
     if (binding) {
       name2 = binding.filename;
-      if (name2 !== path13.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
+      if (name2 !== path14.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
     } else {
       const stem = local.chapter ? filenameStem(local.chapter.title) : filenameFor(local.title.replace(/\.pdf$/i, ""), local.docId).slice(0, -3) + " - Notebook";
       const reserved = local.chapter && records.chapterFilenames(vault, local.docId);
       name2 = stem + ".md";
-      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path13.join(folder, name2), { throwIfNoEntry: false }); n++) {
+      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path14.join(folder, name2), { throwIfNoEntry: false }); n++) {
         name2 = stem + " (" + n + ").md";
       }
     }
-    book.file = path13.join(folder, name2);
+    book.file = path14.join(folder, name2);
     book.observed = binding ? fileContent(book.file) : void 0;
     book.baseline = binding?.baseline;
     if (binding && book.observed === void 0) {
@@ -7923,14 +8312,14 @@ function persist(records, book) {
   if (book.file) {
     const file = book.file;
     const projected = vaultAccess(() => {
-      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path13.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
+      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path14.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
       const zotero = records.zoteroSource(doc.docId);
       if (!book.sources.doc?.url) book.sources.useSavedSources([zotero?.original ?? "", ...records.entries("note", doc.docId, doc.chapter).map((note) => note.sourceUrl)]);
-      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path13.dirname(file), zotero?.link)));
+      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path14.dirname(file), zotero?.link)));
       writeMarkdown(file, book.observed, portable);
       return portable;
     });
-    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path13.basename(book.file));
+    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path14.basename(book.file));
     book.observed = projected;
   }
   if (book.local.markdown !== book.markdown || !book.stored) records.store(doc);
@@ -8098,7 +8487,7 @@ var PaperNotebooks = class {
 import { spawn } from "node:child_process";
 import { statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
-import path14 from "node:path";
+import path15 from "node:path";
 var isFile = (file) => {
   try {
     return Boolean(statSync3(file, { throwIfNoEntry: false })?.isFile());
@@ -8113,7 +8502,7 @@ var isDir = (file) => {
     return false;
   }
 };
-var onPath = (name2) => (process.env.PATH ?? "").split(path14.delimiter).filter((dir) => path14.isAbsolute(dir)).map((dir) => path14.join(dir, name2)).find(isFile);
+var onPath = (name2) => (process.env.PATH ?? "").split(path15.delimiter).filter((dir) => path15.isAbsolute(dir)).map((dir) => path15.join(dir, name2)).find(isFile);
 function launch(command, args, errorMessage) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, detached: true, stdio: "ignore", windowsHide: false });
@@ -8126,13 +8515,13 @@ function launch(command, args, errorMessage) {
 }
 function installedObsidian() {
   if (process.platform === "win32") {
-    const directories = [process.env.LOCALAPPDATA && path14.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
-    const executable = directories.filter((dir) => Boolean(dir && path14.isAbsolute(dir))).map((dir) => path14.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
+    const directories = [process.env.LOCALAPPDATA && path15.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
+    const executable = directories.filter((dir) => Boolean(dir && path15.isAbsolute(dir))).map((dir) => path15.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
     if (!executable) return;
     return (uri) => launch(executable, [uri], "Windows could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "darwin") {
-    if (!["/Applications/Obsidian.app", path14.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
+    if (!["/Applications/Obsidian.app", path15.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
     return (uri) => launch("/usr/bin/open", ["-a", "Obsidian", uri], "macOS could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "linux") {
@@ -8140,7 +8529,7 @@ function installedObsidian() {
     const present = Boolean(onPath("obsidian") || [
       "/opt/Obsidian/obsidian",
       "/var/lib/flatpak/exports/bin/md.obsidian.Obsidian",
-      path14.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
+      path15.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
     ].some(isFile));
     if (!opener || !present) return;
     return (uri) => launch(opener, [uri], "Could not start Obsidian via xdg-open. Open the notebook link with the Obsidian app.");
@@ -9213,7 +9602,7 @@ var name = "paper-reader";
 var inject = ["connection"];
 var builtWeb = fileURLToPath5(new URL("../web/", import.meta.url));
 var publicDir = existsSync5(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
-var pdfDir = path15.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
+var pdfDir = path16.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
 var mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -9276,7 +9665,7 @@ async function boundedBody(request, limit) {
   return Buffer.concat(chunks, bytes);
 }
 function apply(ctx) {
-  const root = process.env.PAPER_READER_HOME || path15.join(process.env.DSH_HOME || path15.join(os.homedir(), ".dsh"), "paper-reader");
+  const root = process.env.PAPER_READER_HOME || path16.join(process.env.DSH_HOME || path16.join(os.homedir(), ".dsh"), "paper-reader");
   const store = new ReaderStore(root);
   const library = new Library(root, publicResource, (id) => store.deleteDocument(id));
   const models = {};
@@ -9330,17 +9719,17 @@ function apply(ctx) {
       }
     }
   });
-  const asset = (url, file) => route(url, ["GET", "HEAD"], createStaticAssetHandler(url, file, mimeTypes[path15.extname(file)] ?? "application/octet-stream"));
+  const asset = (url, file) => route(url, ["GET", "HEAD"], createStaticAssetHandler(url, file, mimeTypes[path16.extname(file)] ?? "application/octet-stream"));
   function assets(url, dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const file = path15.join(dir, entry.name);
+      const file = path16.join(dir, entry.name);
       if (entry.isDirectory()) assets(url + entry.name + "/", file);
-      else if (entry.isFile() && Object.hasOwn(mimeTypes, path15.extname(entry.name))) asset(url + entry.name, file);
+      else if (entry.isFile() && Object.hasOwn(mimeTypes, path16.extname(entry.name))) asset(url + entry.name, file);
     }
   }
   assets("app/", publicDir);
-  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path15.join(pdfDir, "build", file));
-  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path15.join(pdfDir, dir));
+  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path16.join(pdfDir, "build", file));
+  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path16.join(pdfDir, dir));
   route("pdf", ["GET", "HEAD"], async (req) => pdfBytesResponse(req, await library.bytes(new URL(req.url).searchParams.get("id"))));
   route("article-image", ["GET"], async (req) => {
     const params = new URL(req.url).searchParams;

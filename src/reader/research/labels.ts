@@ -95,9 +95,11 @@ export const researchText = {
   translationGuidanceLocalOnly: (lang: string) => t(`Offline translation supports Simplified Chinese only. Connect a model for ${lang}.`, `离线翻译仅支持简体中文，请在连接设置中配置模型以翻译为${lang}。`),
   translationGuidanceConnect: (lang: string) => t(`Connect a model in Connections to translate into ${lang}.`, `请在连接设置中配置模型以翻译为${lang}。`),
   openFile: () => t('Open file', '打开文件'),
-  openFileHint: () => t('Open PDF, Markdown, or HTML file', '打开 PDF、Markdown 或 HTML 文件'),
-  dropFilesToImport: () => t('Drop PDF, Markdown, or HTML files to import', '松开以导入 PDF、Markdown 或 HTML 文件'),
-  chooseSupportedFile: () => t('Choose a PDF, Markdown, or HTML file.', '请选择 PDF、Markdown 或 HTML 文件。'),
+  openFileHint: () => t('Open PDF, PPTX, DOCX, Markdown, or HTML file', '打开 PDF、PPTX、DOCX、Markdown 或 HTML 文件'),
+  dropFilesToImport: () => t('Drop PDF, PPTX, DOCX, Markdown, or HTML files to import', '松开以导入 PDF、PPTX、DOCX、Markdown 或 HTML 文件'),
+  chooseSupportedFile: () => t('Choose a PDF, PPTX, DOCX, Markdown, or HTML file.', '请选择 PDF、PPTX、DOCX、Markdown 或 HTML 文件。'),
   fileTooLarge32Mb: () => t('Choose a file of up to 32 MB.', '请选择不超过 32 MB 的文件。'),
-  localDocument: () => t('Local document', '本地文档')
+  localDocument: () => t('Local document', '本地文档'),
+  speakerNotes: () => t('Speaker notes', '演讲者备注'),
+  legacyPptUnsupported: () => t('Legacy binary .ppt files are not supported directly. Save or export as .pptx or PDF, then import again.', '暂不支持旧版二进制 .ppt 格式，请另存或导出为 .pptx 或 PDF 后再导入。')
 };

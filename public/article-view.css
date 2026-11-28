@@ -18,6 +18,12 @@
 .web-reading-sheet .web-reading-row:is([data-kind=h2],[data-kind=h3],[data-kind=h4],[data-kind=h5],[data-kind=h6]) { margin-top: 1.55em; margin-bottom: .45em; }
 .web-reading-sheet [data-kind=byline] > p { color: var(--muted, #505865); font: .84em/1.65 var(--font-sans); }
 .web-reading-sheet [data-kind=quote] > blockquote { padding-inline: 1.2em; border-inline-start: 2px solid var(--quote-border, #9f7ec8); font-style: italic; }
+.web-reading-sheet .web-reading-row[data-kind=notes] { margin-top: 1.5em; }
+.web-reading-sheet [data-kind=notes] > aside { padding-top: 12px; border-top: 1px solid var(--line, #e2e5ec); color: var(--muted, #5b6070); font: 400 .9em/1.65 var(--font-sans); white-space: pre-wrap; }
+.web-reading-sheet [data-kind=notes] > aside::before { content: attr(data-label); display: block; margin-bottom: 4px; font: 600 12px/1.35 var(--font-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #5b6070); }
+.web-reading-sheet .web-reading-row[data-kind=notes] + .web-reading-row[data-kind=notes] { margin-top: .6em; }
+.web-reading-sheet .web-reading-row[data-kind=notes] + .web-reading-row[data-kind=notes] > aside { padding-top: 0; border-top: 0; }
+.web-reading-sheet .web-reading-row[data-kind=notes] + .web-reading-row[data-kind=notes] > aside::before { display: none; }
 .web-reading-sheet [data-kind=list] > p { display: list-item; margin-inline-start: 1.25em; }
 .web-reading-sheet [data-kind=caption] > figcaption { color: var(--muted, #444955); font-size: .88em; line-height: 1.55; }
 .web-reading-sheet figure { text-align: center; }

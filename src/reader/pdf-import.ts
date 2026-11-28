@@ -4,15 +4,21 @@ import { loadPdfView } from './pdf-loader.js';
 import { researchText } from './research/labels.js';
 import { api, el, icon, message, readerLabel as label, responseJson } from './ui.js';
 
-export const IMPORT_FILE_ACCEPT = '.pdf,.md,.markdown,.html,.htm,application/pdf,text/markdown,text/html';
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+export const IMPORT_FILE_ACCEPT = `.pdf,.pptx,.docx,.ppt,.md,.markdown,.html,.htm,application/pdf,${PPTX_MIME},${DOCX_MIME},application/vnd.ms-powerpoint,text/markdown,text/html`;
 const LOCAL_DOC_LIMIT = 32 * 1024 * 1024;
 let importing = false;
 
 export const isPdfFile = (file: File): boolean => file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
 
-function detectImportKind(file: File): 'pdf' | 'md' | 'html' | undefined {
+type ImportKind = 'pdf' | 'pptx' | 'docx' | 'ppt' | 'md' | 'html';
+function detectImportKind(file: File): ImportKind | undefined {
   if (isPdfFile(file)) return 'pdf';
   const name = file.name.toLowerCase(), type = file.type.toLowerCase();
+  if (/\.pptx$/.test(name) || type === PPTX_MIME) return 'pptx';
+  if (/\.docx$/.test(name) || type === DOCX_MIME) return 'docx';
+  if (/\.ppt$/.test(name) || type === 'application/vnd.ms-powerpoint') return 'ppt';
   if (/\.(?:md|markdown)$/.test(name) || type === 'text/markdown' || type === 'text/x-markdown') return 'md';
   if (/\.(?:html|htm)$/.test(name) || type === 'text/html' || type === 'application/xhtml+xml') return 'html';
 }
@@ -37,10 +43,10 @@ async function importSinglePdf(file: File): Promise<DocumentInfo> {
   return Object.keys(patch).length ? (await api('library.updateMeta', { id: doc.id, ...patch }).catch(() => undefined))?.doc ?? doc : doc;
 }
 
-async function importSingleTextFile(file: File, kind: 'md' | 'html'): Promise<DocumentInfo> {
+async function importSingleLocalFile(file: File, kind: Exclude<ImportKind, 'pdf' | 'ppt'>): Promise<DocumentInfo> {
   if (file.size > LOCAL_DOC_LIMIT) throw new Error(researchText.fileTooLarge32Mb());
   const params = new URLSearchParams({ filename: file.name });
-  const contentType = kind === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8';
+  const contentType = kind === 'pptx' ? PPTX_MIME : kind === 'docx' ? DOCX_MIME : kind === 'md' ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8';
   const response = await fetch('../import-file?' + params.toString(), {
     method: 'POST', credentials: 'same-origin',
     headers: { 'content-type': contentType, 'x-filename': encodeURIComponent(file.name) },
@@ -53,7 +59,8 @@ async function importSingleTextFile(file: File, kind: 'md' | 'html'): Promise<Do
 async function importSingleFile(file: File): Promise<DocumentInfo> {
   const kind = detectImportKind(file);
   if (!kind) throw new Error(researchText.chooseSupportedFile());
-  return kind === 'pdf' ? importSinglePdf(file) : importSingleTextFile(file, kind);
+  if (kind === 'ppt') throw new Error(researchText.legacyPptUnsupported());
+  return kind === 'pdf' ? importSinglePdf(file) : importSingleLocalFile(file, kind);
 }
 
 export async function importPdfFiles(files: readonly File[], onProgress?: (text: string) => void): Promise<{ imported: DocumentInfo[]; failed: { name: string; error: string }[]; summary: string }> {
