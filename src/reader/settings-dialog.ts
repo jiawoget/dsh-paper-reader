@@ -1,4 +1,6 @@
 import { DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGE_MAX_LENGTH, TARGET_LANGUAGE_PRESETS, findTargetLanguagePreset, parseTargetLanguage } from '../shared/languages.js';
+import { AUTO_TRANSLATE_MAX_BLOCKS, AUTO_TRANSLATE_MAX_CHARS } from './article-translation-controller.js';
+import { infoTip } from './research/icons.js';
 import { researchText } from './research/labels.js';
 import { api, bindTablist, button, byId, el, inputField, message, modal, readerLabel as label, toast, zoteroStatusText, type ReaderPort } from './ui.js';
 
@@ -162,7 +164,9 @@ export function settingsDialog(app: ReaderPort, focus: boolean | SettingsTab = '
     tabs.setAttribute('aria-label', label('Connection sections', '连接设置分组'));
     const aiBtn = el('button', 'btn', label('AI & Translation', 'AI 与翻译')); aiBtn.id = 'settings-tab-ai';
     const aiPanel = tabPanel('settings-panel-ai');
-    aiPanel.append(el('h3', '', label('Language model', '语言模型')), el('p', 'hint', status));
+    const aiHead = el('div', 'settings-heading-row');
+    aiHead.append(el('h3', '', label('Language model', '语言模型')), infoTip(researchText.longTranslationTip(AUTO_TRANSLATE_MAX_BLOCKS, AUTO_TRANSLATE_MAX_CHARS), label('Auto-translation threshold', '自动翻译阈值')));
+    aiPanel.append(aiHead, el('p', 'hint', status));
     const clearModelRow = clearField(clearModel, label('Remove saved model key', '移除已保存的模型密钥'), data.hasApiKey);
     if (data.aiMode === 'dsh') {
       advanced = el('details', 'settings-advanced');

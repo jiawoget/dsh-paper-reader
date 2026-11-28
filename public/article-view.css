@@ -61,12 +61,21 @@
 .article-translation-bar[data-state="running"]::after { opacity: 1; }
 .article-translation-status { flex: 1 1 160px; min-width: 0; color: var(--muted, #5b6070); font-variant-numeric: tabular-nums; }
 .article-translation-bar[data-state="error"] .article-translation-status { color: var(--danger, #9c2b2b); }
-.article-translation-actions { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; }
-.article-translation-actions .btn { min-height: 28px; padding: 4px 12px; border-radius: var(--radius-pill, 40px); font-size: 12px; }
+.article-translation-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-inline-start: auto; }
+.article-translation-actions .btn { min-height: 28px; padding: 4px 12px; border-radius: var(--radius-pill, 40px); font-size: 12px; white-space: nowrap; }
+.article-scroll-toggle { color: var(--muted, #5b6070); background: transparent; }
+.article-scroll-toggle[aria-pressed="true"] {
+  color: var(--purple, #0066cc); background: var(--lavender, #edf4fc); border-color: var(--quote-border, #7bb0e8); font-weight: 500;
+}
+#translated.can-click-translate .is-untranslated { cursor: pointer; transition: background-color 120ms ease; }
+#translated.can-click-translate .is-untranslated:hover { background: var(--surface-tint, #f4f7fb); }
 .web-reading-sheet .is-untranslated.is-translating > *, .abstract-block.is-untranslated.is-translating { color: var(--purple, #0066cc); }
 @media (pointer: coarse), (max-width: 700px) {
   .article-translation-bar { padding: 8px 12px; gap: 8px; }
-  .article-translation-actions .btn { min-width: 44px; min-height: 44px; padding: 8px 16px; font-size: 13px; }
+  .article-translation-actions { margin-inline-start: 0; width: 100%; flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+  .article-translation-actions .btn { flex: 0 0 auto; white-space: nowrap; min-width: 44px; min-height: 44px; padding: 8px 12px; font-size: 13px; }
 }
-@media (max-width: 700px) { .article-translation-bar[data-state="unavailable"] { position: static; } }
-@media (prefers-reduced-motion: reduce) { .article-translation-bar::after { transition: none; } }
+@media (max-width: 700px) { .article-translation-bar:not([data-state="running"]) { position: static; } }
+@media (prefers-reduced-motion: reduce) {
+  .article-translation-bar::after, #translated.can-click-translate .is-untranslated { transition: none; }
+}

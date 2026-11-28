@@ -207,6 +207,8 @@ dialog h2 { font-size: 18px; font-weight: 600; }
 #dialogBody { padding: 16px 24px 20px; }
 dialog:has(.dialog-footer) #dialogBody { padding-bottom: 0; }
 #dialogBody h3 { font-size: 14px; margin: 12px 0 8px; }
+.settings-heading-row { display: flex; align-items: center; gap: 4px; margin: 12px 0 8px; }
+#dialogBody .settings-heading-row h3 { margin: 0; }
 .dialog-footer { position: sticky; bottom: 0; z-index: 1; display: flex; align-items: center; gap: 8px; margin: 16px -24px 0; padding: 12px 24px; background: var(--paper); border-top: 1px solid var(--line); }
 :is(.settings-advanced, .settings-prompts) { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-sunken); }
 :is(.settings-advanced, .settings-prompts) > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--purple); }

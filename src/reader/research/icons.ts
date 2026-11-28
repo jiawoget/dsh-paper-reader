@@ -63,8 +63,10 @@ export function dismissInfoTip(): boolean {
 const syncTipShift = (btn: HTMLButtonElement): void => {
   const r = btn.getBoundingClientRect(), vw = typeof innerWidth === 'number' && innerWidth > 0 ? innerWidth : 1024;
   if (!r.width && !r.height) return;
-  const overflow = r.left + Math.min(320, vw - 32) - (vw - 16);
-  btn.style.setProperty('--tip-shift', overflow > 0 ? `${Math.round(-Math.min(overflow, Math.max(0, r.left - 16)))}px` : '0px');
+  const d = btn.closest?.('dialog')?.getBoundingClientRect(), box = d && d.width > 0 ? d : undefined, pad = box ? 12 : 16;
+  const minL = (box ? box.left : 0) + pad, maxR = (box ? box.right : vw) - pad;
+  const overflow = r.left + Math.min(320, Math.max(0, maxR - minL)) - maxR;
+  btn.style.setProperty('--tip-shift', overflow > 0 ? `${Math.round(-Math.min(overflow, Math.max(0, r.left - minL)))}px` : '0px');
 };
 
 export function infoTip(text: string, label?: string): HTMLButtonElement {

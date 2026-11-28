@@ -480,8 +480,13 @@ try {
 
                   assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('paperScroll')!).scrollBehavior), 'auto');
 
+                  const callsBeforeParallel = llm.calls.length;
                   await page.locator('#parallel').click();
                   const trans = page.locator('.web-reading-sheet[data-side="translation"][lang="es"]');
+                  await page.locator('.article-translation-bar[data-state="prompt"]').waitFor();
+                  await page.waitForTimeout(200);
+                  assert.equal(llm.calls.length, callsBeforeParallel, 'Long section must not burn LLM calls automatically on Bilingual switch');
+                  await page.locator('.article-translation-bar').getByRole('button', { name: 'Translate this screen', exact: true }).click();
                   await trans.getByText('Traducción al español:').first().waitFor();
 
                   await page.locator('#paperScroll').focus();
