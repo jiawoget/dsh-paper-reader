@@ -600,7 +600,6 @@ await withHost(async host => {
         assert.equal(await page.locator('#readText').isVisible(), false);
         await selectPhrase(page, source, text);
         await cardMoreAction(card, 'Open bilingual view');
-        await page.getByRole('button', { name: 'Translate article', exact: true }).click();
         await target.filter({ hasText: zh }).waitFor();
         assert.equal(await page.locator('#translationMode').isVisible(), false);
         await card.getByRole('button', { name: 'Close selection', exact: true }).click();

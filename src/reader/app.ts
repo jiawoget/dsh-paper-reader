@@ -10,6 +10,7 @@ import { AnnotationLayer } from './annotation-layer.js';
 import { discardNotebook, insertNotebookPassage, leaveNotebook, refreshNotebookHighlights } from './notebook-loader.js';
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
 import { renderArticle } from './article-view.js';
+import { ArticleTranslationController, canTranslateDocument } from './article-translation-controller.js';
 import { abstractOnlyLabel, attachPdfToAbstract, renderAbstractView } from './abstract-view.js';
 import { initReaderChrome, openLibraryLabel } from './reader-chrome.js';
 import { installCitationPreviews } from './citation-preview.js';
@@ -112,7 +113,12 @@ class Reader implements ReaderPort {
     return this.view && 'setTextView' in this.view ? this.view as PdfPageView : undefined;
   }
   get pageCount(): number { return this.pdf?.pages || this.doc.book?.sections.length || 0; }
-  private readonly translate=byId<HTMLButtonElement>('translate');
+  private readonly articleTranslator=new ArticleTranslationController({
+    doc:()=>this.doc, page:()=>this.page, view:()=>this.view, isPdf:()=>Boolean(this.pdf), isBilingual:()=>this.parallel,
+    settings:()=>this.state.settings, targetLanguage:()=>this.targetLanguage, targetLanguageLabel:()=>this.targetLanguageLabel,
+    onApplied:(docId,page,translations)=>{this.search.recordTranslations(docId,page,translations);this.card.refresh();this.syncRetranslate();},
+    openSettings:()=>settingsDialog(this,'ai')
+  });
   private readonly jumpHistory=new JumpHistory(()=>this.jumpControls?.sync()); private jumpControls?: ReturnType<typeof bindJumpHistoryControls>;
   private readonly search=new DocSearch({
     doc:()=>this.doc, page:()=>this.page, targetLanguage:()=>this.targetLanguage, view:()=>this.view,
@@ -167,7 +173,7 @@ class Reader implements ReaderPort {
       || this.notebook?.desktopOpenAvailable!==book.value?.desktopOpenAvailable || this.notebook?.path!==book.value?.path
       || this.state.settings.vaultPath!==state.settings.vaultPath
       || book.value?.notes.some((note,index)=>note.updatedAt!==this.notebook?.notes[index]?.updatedAt);
-    const previousTarget=this.state.settings.targetLanguage;
+    const previousTarget=this.state.settings.targetLanguage, previousAiMode=this.state.settings.aiMode;
     this.state=state;
     this.notebookError=book.error;
     if(book.value){
@@ -183,6 +189,8 @@ class Reader implements ReaderPort {
     if(targetChanged && this.view && !this.navigating){
       this.translatingView=undefined;
       await this.render(++this.epoch);
+    } else if(previousAiMode==='unconfigured' && state.settings.aiMode!=='unconfigured' && !this.pdf && this.parallel && this.view && !this.navigating){
+      this.articleTranslator.sync();
     }
   }
   paperSelection(source?: ChatSource):void { this.chat.selected(source); }
@@ -385,7 +393,7 @@ class Reader implements ReaderPort {
       this.remember(anchor,quote,target,range);return;
     }
     const version=++this.epoch;
-    this.navigating=version;
+    this.navigating=version; this.articleTranslator.abort();
     byId('loading').textContent=label('Opening document…','正在打开文档…');byId('loading').hidden=false;
     try{
       const changed=Boolean(options?.forceReload) || id!==this.loadedId;
@@ -454,7 +462,7 @@ class Reader implements ReaderPort {
   }
   private async render(version:number,anchor='',quote='',target?:TranslatedLocator,range?:SavedSelectionRange):Promise<void>{
     const doc=this.doc,page=this.page;
-    this.card.close();this.view?.dispose?.();this.view=undefined;
+    this.articleTranslator.abort();this.card.close();this.view?.dispose?.();this.view=undefined;
     const pdf=this.pdf;
     const targetLanguage=this.targetLanguage;
     const translations=pdf ? {} : (await api('translation.get',{docId:doc.id,page,targetLanguage})).translations;
@@ -501,7 +509,6 @@ class Reader implements ReaderPort {
       if(this.desk.focus!==options.focusMode)view.setFocusMode(this.desk.focus);
       if(this.zoom!==options.zoom)view.setZoom(this.zoom);
       this.updatePageFormat();
-      this.translate.hidden=true;
       this.syncRetranslate();
       if(this.parallel)void this.translatePdf(view,doc,page);
     };
@@ -553,21 +560,20 @@ class Reader implements ReaderPort {
       throw error;
     } finally { opening.abort(); }
     if(version!==this.epoch){view.dispose?.();return;}
-    this.view=view;this.translate.disabled=false;
+    this.view=view;
     this.contents.document(doc,page,pdf);
     this.updatePageFormat();
     this.paintMarks();
-    this.translate.hidden=Boolean(pdf)||!view.blocks.some(b=>b.text && !b.translation && !translations[b.id]);
     this.syncRetranslate();
-    this.translate.textContent = doc.book ? label('Translate section','翻译本节') : doc.kind === 'abstract' ? label('Translate abstract', '翻译摘要') : doc.kind === 'web' ? label('Translate article', '翻译文章') : label('Translate page', '翻译本页');
     byId('loading').hidden=true;
     this.repaintNotes();
     this.search.syncPage();
-    if(interacted){this.remember(capturedAnchor);return;}
+    if(interacted){this.remember(capturedAnchor);this.articleTranslator.sync();return;}
     byId('paperScroll').scrollTop=0;
     this.remember(anchor,quote,target,range);
     if(anchor)this.locateAnchor(view,anchor,quote,target,range);
     else if(quote)locateQuoteInView(view,quote);
+    this.articleTranslator.sync();
   }
   private async translatePdf(view: PdfPageView, doc: DocumentInfo, page: number): Promise<void> {
     const version = this.epoch;
@@ -597,19 +603,11 @@ class Reader implements ReaderPort {
       this.card.refresh();
       const missing = view.blocks.filter(block => !block.translation);
       if (!missing.length) return;
-      const canUseLocal = Boolean(this.state.settings.localTranslationAvailable) && targetsSimplifiedChinese(target);
-      if (this.state.settings.aiMode === 'unconfigured' && !canUseLocal) {
+      if (!canTranslateDocument(this.state.settings, target)) {
         const guidance = this.state.settings.localTranslationAvailable && !targetsSimplifiedChinese(target)
-          ? label(
-              'The built-in offline translator only supports Simplified Chinese. Connect a translation model in Connections to translate into ' + targetName + '.',
-              '内置离线翻译仅支持简体中文。请在连接设置中配置翻译模型以翻译为' + targetName + '。'
-            )
-          : label(
-              'Connect a translation model to read this page in ' + targetName + '.',
-              '请连接翻译模型以将本页翻译为' + targetName + '。'
-            );
-        view.setTranslationState('unavailable', guidance, [connections, retry]);
-        return;
+          ? label('The built-in offline translator only supports Simplified Chinese. Connect a translation model in Connections to translate into ' + targetName + '.', '内置离线翻译仅支持简体中文。请在连接设置中配置翻译模型以翻译为' + targetName + '。')
+          : label('Connect a translation model to read this page in ' + targetName + '.', '请连接翻译模型以将本页翻译为' + targetName + '。');
+        view.setTranslationState('unavailable', guidance, [connections, retry]); return;
       }
       view.setTranslationState('loading', label('Translating this page into ' + targetName + '…', '正在将本页翻译为' + targetName + '…'));
       const key = doc.id + ':' + page + ':' + target;
@@ -634,9 +632,10 @@ class Reader implements ReaderPort {
       if(active())this.syncRetranslate();
     }
   }
-  private syncRetranslate():void { this.pdfControls?.syncRetranslate(Boolean(this.view && this.translate.hidden && this.view.blocks.some(b=>b.translation))); }
+  private syncRetranslate():void { this.pdfControls?.syncRetranslate(Boolean(this.view?.blocks.some(b=>b.translation))); }
   async retranslateBlocks(blockIds?: string[]):Promise<void> {
     if(!this.view)return;
+    if(!blockIds?.length && !this.pdf){await this.articleTranslator.start(true);return;}
     const doc=this.doc,page=this.page,version=this.epoch,view=this.view;
     await runRetranslate({docId:doc.id,page,isPdf:Boolean(this.pdf),target:this.targetLanguage,settings:this.state.settings,view,blockIds,isActive:()=>version===this.epoch&&this.view===view},
       translations=>{this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.syncRetranslate();},()=>settingsDialog(this,'ai'));
@@ -663,19 +662,6 @@ class Reader implements ReaderPort {
     const { imported, summary } = await importPdfFiles(files, onProgress);
     if (imported.length) await this.navigate(imported.at(-1)!.id);
     if (summary) toast(summary); return imported.length > 0;
-  }
-  private async translatePage():Promise<void>{
-    if(!this.view)return;
-    if(this.state.settings.aiMode==='unconfigured'){settingsDialog(this);return;}
-    const doc=this.doc,page=this.page,version=this.epoch;
-    const blocks=this.view.blocks.filter(b=>b.text.trim() && !b.translation);
-    if(!blocks.length)return;
-    this.translate.disabled=true;this.translate.textContent=label('Translating…','正在翻译…');
-    try{
-      const {translations}=await api('translation.page',{docId:doc.id,page,targetLanguage:this.targetLanguage,blocks:blocks.map(({id,text})=>({id,text}))});
-      if(version===this.epoch){this.view?.setTranslations?.(translations);this.search.recordTranslations(doc.id,page,translations);this.card.refresh();this.translate.hidden=true;this.syncRetranslate();}
-    }catch(error){if(version===this.epoch)toast(message(error));}
-    finally{if(version===this.epoch){this.translate.disabled=false;this.translate.textContent=doc.book ? label('Translate section','翻译本节') : doc.kind==='abstract' ? label('Translate abstract','翻译摘要') : doc.kind==='web' ? label('Translate article','翻译文章') : label('Translate page','翻译本页');}}
   }
   private updatePageFormat(): void {
     const view=this.pdfView;
@@ -724,7 +710,7 @@ class Reader implements ReaderPort {
       if(mode==='bilingual')view.setFocusMode(this.desk.focus);
       view.setZoom(this.zoom);
       if(mode==='bilingual')void this.translatePdf(view,this.doc,this.page);
-    }
+    } else if(mode==='bilingual') this.articleTranslator.sync(); else this.articleTranslator.abort();
     if(format===byId('reader').dataset.pageFormat)paper.scrollTop=offset*visiblePane().scrollHeight;
     this.search.paintPage(); this.card.revealIn(visiblePane());
   }
@@ -828,7 +814,6 @@ class Reader implements ReaderPort {
       this.readingText=false;this.placingPin=true;this.updatePageFormat();this.markLayer.place(true);
     };
     click('readText',toggleReadText); click('placePin',togglePlacePin);
-    click('translate',()=>this.translatePage());
     window.addEventListener('paper-reader:reextract-matrix',event=>this.openResearchWorkspace('review-table',{docId:(event as CustomEvent<{docId?:string}>).detail?.docId}));
     const resizePages=(value:ZoomSetting)=>{
       this.zoom=value; this.desk.setZoom(value);

@@ -169,18 +169,24 @@ test('a missing model directory is reported without starting a download', async 
   await assert.rejects(translateLocally(blocks, directory), { status: 503 });
 });
 
-test('missing DSH authorization permits local PDF translation while invalid credentials and web article errors remain visible', async t => {
-  if (!localTranslationAvailable()) return t.skip('The optional local translation weights are not installed.');
+test('missing DSH authorization permits local Simplified Chinese translation for pdf, web, and abstract while invalid credentials stay visible', async t => {
   let reason = 'MISSING_CREDENTIAL';
   const ctx = { llm: {
     listProviders: () => [{ id: 'native' }], listModels: () => [{ id: 'chat' }],
     async *stream() { yield { type: 'finish', reason: { kind: 'error', failure: { code: reason } } }; }
   } };
   const act = createServices({ root: await temporary(t), ctx });
-  const result = await act('ai.blocks', { blocks: [{ id: 'f', text: 'The sky is blue today.' }], documentKind: 'pdf' });
-  assert.equal(result.provider, 'local');
-  assert.match(result.translations.f, /\p{Script=Han}/u);
-  await assert.rejects(act('ai.blocks', { blocks, documentKind: 'web' }), { status: 503, message: /authorization/ });
+  const installed = localTranslationAvailable();
+  for (const documentKind of ['pdf', 'web', 'abstract'] as const) {
+    if (installed) {
+      const result = await act('ai.blocks', { blocks: [{ id: 'f', text: 'The sky is blue today.' }], documentKind });
+      assert.equal(result.provider, 'local');
+      assert.match(result.translations.f, /\p{Script=Han}/u);
+    } else {
+      await assert.rejects(act('ai.blocks', { blocks, documentKind }), { status: 503, message: /local English-to-Chinese model/ });
+    }
+  }
+  await assert.rejects(act('ai.blocks', { blocks, documentKind: 'web', targetLanguage: 'Japanese' }), { status: 503, message: /authorization/ });
   reason = 'INVALID_CREDENTIAL';
-  await assert.rejects(act('ai.blocks', { blocks, documentKind: 'pdf' }), { status: 503, message: /authorization/ });
+  await assert.rejects(act('ai.blocks', { blocks, documentKind: 'web' }), { status: 503, message: /authorization/ });
 });

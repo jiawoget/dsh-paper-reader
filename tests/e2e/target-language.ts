@@ -222,6 +222,7 @@ await withHost(async host => {
       ]
     });
     assert.equal(importedWeb.status, 200);
+    const callsBeforeWeb = fixture.calls.length;
     await page.goto(host.origin + '/api/paper-reader/app/index.html?doc=' + encodeURIComponent(importedWeb.body.doc.id) + '&page=1');
     await page.locator('#loading').waitFor({ state: 'hidden' });
     const webSheet = page.locator('.web-reading-sheet[data-side="translation"]');
@@ -229,8 +230,6 @@ await withHost(async host => {
     assert.equal(await webSheet.getAttribute('lang'), 'fr');
     assert.equal(await selectedLang(page), 'French');
 
-    const callsBeforeWeb = fixture.calls.length;
-    await page.getByRole('button', { name: 'Translate article', exact: true }).click();
     await webSheet.getByText('Traduction française :').first().waitFor();
     assert.ok(fixture.calls.slice(callsBeforeWeb).some(c => c.mode === 'blocks' && c.target === 'French'));
 

@@ -481,10 +481,8 @@ try {
                   assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('paperScroll')!).scrollBehavior), 'auto');
 
                   await page.locator('#parallel').click();
-                  await page.locator('#translate').click();
                   const trans = page.locator('.web-reading-sheet[data-side="translation"][lang="es"]');
                   await trans.getByText('Traducción al español:').first().waitFor();
-                  const callsAfterSec1 = llm.calls.length;
 
                   await page.locator('#paperScroll').focus();
                   await page.keyboard.press('ArrowRight');
@@ -505,11 +503,12 @@ try {
                   await page.locator('.notebook-status[data-saved="true"]').waitFor();
                   await page.locator('#closeRail').click();
 
+                  const callsBeforeBack = llm.calls.length;
                   await page.locator('#paperScroll').focus();
                   await page.keyboard.press('ArrowLeft');
                   await page.waitForURL(u => u.searchParams.get('page') === '1');
                   await trans.getByText('Traducción al español:').first().waitFor();
-                  assert.equal(llm.calls.length, callsAfterSec1, 'ArrowLeft back to section 1 must hit Spanish cache with 0 extra LLM calls');
+                  assert.equal(llm.calls.length, callsBeforeBack, 'ArrowLeft back to section 1 must hit Spanish cache with 0 extra LLM calls');
 
                   await deleteDocInLibrary(page, opened.body.doc.title);
                   await page.waitForURL(u => u.searchParams.get('doc') === 'pagedattention');

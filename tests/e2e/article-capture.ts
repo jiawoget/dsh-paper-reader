@@ -164,7 +164,6 @@ async function run(host: HostFixture) {
     await page.locator('#parallel').click();
     await page.locator('#translated .web-reading-sheet').waitFor();
     assert.ok(await captureButton(page).isVisible(), 'OpenStax 1.1 in bilingual view must offer 截图问 AI in the reader toolbar.');
-    await page.getByRole('button', { name: '翻译本节', exact: true }).click();
     await page.locator('#translated').getByText(translatedPassage, { exact: true }).waitFor();
     const entry = new URL(page.url());
     const docId = entry.searchParams.get('doc')!, section = Number(entry.searchParams.get('page'));
