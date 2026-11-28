@@ -1,9 +1,9 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { shardArticle, type ShardedBook } from '../shared/doc-sharding.js';
+import { shardArticle, shouldShardArticle, type ShardedBook } from '../shared/doc-sharding.js';
 import { bookSlug } from '../shared/openstax.js';
 import type { BookInfo, DocMetadata, DocumentInfo, OpenDocument } from '../shared/types.js';
-import { articleUrl, type ArticleLayout } from '../shared/web-article.js';
+import { articleUrl, type ArticleLayout, type WebArticle } from '../shared/web-article.js';
 import { readArticleLayout } from './article-layout.js';
 import { fail, hash, isRecord, writeOnce, type Library } from './library.js';
 import { sanitizeDocMeta } from './library-meta.js';
@@ -13,6 +13,7 @@ interface ShardedBookInput extends DocMetadata {
 }
 
 const MAX_SHARDED_CHARS = 16_000_000;
+const cleanDocTitle = (raw: string): string => raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
 
 function checkPreShardLayout(raw: unknown, count: number): ArticleLayout {
   if (!isRecord(raw)) fail('Invalid article layout.');
@@ -26,7 +27,7 @@ function checkPreShardLayout(raw: unknown, count: number): ArticleLayout {
 export async function importShardedBook(library: Library, input: ShardedBookInput): Promise<OpenDocument> {
   const { sharded } = input;
   if (!sharded.sections.length || !bookSlug(sharded.slug)) fail('Invalid sharded book contents.');
-  const cleanTitle = input.title.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
+  const cleanTitle = cleanDocTitle(input.title);
   const parsedUrl = input.url ? articleUrl(input.url) : undefined;
   const safeUrl = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : undefined;
   const identity = input.identityKey ?? JSON.stringify([safeUrl ?? '', cleanTitle, sharded.sections.map(s => [s.slug, s.paragraphs])]);
@@ -78,4 +79,27 @@ export async function importShardedWebArticle(library: Library, input: Record<st
   const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname;
   const sharded = shardArticle({ url: baseHref, title, paragraphs, ...(articleLayout ? { articleLayout } : {}) }, targetIndex === undefined ? undefined : { targetIndex });
   return importShardedBook(library, { ...sanitizeDocMeta(input), url: baseHref, title, sharded, ...(fragment ? { fragment } : {}) });
+}
+
+export async function importLocalArticle(library: Library, article: WebArticle): Promise<OpenDocument> {
+  let chars = 0;
+  for (const p of article.paragraphs) chars += p.length;
+  if (!article.paragraphs.length || chars > MAX_SHARDED_CHARS) fail('The document is empty or too long.');
+  const cleanTitle = cleanDocTitle(article.title);
+  const meta = sanitizeDocMeta({ ...article });
+  if (shouldShardArticle(article)) {
+    return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: '', title: cleanTitle }) });
+  }
+  const id = 'web-' + hash(JSON.stringify(['local', cleanTitle, article.paragraphs]));
+  const documentsDir = path.join(library.root, 'documents');
+  await mkdir(documentsDir, { recursive: true });
+  if (article.articleLayout) {
+    await writeOnce(path.join(documentsDir, id + '.layout.json'), JSON.stringify(readArticleLayout(article.articleLayout, article.paragraphs)));
+  }
+  const record: DocumentInfo = {
+    id, kind: 'web', title: cleanTitle, ...meta,
+    createdAt: new Date().toISOString(), defaultPage: 1, paragraphs: article.paragraphs
+  };
+  await writeOnce(path.join(documentsDir, id + '.json'), JSON.stringify(record));
+  return { doc: await library.get(id) };
 }

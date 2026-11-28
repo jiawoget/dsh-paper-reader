@@ -47,7 +47,7 @@ async function openLibrary(page: Page) {
 
 async function choose(page: Page, file: string | {name: string; buffer: Buffer}) {
   const choosing = page.waitForEvent('filechooser');
-  await page.getByRole('button', {name: 'Open a PDF', exact: true}).click();
+  await page.getByRole('button', {name: 'Open file', exact: true}).click();
   await (await choosing).setFiles(typeof file === 'string' ? file : {...file, mimeType: 'application/pdf'});
 }
 
@@ -231,7 +231,7 @@ async function batchAndDrop(page: Page, files: Awaited<ReturnType<typeof fixture
   page.on('request', req => { if (req.method() === 'POST' && new URL(req.url()).pathname.endsWith('/import-pdf')) posts++; });
   await openLibrary(page);
   const choosing = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: 'Open a PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Open file', exact: true }).click();
   await (await choosing).setFiles([
     { name: 'BatchA.pdf', mimeType: 'application/pdf', buffer: files.first },
     { name: 'skip.txt', mimeType: 'text/plain', buffer: Buffer.from('not a pdf') },

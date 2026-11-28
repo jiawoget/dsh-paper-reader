@@ -30,7 +30,7 @@ await withHost(async host => {
     assert.ok(!input.equals(original));
     await page.locator('#library').click();
     const chooser = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: '打开 PDF', exact: true }).click();
+    await page.getByRole('button', { name: '打开文件', exact: true }).click();
     await (await chooser).setFiles({ name, mimeType: 'application/pdf', buffer: input });
     await page.getByText(name, { exact: true }).first().waitFor();
     if (!await page.locator('#contentsPanel').isVisible()) await page.locator('#contentsToggle').click();

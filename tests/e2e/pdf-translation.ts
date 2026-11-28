@@ -162,7 +162,7 @@ async function importedPdf(browserPage: Page, reader: Reader, scratch: string): 
     });
     await reader.getByRole('button', { name: 'Open library' }).click();
     const [chooser] = await Promise.all([browserPage.waitForEvent('filechooser'),
-      reader.getByRole('button', { name: 'Open a PDF' }).click()]);
+      reader.getByRole('button', { name: 'Open file' }).click()]);
     await chooser.setFiles(file);
     await reader.getByRole('dialog').waitFor({ state: 'hidden' });
     await ready(reader, 1);

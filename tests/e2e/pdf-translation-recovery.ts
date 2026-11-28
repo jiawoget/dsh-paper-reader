@@ -164,7 +164,7 @@ await withHost(async host => {
 
     await reader.getByRole('button', { name: 'Open library' }).click();
     const [picker] = await Promise.all([page.waitForEvent('filechooser'),
-      reader.getByRole('button', { name: 'Open a PDF' }).click()]);
+      reader.getByRole('button', { name: 'Open file' }).click()]);
     const [failure] = await Promise.all([page.waitForResponse(response => resultFor(response, docId, 1), { timeout: 40_000 }),
       picker.setFiles({ name: 'Translation recovery field notes.pdf', mimeType: 'application/pdf', buffer: pdf })]);
     await dialog.waitFor({ state: 'hidden' });

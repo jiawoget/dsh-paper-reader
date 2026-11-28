@@ -3,7 +3,7 @@ import type { BulkRefFormat } from '../shared/citation-bulk.js';
 import type { OpenDocument } from '../shared/types.js';
 import { openStaxLocation } from '../shared/openstax.js';
 import { renderDeviceLibrary } from './library-triage.js';
-import { bindPdfDropTarget } from './pdf-import.js';
+import { bindPdfDropTarget, IMPORT_FILE_ACCEPT } from './pdf-import.js';
 import { researchIcon } from './research/icons.js';
 import { researchText } from './research/labels.js';
 import { createArxivFormatToggle } from './research/paper-intake.js';
@@ -40,8 +40,9 @@ export async function libraryDialog(app: ReaderPort, initialSource?: 'zotero' | 
     if (active()) dialog.close();
   }
   const file = el('input');
-  file.type = 'file'; file.accept = 'application/pdf,.pdf'; file.multiple = true; file.hidden = true;
-  const pdf = button(t('Open a PDF', '打开 PDF'), () => file.click(), 'btn', 'note'), importStatus = el('p', 'library-status');
+  file.type = 'file'; file.accept = IMPORT_FILE_ACCEPT; file.multiple = true; file.hidden = true;
+  const pdf = button(researchText.openFile(), () => file.click(), 'btn', 'note'), importStatus = el('p', 'library-status');
+  pdf.title = researchText.openFileHint();
   importStatus.setAttribute('role', 'status');
   async function handlePdfFiles(files: readonly File[]) {
     if (!files.length) return;

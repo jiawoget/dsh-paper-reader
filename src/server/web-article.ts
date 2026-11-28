@@ -10,8 +10,8 @@ import { publicResource } from './public-resource.js';
 
 const LARGE_ARTICLE_LIMITS = { maxBlocks: 25_000, maxChars: 16_000_000, maxBlockChars: 24_000 };
 
-export function parseWebArticle(html: string, url: string) {
-  return extractArticle(parse(html, { scriptingEnabled: false }), htmlTree, url, '', undefined, LARGE_ARTICLE_LIMITS).article;
+export function parseWebArticle(html: string, url = '', fallbackTitle = '') {
+  return extractArticle(parse(html, { scriptingEnabled: false }), htmlTree, url, fallbackTitle, undefined, LARGE_ARTICLE_LIMITS).article;
 }
 
 export async function openWebArticle(library: Library, raw: unknown, readResource: ResourceReader = publicResource, options?: AcademicIntakeOptions): Promise<OpenDocument> {

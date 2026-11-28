@@ -77,7 +77,7 @@ await withHost(async host => {
     const page = await context.newPage();
     const reader = await openReader(page, host.authenticatedUrl);
     await reader.getByRole('button', { name: 'Open library' }).click();
-    const [picker] = await Promise.all([page.waitForEvent('filechooser'), reader.getByRole('button', { name: 'Open a PDF' }).click()]);
+    const [picker] = await Promise.all([page.waitForEvent('filechooser'), reader.getByRole('button', { name: 'Open file' }).click()]);
     await picker.setFiles(filename);
     await ready(reader, 1);
     assert.equal(await reader.locator('#reader').getAttribute('data-reading-mode'), 'source');

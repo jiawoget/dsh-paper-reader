@@ -416,7 +416,7 @@ await withHost(async host => {
       await fixture.close();
     }
     await reader.getByRole('button', { name: 'Open library' }).click();
-    const [chooser] = await Promise.all([reader.waitForEvent('filechooser'), reader.getByRole('button', { name: 'Open a PDF' }).click()]);
+    const [chooser] = await Promise.all([reader.waitForEvent('filechooser'), reader.getByRole('button', { name: 'Open file' }).click()]);
     await chooser.setFiles(pdf);
     await reader.getByRole('dialog').waitFor({ state: 'hidden' });
     await reader.getByRole('button', { name: 'Bilingual', exact: true }).click();

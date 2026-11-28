@@ -27,9 +27,13 @@ export function readArticleLayout(raw: unknown, paragraphs: string[]): ArticleLa
           result.value = span.value;
         }
         if (span.kind === 'link') {
-          const link = typeof span.value === 'string' ? articleUrl(span.value) : undefined;
-          if (!link) fail('Invalid article link.');
-          result.value = link.href;
+          if (typeof span.value === 'string' && span.value.startsWith('#') && span.value.length > 1 && span.value.length <= 256) {
+            result.value = span.value;
+          } else {
+            const link = typeof span.value === 'string' ? articleUrl(span.value) : undefined;
+            if (!link) fail('Invalid article link.');
+            result.value = link.href;
+          }
         }
         return result;
       });
