@@ -174,3 +174,29 @@ test('large local HTML (>6 MB) strips Sphinx chrome, auto-shards, indexes FTS, a
   assert.equal((await importRoute(new Request('http://dsh.internal/api/paper-reader/import-file?filename=bad.exe', { method: 'POST', body: 'x' }))).status, 415);
   assert.equal((await importRoute(new Request('http://dsh.internal/api/paper-reader/import-file?filename=big.html', { method: 'POST', headers: { 'content-length': String(HTML_LIMIT + 10) }, body: '<p>x</p>' }))).status, 413);
 });
+
+test('local Markdown and HTML preserve external http(s) links/images, local #anchor with <base>, and %PDF- prose', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'paper-reader-local-links-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { library, store } = makeLocalDeps(root);
+
+  const md = '# PDF Notes\n\nEvery PDF starts with `%PDF-1.7`. See [good](https://example.com/ok), [xss](javascript:alert(1)), [data](data:text/html,hi), and [file](file:///etc/passwd).\n\n![pic](https://example.com/pic.png)\n\n![bad](data:image/png;base64,AA==)\n';
+  const { doc: mdDoc } = await importLocalFile({ library, store }, { filename: 'pdf-spec-notes.md', bytes: Buffer.from(md, 'utf8') });
+  const mdBlocks = Object.values(mdDoc.articleLayout ?? {});
+  assert.deepEqual(mdBlocks.flatMap(b => b.spans ?? []).filter(s => s.kind === 'link').map(s => s.value), ['https://example.com/ok']);
+  assert.deepEqual(mdBlocks.filter(b => b.kind === 'image').map(b => b.image?.url), ['https://example.com/pic.png']);
+
+  const html = '<!doctype html><html><head><title>Local HTML</title></head><body><article><p><a href="https://example.org/x">ext</a> <a href="javascript:alert(1)">bad</a> <a href="data:text/html,x">bad2</a> <a href="file:///etc/passwd">bad3</a></p><img src="https://example.org/ok.png" alt="okpic"><img src="./local.png" alt="rel"><img src="data:image/png;base64,AA==" alt="badimg"></article></body></html>';
+  const { doc: htmlDoc } = await importLocalFile({ library, store }, { filename: 'links.html', bytes: Buffer.from(html, 'utf8') });
+  const htmlBlocks = Object.values(htmlDoc.articleLayout ?? {});
+  assert.deepEqual(htmlBlocks.flatMap(b => b.spans ?? []).filter(s => s.kind === 'link').map(s => s.value), ['https://example.org/x']);
+  assert.deepEqual(htmlBlocks.filter(b => b.kind === 'image').map(b => b.image?.url), ['https://example.org/ok.png']);
+
+  const baseHtml = '<!doctype html><html><head><base href="https://example.org/docs/"></head><body><article><h1 id="anchor">Top</h1><p><a href="#anchor">jump</a> <a href="https://example.org/out">out</a></p></article></body></html>';
+  const { doc: baseDoc } = await importLocalFile({ library, store }, { filename: 'with-base.html', bytes: Buffer.from(baseHtml, 'utf8') });
+  assert.deepEqual(Object.values(baseDoc.articleLayout ?? {}).flatMap(b => b.spans ?? []).filter(s => s.kind === 'link').map(s => s.value), ['#anchor', 'https://example.org/out']);
+
+  await assert.rejects(importLocalFile({ library, store }, { filename: 'fake.md', bytes: Buffer.from('%PDF-1.4\n1 0 obj\n', 'utf8') }), { status: 415 });
+  await assert.rejects(importLocalFile({ library, store }, { filename: 'bom-fake.md', bytes: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('%PDF-1.7\n', 'utf8')]) }), { status: 415 });
+  await assert.rejects(importLocalFile({ library, store }, { filename: 'empty-body.md', bytes: Buffer.from('---\ntitle: Only Frontmatter\n---\n   \n', 'utf8') }), /No readable text was found in this document\./);
+});

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { DocMetadata, DocumentInfo, OpenDocument } from '../shared/types.js';
-import { decodeHtml, isPdfBytes } from './academic-intake.js';
+import { decodeHtml } from './academic-intake.js';
 import { importLocalArticle } from './book-import.js';
 import { fail, PDF_LIMIT, type Library } from './library.js';
 import { cleanFilenameTitle, parseMarkdownArticle } from './markdown-article.js';
@@ -18,7 +18,12 @@ interface FormatHandler {
 }
 
 const UNSUPPORTED_MESSAGE = 'Unsupported file type. Choose a PDF, Markdown (.md), or HTML (.html) file.';
-const hasBinaryPrefix = (bytes: Buffer): boolean => bytes.subarray(0, 4096).includes(0) || isPdfBytes(bytes);
+const PDF_MAGIC = Buffer.from('%PDF-');
+const hasPdfPrefix = (bytes: Buffer): boolean => {
+  const start = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  return bytes.length >= start + 5 && bytes.subarray(start, start + 5).equals(PDF_MAGIC);
+};
+const hasBinaryPrefix = (bytes: Buffer): boolean => bytes.subarray(0, 4096).includes(0) || hasPdfPrefix(bytes);
 
 const mdHandler: FormatHandler = {
   limit: HTML_LIMIT,

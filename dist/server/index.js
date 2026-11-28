@@ -577,7 +577,7 @@ function openStaxLocation(raw) {
 // src/shared/web-article.ts
 function articleUrl(value, base) {
   if (!value || value.length > 8192) return;
-  const url = URL.parse(value, base);
+  const url = base ? URL.parse(value, base) : URL.parse(value);
   if (url && ["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url;
 }
 var excludedTags = new Set("nav aside footer form button input textarea select script style noscript template svg canvas iframe dialog".split(" "));
@@ -853,9 +853,10 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
     else if (found.includes("ltx_authors") || found.includes("author")) next = "byline";
     if (name2 === "a") {
       const href = attr(node, "href") || "";
-      const link2 = articleUrl(href, base);
+      const localAnchor = href.startsWith("#") && href.length > 1 && href.length <= 256;
+      const link2 = !address2 && localAnchor ? void 0 : articleUrl(href, base);
       if (link2) inline = { kind: "link", value: link2.href };
-      else if (href.startsWith("#") && href.length > 1 && href.length <= 256) inline = { kind: "link", value: href };
+      else if (localAnchor) inline = { kind: "link", value: href };
     } else if (!inline && ["code", "em", "strong", "b", "i"].includes(name2)) {
       inline = { kind: name2 === "b" || name2 === "strong" ? "strong" : name2 === "code" ? "code" : "em" };
     }
@@ -873,7 +874,7 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
     visit(storyBody, "p", void 0, 0);
   } else visit(articleRoot, "p", void 0, 0);
   flush();
-  if (!paragraphs.length) throw new Error("No visible article text was found on this page. Open the original webpage and use the browser extension.");
+  if (!paragraphs.length) throw new Error(address2 ? "No visible article text was found on this page. Open the original webpage and use the browser extension." : "No readable text was found in this document.");
   const paperTitle = firstMeta("citation_title", "dc.title");
   const authorList = metaLists.get("citation_author") ?? metaLists.get("dc.creator") ?? metaLists.get("dcterms.creator");
   const authors = authorList?.length ? authorList.join("; ") : firstMeta("author");
@@ -2170,6 +2171,7 @@ function readArticleLayout(raw, paragraphs) {
 import { mkdir as mkdir2 } from "node:fs/promises";
 import path3 from "node:path";
 var MAX_SHARDED_CHARS = 16e6;
+var cleanDocTitle = (raw) => raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
 function checkPreShardLayout(raw, count) {
   if (!isRecord(raw)) fail("Invalid article layout.");
   for (const [key2, value] of Object.entries(raw)) {
@@ -2181,7 +2183,7 @@ function checkPreShardLayout(raw, count) {
 async function importShardedBook(library, input) {
   const { sharded } = input;
   if (!sharded.sections.length || !bookSlug(sharded.slug)) fail("Invalid sharded book contents.");
-  const cleanTitle = input.title.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
+  const cleanTitle = cleanDocTitle(input.title);
   const parsedUrl = input.url ? articleUrl(input.url) : void 0;
   const safeUrl3 = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : void 0;
   const identity = input.identityKey ?? JSON.stringify([safeUrl3 ?? "", cleanTitle, sharded.sections.map((s) => [s.slug, s.paragraphs])]);
@@ -2244,7 +2246,7 @@ async function importLocalArticle(library, article) {
   let chars = 0;
   for (const p of article.paragraphs) chars += p.length;
   if (!article.paragraphs.length || chars > MAX_SHARDED_CHARS) fail("The document is empty or too long.");
-  const cleanTitle = article.title.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
+  const cleanTitle = cleanDocTitle(article.title);
   const meta = sanitizeDocMeta({ ...article });
   if (shouldShardArticle(article)) {
     return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: "", title: cleanTitle }) });
@@ -5988,7 +5990,12 @@ function parseMarkdownArticle(raw, filename) {
 
 // src/server/file-import.ts
 var UNSUPPORTED_MESSAGE = "Unsupported file type. Choose a PDF, Markdown (.md), or HTML (.html) file.";
-var hasBinaryPrefix = (bytes) => bytes.subarray(0, 4096).includes(0) || isPdfBytes(bytes);
+var PDF_MAGIC = Buffer.from("%PDF-");
+var hasPdfPrefix = (bytes) => {
+  const start = bytes.length >= 3 && bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191 ? 3 : 0;
+  return bytes.length >= start + 5 && bytes.subarray(start, start + 5).equals(PDF_MAGIC);
+};
+var hasBinaryPrefix = (bytes) => bytes.subarray(0, 4096).includes(0) || hasPdfPrefix(bytes);
 var mdHandler = {
   limit: HTML_LIMIT,
   async run({ library }, input, filename) {
@@ -9226,6 +9233,13 @@ var mimeTypes = {
   ".icc": "application/vnd.iccprofile"
 };
 var json = (value, status = 200) => Response.json(value, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+var metaFromParams = (params) => ({
+  paperTitle: params.get("paperTitle") ?? void 0,
+  authors: params.get("authors") ?? void 0,
+  venue: params.get("venue") ?? void 0,
+  year: params.get("year") ?? void 0,
+  doi: params.get("doi") ?? void 0
+});
 function localDesktopRequest(req, listener) {
   if (!listener) return false;
   const browser = URL.parse(req.headers.get("origin") || "");
@@ -9342,9 +9356,8 @@ function apply(ctx) {
   route("import-pdf", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);
     const params = new URL(req.url).searchParams;
-    const meta = { paperTitle: params.get("paperTitle") ?? void 0, authors: params.get("authors") ?? void 0, venue: params.get("venue") ?? void 0, year: params.get("year") ?? void 0, doi: params.get("doi") ?? void 0 };
     const bytes = await boundedBody(req, PDF_LIMIT);
-    const doc = await library.importPdf(params.get("title") || "Document.pdf", bytes, params.get("url") ?? void 0, meta);
+    const doc = await library.importPdf(params.get("title") || "Document.pdf", bytes, params.get("url") ?? void 0, metaFromParams(params));
     try {
       const pages = await extractPdfPages(bytes);
       if (pages.length && library.hasSync(doc.id)) store.withDb(true, (db) => replaceDocPages(db, doc.id, pages));
@@ -9357,9 +9370,8 @@ function apply(ctx) {
     const filename = resolveImportFilename(req.headers, params);
     const contentType = req.headers.get("content-type") ?? void 0;
     const limit = fileImportLimit(filename, contentType);
-    const meta = { paperTitle: params.get("paperTitle") ?? void 0, authors: params.get("authors") ?? void 0, venue: params.get("venue") ?? void 0, year: params.get("year") ?? void 0, doi: params.get("doi") ?? void 0 };
     const bytes = await boundedBody(req, limit);
-    return json(await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get("url") ?? void 0, meta }));
+    return json(await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get("url") ?? void 0, meta: metaFromParams(params) }));
   }, "streaming");
   route("attach-pdf", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);

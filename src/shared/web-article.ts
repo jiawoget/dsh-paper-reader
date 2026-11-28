@@ -32,7 +32,7 @@ export interface WebArticle {
 
 export function articleUrl(value: string | undefined, base?: string): URL | undefined {
   if (!value || value.length > 8192) return;
-  const url = URL.parse(value, base);
+  const url = base ? URL.parse(value, base) : URL.parse(value);
   if (url && ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url;
 }
 
@@ -294,9 +294,10 @@ export function extractArticle<N>(
     else if (found.includes('ltx_authors') || found.includes('author')) next = 'byline';
     if (name === 'a') {
       const href = attr(node, 'href') || '';
-      const link = articleUrl(href, base);
+      const localAnchor = href.startsWith('#') && href.length > 1 && href.length <= 256;
+      const link = !address && localAnchor ? undefined : articleUrl(href, base);
       if (link) inline = { kind: 'link', value: link.href };
-      else if (href.startsWith('#') && href.length > 1 && href.length <= 256) inline = { kind: 'link', value: href };
+      else if (localAnchor) inline = { kind: 'link', value: href };
     } else if (!inline && ['code', 'em', 'strong', 'b', 'i'].includes(name)) {
       inline = { kind: name === 'b' || name === 'strong' ? 'strong' : name === 'code' ? 'code' : 'em' };
     }
@@ -311,7 +312,7 @@ export function extractArticle<N>(
     visit(storyBody, 'p', undefined, 0);
   } else visit(articleRoot, 'p', undefined, 0);
   flush();
-  if (!paragraphs.length) throw new Error('No visible article text was found on this page. Open the original webpage and use the browser extension.');
+  if (!paragraphs.length) throw new Error(address ? 'No visible article text was found on this page. Open the original webpage and use the browser extension.' : 'No readable text was found in this document.');
   const paperTitle = firstMeta('citation_title', 'dc.title');
   const authorList = metaLists.get('citation_author') ?? metaLists.get('dc.creator') ?? metaLists.get('dcterms.creator');
   const authors = authorList?.length ? authorList.join('; ') : firstMeta('author');

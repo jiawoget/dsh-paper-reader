@@ -13,6 +13,7 @@ interface ShardedBookInput extends DocMetadata {
 }
 
 const MAX_SHARDED_CHARS = 16_000_000;
+const cleanDocTitle = (raw: string): string => raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
 
 function checkPreShardLayout(raw: unknown, count: number): ArticleLayout {
   if (!isRecord(raw)) fail('Invalid article layout.');
@@ -26,7 +27,7 @@ function checkPreShardLayout(raw: unknown, count: number): ArticleLayout {
 export async function importShardedBook(library: Library, input: ShardedBookInput): Promise<OpenDocument> {
   const { sharded } = input;
   if (!sharded.sections.length || !bookSlug(sharded.slug)) fail('Invalid sharded book contents.');
-  const cleanTitle = input.title.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
+  const cleanTitle = cleanDocTitle(input.title);
   const parsedUrl = input.url ? articleUrl(input.url) : undefined;
   const safeUrl = parsedUrl ? parsedUrl.origin + parsedUrl.pathname + parsedUrl.search : undefined;
   const identity = input.identityKey ?? JSON.stringify([safeUrl ?? '', cleanTitle, sharded.sections.map(s => [s.slug, s.paragraphs])]);
@@ -84,7 +85,7 @@ export async function importLocalArticle(library: Library, article: WebArticle):
   let chars = 0;
   for (const p of article.paragraphs) chars += p.length;
   if (!article.paragraphs.length || chars > MAX_SHARDED_CHARS) fail('The document is empty or too long.');
-  const cleanTitle = article.title.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250) || 'Document';
+  const cleanTitle = cleanDocTitle(article.title);
   const meta = sanitizeDocMeta({ ...article });
   if (shouldShardArticle(article)) {
     return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: '', title: cleanTitle }) });
