@@ -170,6 +170,7 @@ test('BM25 relevance ranks 520 English+CJK papers in <50ms with bounded paginati
   for (let i = 1; i < ranked.length; i++) assert.ok(ranked[i - 1].score >= ranked[i].score);
   const page = slicePage(ranked, LIBRARY_PAGE_SIZE);
   assert.deepEqual({ shown: page.shown, total: page.total, hasMore: page.hasMore }, { shown: 50, total: 520, hasMore: true });
+  assert.equal(slicePage(ranked, Number.NaN).shown, LIBRARY_PAGE_SIZE);
   const zhRanked = rankDocsByRelevance('大模型注意力机制', docs), zhSingle = rankDocsByRelevance('量', docs);
   assert.ok(zhRanked[0].docId === 'doc-108' && zhRanked[0].score >= 70 && zhSingle[0].docId === 'doc-250' && zhSingle[0].score > 0);
 });
@@ -177,17 +178,28 @@ test('BM25 relevance ranks 520 English+CJK papers in <50ms with bounded paginati
 test('review.bulkSetCell is atomic with doc_meta sync, accepts >500 docs, and review.rerank degrades cleanly offline', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'reader-review-bulk-')); t.after(() => rm(root, { recursive: true, force: true }));
   const store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id));
+  const seenAbstracts = new Map<string, string>();
+  let malformed = false;
   const rerankHost = fakeHost((_sys, data) => {
-    const scores: Record<string, { score: number; rationale: string }> = {};
-    for (const p of ((data.papers as { docId: string; title: string }[]) ?? [])) scores[p.docId] = { score: p.title.includes('Target') ? 94 : 28, rationale: p.title.includes('Target') ? 'Direct match' : 'Tangential' };
+    const scores: Record<string, { score: unknown; rationale: string }> = {};
+    const papers = (data.papers as { docId: string; title: string; abstract?: string }[]) ?? [];
+    for (const [idx, p] of papers.entries()) {
+      seenAbstracts.set(p.docId, p.abstract ?? '');
+      scores[p.docId] = malformed ? { score: idx === 0 ? null : idx === 1 ? '' : '82', rationale: 'Parsed' } : { score: p.title.includes('Target') ? 94 : 28, rationale: p.title.includes('Target') ? 'Direct match' : 'Tangential' };
+    }
     return JSON.stringify({ scores });
   });
   const act = createServices({ root, ctx: rerankHost, library, store });
   const ids = (await Promise.all([
     act('library.createAbstract', { title: 'Target KV Cache Paging', authors: 'A', year: '2025', abstract: 'Virtual memory KV paging.' }),
     act('library.createAbstract', { title: 'Unrelated Vision Study', authors: 'B', year: '2024', abstract: 'Image classification benchmark.' }),
-    act('library.createAbstract', { title: 'Another Target Serving Engine', authors: 'C', year: '2025', abstract: 'High throughput KV serving.' })
+    act('library.createAbstract', { title: 'Elastic Block Study', authors: 'C', year: '2025', abstract: 'Eliminates KV cache fragmentation via paged serving.' })
   ])).map(r => r.doc.id);
+  const rev = await act('review.get', {}), listed = (await act('library.list', {})).docs;
+  assert.ok(rev.snippets?.[ids[2]]?.includes('KV cache fragmentation'));
+  assert.ok(rankDocsByRelevance('KV cache fragmentation paged serving', listed, new Map(Object.entries(rev.snippets ?? {}))).find(r => r.docId === ids[2])!.score > 0);
+  await act('review.saveTable', { criteria: [{ id: 'c1', label: 'KV scope' }] });
+  assert.equal((await act('review.bulkSetCell', { docIds: [ids[0]], colId: 'screen:c1', value: 'yes' })).updatedCount, 1);
   const bulkYes = await act('review.bulkSetCell', { docIds: ids, colId: '__screen__', value: 'yes', reasoning: 'Top match' });
   assert.equal(bulkYes.updatedCount, 3);
   for (const id of ids) assert.ok(store.listDocMeta(id).get(id)?.tags.includes('screen:yes'));
@@ -200,6 +212,11 @@ test('review.bulkSetCell is atomic with doc_meta sync, accepts >500 docs, and re
 
   const reranked = await act('review.rerank', { topic: 'KV cache serving', docIds: ids });
   assert.ok(reranked.degraded === undefined && reranked.scores.length === 3 && reranked.scores[0].score === 94 && reranked.scores.at(-1)!.score === 28 && reranked.scores[0].rationale === 'Direct match');
+  assert.ok(seenAbstracts.get(ids[0])?.includes('Virtual memory KV paging.') && seenAbstracts.get(ids[2])?.includes('KV cache fragmentation'));
+  malformed = true;
+  const strictParsed = await act('review.rerank', { topic: 'KV cache serving', docIds: ids });
+  assert.deepEqual(strictParsed.scores.map(s => [s.docId, s.score]), [[ids[2], 82]]);
+  malformed = false;
   assert.deepEqual(await createServices({ root, library, store })('review.rerank', { topic: 'KV cache serving', docIds: ids }), { scores: [], degraded: true });
 
   const manyDocs: DocumentInfo[] = Array.from({ length: 950 }, (_, i) => ({ id: `syn-${i}`, kind: 'abstract', title: `Paper ${i}` }));

@@ -39,7 +39,8 @@ function accumulateField(text: string, weight: number, qSet: ReadonlySet<string>
   return len * weight;
 }
 export function slicePage<T>(items: readonly T[], limit = LIBRARY_PAGE_SIZE): PageSlice<T> {
-  const sliced = items.slice(0, Math.max(1, Math.floor(limit)));
+  const cap = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : LIBRARY_PAGE_SIZE;
+  const sliced = items.slice(0, cap);
   return { items: sliced, shown: sliced.length, total: items.length, hasMore: sliced.length < items.length };
 }
 export function rankDocsByRelevance(query: string, docs: readonly DocumentInfo[], extraTextByDocId?: ReadonlyMap<string, string>): RelevanceMatch[] {

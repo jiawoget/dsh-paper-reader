@@ -18,7 +18,7 @@ export interface ReviewTable {
   columns: ReviewColumn[]; strictCriterion: boolean; threshold: number; updatedAt: number;
 }
 export interface ReviewGetInput { tableId?: string }
-export interface ReviewGetResult { table: ReviewTable; cells: ExtractionCell[]; tables: ReviewTable[] }
+export interface ReviewGetResult { table: ReviewTable; cells: ExtractionCell[]; tables: ReviewTable[]; snippets?: Record<string, string> }
 export interface ReviewSaveTableInput {
   id?: string; name?: string; preset?: ReviewPresetId; columns?: ReviewColumn[];
   criteria?: ScreeningCriterion[]; strictCriterion?: boolean; threshold?: number;

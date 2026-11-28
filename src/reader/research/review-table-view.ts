@@ -14,9 +14,9 @@ const srcBadge = (doc: DocumentInfo) => el('span', `rt-src-badge ${doc.kind === 
 const miniBadge = (b: ReturnType<typeof cellBadgeInfo>) => { const s = el('span', `rt-cell-badge is-${b.kind}`, b.short); s.title = b.full; return s; };
 
 export function createReviewTableView(): ResearchViewModule {
-  let lastOpenCtx: ResearchOpenContext | undefined, mounted = false, mountSeq = 0, running = false, step: ReviewTriageStep = 'extraction';
+  let lastOpenCtx: ResearchOpenContext | undefined, mounted = false, mountSeq = 0, running = false, bulkBusy = false, step: ReviewTriageStep = 'extraction';
   let shell: ResearchShellContext | undefined, table: ReviewTable | null = null, docs: DocumentInfo[] = [], topics: TopicRecord[] = [], filteredIds: string[] = [];
-  let cells = new Map<string, ExtractionCell>(), selected: { docId: string; colId: string } | null = null, selectedPaperId: string | null = null;
+  let cells = new Map<string, ExtractionCell>(), snippets = new Map<string, string>(), selected: { docId: string; colId: string } | null = null, selectedPaperId: string | null = null;
   let activeScreenDocId = '', statusMsg = '', abortCtrl: AbortController | null = null, events: AbortController | null = null;
   let splitEl: HTMLElement | null = null, topEl: HTMLElement | null = null, subBarEl: HTMLElement | null = null, bodyEl: HTMLElement | null = null, contentEl: HTMLElement | null = null;
   let progressEl: HTMLElement | null = null, stopBtn: HTMLButtonElement | null = null, toolsToggleEl: HTMLButtonElement | null = null;
@@ -33,9 +33,9 @@ export function createReviewTableView(): ResearchViewModule {
   const setExportMenu = (open: boolean) => { if (exportMenuEl) exportMenuEl.hidden = !open; exportToggleBtn?.setAttribute('aria-expanded', String(open)); };
   const hasCol = (colId: string) => colId === '__screen__' || Boolean(table && (colId.startsWith('screen:') ? table.criteria.some(c => `screen:${c.id}` === colId) : table.columns.some(c => c.id === colId)));
   const syncRunning = () => {
-    if (stopBtn) stopBtn.hidden = !running; for (const b of actionBtns) b.disabled = running;
-    for (const host of [subBarEl, contentEl]) for (const b of host?.querySelectorAll<HTMLButtonElement>('.rt-add-col-btn, .rt-add-col-m, .rt-col-del, .rt-cell-retry, .rt-crit-req, .rt-crit-del, .rt-crit-add, .rt-strict-btn') ?? []) b.disabled = running;
-    inspector?.setBusy(running); triage?.setBusy(running);
+    if (stopBtn) stopBtn.hidden = !running; for (const b of actionBtns) b.disabled = running || bulkBusy;
+    for (const host of [subBarEl, contentEl]) for (const b of host?.querySelectorAll<HTMLButtonElement>('.rt-add-col-btn, .rt-add-col-m, .rt-col-del, .rt-cell-retry, .rt-crit-req, .rt-crit-del, .rt-crit-add, .rt-strict-btn') ?? []) b.disabled = running || bulkBusy;
+    inspector?.setBusy(running || bulkBusy); triage?.setBusy(running || bulkBusy);
   };
   const syncSplitAttr = () => { if (splitEl) splitEl.dataset.inspectorOpen = String(Boolean(inspector?.isOpen())); };
   const colLabelFor = (colId: string) => colId === '__screen__' ? { label: t('Overall Screening', '综合筛选结论'), isScreening: true }
@@ -81,24 +81,25 @@ export function createReviewTableView(): ResearchViewModule {
   };
   const doExport = (fmt: ReviewExportFormat, customIds?: string[]) => {
     setExportMenu(false); if (!table) return;
-    const ids = customIds ?? (filteredIds.length ? filteredIds : visibleDocs().map(d => d.id));
+    const ids = customIds ?? filteredIds; if (!ids.length) { toast(researchText.triageNoMatches()); return; }
     void api('review.export', { tableId: table.id, format: fmt, docIds: ids }).then(r => { downloadFile(r.filename, r.content, r.mime); toast(t(`Exported ${r.filename}`, `已导出 ${r.filename}`)); }).catch(e => toast(message(e)));
   };
-  const reloadCells = async () => { if (!table) return; const seq = mountSeq, got = await api('review.get', { tableId: table.id }); if (mounted && seq === mountSeq) { table = got.table; cells = new Map(got.cells.map(c => [cellKey(c.docId, c.colId), c])); } };
+  const reloadCells = async () => { if (!table) return; const seq = mountSeq, got = await api('review.get', { tableId: table.id }); if (mounted && seq === mountSeq) { table = got.table; cells = new Map(got.cells.map(c => [cellKey(c.docId, c.colId), c])); if (got.snippets) snippets = new Map(Object.entries(got.snippets)); } };
 
   async function loadData(keepStatus = false): Promise<void> {
     const seq = mountSeq, [libRes, revRes, topRes] = await Promise.all([api('library.list', {}), api('review.get', table ? { tableId: table.id } : {}), api('topics.list', {}).catch(() => ({ topics: [] }))]);
     if (!mounted || seq !== mountSeq) return;
-    docs = libRes.docs; table = revRes.table; topics = topRes.topics; cells = new Map(revRes.cells.map(c => [cellKey(c.docId, c.colId), c]));
+    docs = libRes.docs; table = revRes.table; topics = topRes.topics; cells = new Map(revRes.cells.map(c => [cellKey(c.docId, c.colId), c])); snippets = new Map(Object.entries(revRes.snippets ?? {}));
     triage?.syncTags(docs, topics); if (!keepStatus) setStatus(''); renderAll(); syncInspector();
   }
   async function bulkSetDecision(docIds: string[], decision: ReviewDecision): Promise<void> {
-    if (!table || !docIds.length || running) return; const seq = mountSeq;
+    if (!table || !docIds.length || running || bulkBusy) return; const seq = mountSeq; bulkBusy = true; syncRunning();
     try { const res = await api('review.bulkSetCell', { tableId: table.id, docIds, colId: '__screen__', value: decision }); if (!mounted || seq !== mountSeq) return; mergeCells(res.cells); triage?.clearSelection(); renderBody(); syncInspector(); toast(researchText.triageBulkUpdated(res.updatedCount)); }
     catch (e) { if (mounted && seq === mountSeq) toast(message(e)); }
+    finally { bulkBusy = false; if (mounted && seq === mountSeq) syncRunning(); }
   }
   async function saveTablePatch(patch: Partial<Pick<ReviewTable, 'preset' | 'columns' | 'criteria' | 'strictCriterion' | 'threshold'>>, reload = false): Promise<boolean> {
-    if (!table || running) return false; const seq = mountSeq;
+    if (!table || running || bulkBusy) return false; const seq = mountSeq;
     try {
       table = (await api('review.saveTable', { id: table.id, ...patch })).table; if (!mounted || seq !== mountSeq) return false;
       if (reload) { await reloadCells(); if (!mounted || seq !== mountSeq) return false; }
@@ -111,9 +112,9 @@ export function createReviewTableView(): ResearchViewModule {
     cells.set(cellKey(docId, colId), res.cell); if (colId.startsWith('screen:')) await reloadCells(); if (mounted && seq === mountSeq) { renderBody(); syncInspector(); }
   }
   async function runBatch(kind: 'screen' | 'extract', mode: ReviewExtractMode = 'all', extra: { docId?: string; colId?: string; docIds?: string[]; force?: boolean } = {}): Promise<void> {
-    if (!table || running) return;
-    const list = extra.docIds ?? (filteredIds.length ? filteredIds : visibleDocs().map(d => d.id));
-    if (!list.length) { toast(t('No papers in library to process.', '文献库中暂无可处理的文献。')); return; }
+    if (!table || running || bulkBusy) return;
+    const list = extra.docIds ?? (extra.docId ? [extra.docId] : filteredIds);
+    if (!list.length) { toast(docs.length ? researchText.triageNoMatches() : t('No papers in library to process.', '文献库中暂无可处理的文献。')); return; }
     if (kind === 'screen' && !table.criteria.length) { if (topEl) { topEl.dataset.toolsOpen = 'true'; toolsToggleEl?.setAttribute('aria-expanded', 'true'); } toast(t('Add at least one screening criterion first.', '请先添加至少一条筛选条件。')); return; }
     const seq = mountSeq, ctrl = new AbortController(); running = true; abortCtrl = ctrl; colPicker?.close(); syncRunning();
     setStatus(kind === 'screen' ? t(`Screening 0 / ${list.length} papers…`, `正在筛选 0 / ${list.length} 篇…`) : t('Extracting…', '正在提取…'));
@@ -141,11 +142,12 @@ export function createReviewTableView(): ResearchViewModule {
     } finally { if (abortCtrl === ctrl) { abortCtrl = null; running = false; if (mounted) syncRunning(); } }
   }
   async function saveAndNext(): Promise<void> {
-    if (!table) return;
-    const seq = mountSeq, p = partitionDocs(visibleDocs()), ordered = [...p.included, ...p.excluded]; if (!ordered.length) return;
+    if (!table || running || bulkBusy) return;
+    const seq = mountSeq, scoped = () => { const byId = new Map(visibleDocs().map(d => [d.id, d])); return filteredIds.map(id => byId.get(id)).filter((d): d is DocumentInfo => Boolean(d)); };
+    const p = partitionDocs(scoped()), ordered = [...p.included, ...p.excluded]; if (!ordered.length) return;
     const cur = ordered.find(x => x.doc.id === activeScreenDocId) ?? ordered.find(x => !x.status.manualOverride) ?? ordered[0];
     if (!cur.status.manualOverride) await setManualCell(cur.doc.id, '__screen__', cur.status.decision); if (!mounted || seq !== mountSeq) return;
-    const r = partitionDocs(visibleDocs()), all = [...r.included, ...r.excluded], idx = all.findIndex(x => x.doc.id === cur.doc.id);
+    const r = partitionDocs(scoped()), all = [...r.included, ...r.excluded], idx = all.findIndex(x => x.doc.id === cur.doc.id);
     const next = [...all.slice(idx + 1), ...all.slice(0, Math.max(0, idx))].find(x => x.doc.id !== cur.doc.id && !x.status.manualOverride);
     if (!next) { activeScreenDocId = ''; renderBody(); toast(t('All papers reviewed.', '已审阅全部文献。')); return; }
     activeScreenDocId = next.doc.id; renderBody();
@@ -188,7 +190,7 @@ export function createReviewTableView(): ResearchViewModule {
 
   function renderScreening(): void {
     if (!bodyEl || !table) return;
-    const all = visibleDocs(), view = triage?.computeView(all, 'screening', d => docStatus(d.id).included);
+    const all = visibleDocs(), view = triage?.computeView(all, 'screening', d => docStatus(d.id).included, snippets);
     filteredIds = view ? view.filtered.map(d => d.id) : all.map(d => d.id);
     if (!all.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to start screening.', '请先向文献库导入论文以开始筛选。'))); return; }
     const list = view ? view.pageItems : all;
@@ -228,7 +230,7 @@ export function createReviewTableView(): ResearchViewModule {
 
   function renderExtraction(): void {
     if (!bodyEl || !table) return;
-    const all = visibleDocs(), cols = table.columns, view = triage?.computeView(all, 'extraction', d => docStatus(d.id).included);
+    const all = visibleDocs(), cols = table.columns, view = triage?.computeView(all, 'extraction', d => docStatus(d.id).included, snippets);
     filteredIds = view ? view.filtered.map(d => d.id) : all.map(d => d.id);
     if (!all.length) { setBody(el('p', 'rt-empty', t('Import papers into your library to extract structured columns.', '请先向文献库导入论文以提取结构化表格。'))); return; }
     const list = view ? view.pageItems : all;
@@ -326,7 +328,7 @@ export function createReviewTableView(): ResearchViewModule {
       const openCtx = ctx.openContext();
       if (mounted && seq === mountSeq && openCtx?.docId && openCtx !== lastOpenCtx) { lastOpenCtx = openCtx; step = 'extraction'; renderAll(); void runBatch('extract', 'reextract', { docId: openCtx.docId, docIds: [openCtx.docId] }); }
     },
-    unmount() { mounted = false; ++mountSeq; events?.abort(); events = null; abortCtrl?.abort(); abortCtrl = null; triage?.abort(); triage = null; running = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = contentEl = progressEl = stopBtn = toolsToggleEl = exportMenuEl = exportToggleBtn = null; },
+    unmount() { mounted = false; ++mountSeq; events?.abort(); events = null; abortCtrl?.abort(); abortCtrl = null; triage?.abort(); triage = null; running = false; bulkBusy = false; inspector = null; colPicker = null; splitEl = topEl = subBarEl = bodyEl = contentEl = progressEl = stopBtn = toolsToggleEl = exportMenuEl = exportToggleBtn = null; },
     saveState(): SavedReviewState { return { step, selected: selected ? { ...selected } : null, selectedPaperId, inspectorOpen: Boolean(inspector?.isOpen()), activeScreenDocId, scrollTop: bodyEl?.scrollTop ?? 0, scrollLeft: bodyEl?.querySelector('.rt-table-wrap')?.scrollLeft ?? 0, triage: triage?.saveState() }; },
     restoreState(raw) {
       const s = raw as SavedReviewState | undefined; if (!s || !mounted) return;
