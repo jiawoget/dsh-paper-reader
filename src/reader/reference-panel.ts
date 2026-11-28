@@ -1,5 +1,6 @@
 import type { DocumentInfo, ZoteroItem } from '../shared/types.js';
 import { buildCitationMetadata, buildCiteKey, formatBibTeX, formatRIS } from '../shared/citation-export.js';
+import { mountDocResourcesPanel } from './doc-resources-panel.js';
 import { researchViewName } from './research/labels.js';
 import { mountReferenceCitations } from './research/reference-citations.js';
 import { settingsDialog } from './settings-dialog.js';
@@ -71,6 +72,9 @@ export function referencePanel(app: ReaderPort, parent: HTMLElement): void {
     const link = el('a', 'external', (doc.doi || doc.kind === 'pdf') ? label('Original paper ↗', '原始论文 ↗') : label('Original article ↗', '原始文章 ↗'));
     link.href = web; link.target = '_blank'; link.rel = 'noopener'; parent.append(link);
   }
+  const resourcesHost = el('div', 'ref-res-host');
+  parent.append(resourcesHost);
+  mountDocResourcesPanel(resourcesHost, { docId: doc.id, onOpenDoc: id => { void app.navigate(id); } });
   if (app.openResearchWorkspace) {
     const graphSection = el('section', 'ref-graph-triggers');
     graphSection.setAttribute('aria-label', researchViewName('citation-map'));

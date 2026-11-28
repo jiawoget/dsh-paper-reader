@@ -62,7 +62,7 @@ export function createReviewTableView(): ResearchViewModule {
   const openPaperDrawer = (docId: string) => {
     const doc = docs.find(d => d.id === docId); if (!doc || !inspector) return;
     selected = null; selectedPaperId = docId;
-    inspector.showPaper(doc); syncSplitAttr(); syncGridSelection();
+    inspector.showPaper(doc, docs); syncSplitAttr(); syncGridSelection();
   };
   const paperBtn = (doc: DocumentInfo) => {
     const btn = el('button', 'rt-paper-btn'), m = [doc.authors, doc.year].filter(Boolean).join(' · ');

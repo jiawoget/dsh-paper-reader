@@ -1,0 +1,91 @@
+.doc-res { margin: 12px 0; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; min-width: 0; }
+.rt-insp-res .doc-res { margin: 0; padding-top: 0; border-top: 0; }
+.doc-res-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.doc-res-title-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.doc-res-head h3 { margin: 0; font-size: 12px; font-weight: 650; color: var(--muted); }
+.doc-res-dot, .library-res-dot {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: var(--radius-pill);
+  background: var(--lavender); color: var(--purple); font-size: 11px; font-weight: 650; line-height: 1.2; white-space: nowrap;
+}
+.doc-res-dot::before, .library-res-dot::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none;
+}
+.doc-res-head-actions { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.doc-res-head-actions .btn { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: var(--radius-sm); }
+.doc-res-chips, .doc-res-backlinks-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.doc-res-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0;
+  padding: 4px 4px 4px 12px; border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: var(--surface-sunken); color: var(--desk-ink); font-size: 12px; line-height: 1.4;
+}
+.doc-res-chip:is(:hover, :focus-within) { border-color: var(--purple); background: var(--lavender); }
+.doc-res-chip-main {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; min-height: 24px;
+  color: inherit; text-decoration: none; background: transparent; border: 0; padding: 0 4px 0 0;
+  font: inherit; font-weight: 500; cursor: pointer; text-align: start;
+}
+.doc-res-chip-main:hover { color: var(--purple); }
+.doc-res-chip-main svg { flex: none; color: var(--purple); }
+.doc-res-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.doc-res-chip-del {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: var(--radius-pill);
+  background: transparent; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0;
+}
+.doc-res-chip:is(:hover, :focus-within) .doc-res-chip-del, .doc-res-chip-del:focus-visible { opacity: 1; }
+.doc-res-chip-del:is(:hover, :focus-visible) { color: var(--danger); background: var(--danger-bg); }
+.doc-res-subhead { font-size: 11px; font-weight: 600; color: var(--muted); }
+.doc-res-backlinks, .doc-res-suggestions { display: grid; gap: 8px; min-width: 0; }
+.doc-res-backlink-chip {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; min-height: 28px;
+  padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: var(--paper); color: var(--desk-ink); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.doc-res-backlink-chip:is(:hover, :focus-visible) { border-color: var(--purple); background: var(--lavender); color: var(--purple); }
+.doc-res-backlink-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-res-sug-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0;
+  padding: 8px 0; border-top: 1px solid var(--line);
+}
+.doc-res-sug-row:first-of-type { border-top: 0; padding-top: 4px; }
+.doc-res-sug-info { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; font-size: 12px; }
+.doc-res-sug-info svg { flex: none; color: var(--muted); }
+.doc-res-sug-link {
+  color: var(--desk-ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; display: block; line-height: 24px;
+}
+.doc-res-sug-link:hover { color: var(--purple); text-decoration: underline; }
+.doc-res-sug-actions { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.doc-res-sug-actions .btn { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: var(--radius-sm); }
+.doc-res-accept { color: var(--purple); border-color: var(--purple); }
+.doc-res-accept:is(:hover, :focus-visible) { background: var(--lavender); }
+.doc-res-form { display: grid; gap: 8px; padding: 12px 0 4px; border-top: 1px solid var(--line); min-width: 0; }
+.doc-res-modes {
+  display: inline-grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; justify-self: start;
+  border-radius: var(--radius-md); background: var(--surface-sunken);
+}
+.doc-res-mode-btn {
+  min-height: 28px; padding: 4px 12px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.doc-res-mode-btn[aria-pressed="true"] { background: var(--paper); color: var(--desk-ink); font-weight: 600; box-shadow: var(--shadow-subtle); }
+.doc-res-form :is(input, select) {
+  width: 100%; min-width: 0; box-sizing: border-box; min-height: 36px; padding: 8px 12px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--paper); color: var(--desk-ink); font: inherit; font-size: 13px;
+}
+.doc-res-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(96px, auto); gap: 8px; min-width: 0; }
+.doc-res-error { margin: 0; font-size: 12px; color: var(--danger); line-height: 1.45; }
+.doc-res-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+@media (pointer: coarse), (max-width: 700px) {
+  .doc-res :is(button, a[href], input, select) { min-height: 44px; min-width: 44px; }
+  .doc-res-sug-link { line-height: 44px; }
+  .doc-res-chip-del { opacity: 1; }
+  .doc-res-sug-row { flex-wrap: wrap; }
+  .doc-res-form-row { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-theme-switching]) :is(.doc-res-chip, .doc-res-chip-del, .doc-res-backlink-chip, .doc-res-mode-btn) {
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease;
+  }
+}
