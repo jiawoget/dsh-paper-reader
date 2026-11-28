@@ -838,7 +838,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
   .rt-inspector { position: absolute; grid-column: auto; grid-row: auto; inset: 0 0 0 auto; width: 340px; max-width: calc(100% - 24px); z-index: 14; box-shadow: var(--shadow-dialog); }
 }
 @media (pointer: coarse), (max-width: 700px) {
-  .ref-graph-actions .btn, .ref-cit-box :is(button, a[href]), :is(.cm-view, .ft-view, .rt-view) :is(button, a[href], select, input, textarea) { min-height: 44px; min-width: 44px; }
+  .ref-graph-actions .btn, .ref-cit-box :is(button, a[href]), :is(.cm-view, .ft-view, .rt-view) :is(button, a[href], select, input:not([type="checkbox"]), textarea) { min-height: 44px; min-width: 44px; }
   :is(.lc-view, .ds-view, .cit-view) :is(button, a[href], select, input:not([type="checkbox"]), textarea) { min-height: 44px; min-width: 44px; }
   .lc-group-check, .lc-doc-row, .ds-sel-wrap, .cit-check-row { min-height: 44px; min-width: 44px; align-items: center; gap: 8px; }
   .lc-doc-check-wrap { min-width: 44px; min-height: 44px; padding: 0; }

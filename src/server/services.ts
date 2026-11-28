@@ -11,7 +11,7 @@ import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, search
 import { saveGraphPaper } from './paper-save.js';
 import { queryFieldTrends, queryTrendPapers, readTrendPapersInput, readTrendQueryInput } from './field-trends.js';
 import { ensurePaperCards, runLibraryChat } from './library-chat.js';
-import { exportReviewTable, getReviewTable, runReviewExtraction, runReviewScreening, saveReviewTable, setReviewCell } from './review-table.js';
+import { bulkSetReviewCell, exportReviewTable, getReviewTable, rerankReviewDocs, runReviewExtraction, runReviewScreening, saveReviewTable, setReviewCell } from './review-table.js';
 import { clarifyDeepSearch, runDeepSearch } from './deep-search.js';
 import { checkWatchlist, deleteWatchlist, listWatchlist, markWatchlistRead, saveWatchlist } from './watchlist.js';
 import { analyzeCitations, reclassifyCitation, summarizeCitations } from './citation-stance.js';
@@ -203,6 +203,8 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'review.screen': (input, options) => runReviewScreening(input, { store: database, library: documents, model, indexDoc }, options),
     'review.extract': (input, options) => runReviewExtraction(input, { store: database, library: documents, model, indexDoc }, options),
     'review.setCell': input => setReviewCell(input, { store: database, library: documents, model, indexDoc }),
+    'review.bulkSetCell': input => bulkSetReviewCell(input, { store: database, library: documents, model, indexDoc }),
+    'review.rerank': (input, options) => rerankReviewDocs(input, { store: database, library: documents, model, indexDoc }, options),
     'review.export': input => exportReviewTable(input, { store: database, library: documents, model, indexDoc }),
     'deepSearch.clarify': (input, options) => clarifyDeepSearch({ store: database, library: documents, model, fetchFn: fetchImpl }, input, options),
     'deepSearch.run': (input, options) => runDeepSearch({ store: database, library: documents, model, fetchFn: fetchImpl }, input, undefined, options),

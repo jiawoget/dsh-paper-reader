@@ -390,6 +390,42 @@ async function run(): Promise<void> {
       await page.locator('#dialog').waitFor({ state: 'hidden' });
       assert.deepEqual(webOpenCalls.at(-1), { url: 'https://arxiv.org/html/2606.06523v3', arxivFormat: 'html' });
       await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'settings.save', payload: { arxivFormat: 'html' } } });
+      await page.unroute('**/api/paper-reader/action');
+      const quantDoc = (await (await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'library.createAbstract', payload: { title: 'KV Cache Quantization for Long Contexts', authors: 'Hana Kim', year: '2025', abstract: 'Sub-4-bit KV cache quantization accelerates long-context inference.' } } })).json() as { doc: { id: string } }).doc.id;
+      const clinDoc = (await (await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'library.createAbstract', payload: { title: 'Clinical Semaglutide Weight Outcomes', authors: 'Dr. Lee', year: '2024', abstract: 'Randomized placebo-controlled weight management study.' } } })).json() as { doc: { id: string } }).doc.id;
+      await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'library.triage', payload: { docId: quantDoc, tags: ['quantization'] } } });
+      await ctx.request.post(host.origin + '/api/paper-reader/action', { data: { op: 'library.triage', payload: { docId: clinDoc, tags: ['clinical'] } } });
+      await page.route('**/api/paper-reader/action', async route => {
+        if ((route.request().postDataJSON() as { op?: string }).op === 'review.rerank') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ scores: [{ docId: localDocId, score: 97, rationale: 'Directly optimizes serving pipelines' }, { docId: quantDoc, score: 86, rationale: 'Quantizes KV cache' }] }) }); return; }
+        await route.fallback();
+      });
+      await page.keyboard.press('Control+Shift+R'); await ws.waitFor({ state: 'visible' });
+      await ws.locator('.rw-nav-btn[data-view="review-table"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.rt-bulk-bar').isVisible(), false);
+      await ws.locator('.rt-topic-in').fill('KV cache quantization'); await ws.locator('.rt-rel-pill').first().waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.rt-grid tbody tr').first().getAttribute('data-doc-id'), quantDoc);
+      assert.match(await ws.locator('.rt-seg-btn[data-scope="matches"]').innerText(), /Topic matches \(/);
+      await ws.locator('.rt-seg-btn[data-scope="all"]').click(); assert.ok((await ws.locator('.rt-grid tbody tr').count()) >= 4);
+      await ws.locator('.rt-rerank-btn').click(); await ws.locator('.rt-rel-pill[data-ai="true"]').first().waitFor({ state: 'visible' });
+      assert.equal(await ws.locator('.rt-grid tbody tr').first().getAttribute('data-doc-id'), localDocId);
+      await ws.locator('.rt-topic-in').fill(''); await ws.locator('.rt-tag-filter').selectOption('clinical');
+      assert.equal(await ws.locator('.rt-grid tbody tr').count(), 1); await ws.locator('.rt-tag-filter').selectOption('');
+      await ws.locator('.rt-step-btn[data-step="screening"]').click(); await ws.locator('.rt-srow').first().waitFor({ state: 'visible' });
+      const sChecks = ws.locator('.rt-srow .rt-check');
+      await sChecks.nth(0).click(); await sChecks.nth(2).click({ modifiers: ['Shift'] });
+      await ws.locator('.rt-bulk-bar').waitFor({ state: 'visible' }); assert.equal(await ws.locator('.rt-bulk-count').innerText(), '3 selected');
+      await ws.locator('.rt-bulk-clear').click(); assert.equal(await ws.locator('.rt-bulk-bar').isVisible(), false);
+      await ws.locator(`.rt-srow[data-doc-id="${clinDoc}"] .rt-check`).click(); await ws.locator('.rt-bulk-exc').click();
+      await ws.locator(`.rt-part[data-part="excluded"] .rt-srow[data-doc-id="${clinDoc}"]`).waitFor({ state: 'visible' });
+      await ws.locator('.rt-step-btn[data-step="extraction"]').click(); await ws.locator('.rt-grid').waitFor({ state: 'visible' });
+      assert.ok(await ws.locator('.rt-seg-btn[data-extract-scope="included"]').getAttribute('aria-pressed') === 'true' && (await ws.locator(`.rt-grid tbody tr[data-doc-id="${clinDoc}"]`).count()) === 0);
+      await ws.locator('.rt-seg-btn[data-extract-scope="all"]').click(); assert.equal(await ws.locator(`.rt-grid tbody tr[data-doc-id="${clinDoc}"]`).count(), 1);
+      await ws.locator('.rt-seg-btn[data-extract-scope="included"]').click(); await ws.locator(`.rt-grid tbody tr[data-doc-id="${quantDoc}"] .rt-check`).click();
+      const [selMd] = await Promise.all([page.waitForEvent('download'), ws.locator('.rt-bulk-export').click()]); assert.match(selMd.suggestedFilename(), /\.md$/);
+      await ws.locator('.rt-bulk-exclude').click(); await page.waitForFunction(id => !document.querySelector(`.rt-grid tbody tr[data-doc-id="${id}"]`), quantDoc);
+      await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(80);
+      assert.ok(await ws.evaluate(() => document.querySelector('.rt-body-scroll')!.getBoundingClientRect().top <= 150 && document.documentElement.scrollWidth <= innerWidth + 1));
+      await assertMobilePanelTargets(page, '#researchWorkspace');
       await ctx.close();
 
       const zhCtx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
@@ -410,6 +446,10 @@ async function run(): Promise<void> {
       assertNoZhEnglishLeaks(zhItems, 'zh-CN Citations View');
       assert.equal(zhItems.some(s => /智能引用大卡|摘要存根|纳排筛选/.test(s.text)), false);
       assert.deepEqual(await zhPage.locator('.cit-facets select[data-facet="section"] option').allInnerTexts(), ['全部', 'Introduction', 'Methods', 'Results', 'Discussion', '未知']);
+      await zhPage.locator('.rw-nav-btn[data-view="review-table"]').click(); await zhPage.locator('.rt-grid').waitFor({ state: 'visible' });
+      await zhPage.locator('.rt-topic-in').fill('PagedAttention'); await zhPage.locator('.rt-grid tbody .rt-check').first().click();
+      const zhRt = await collectChromeStrings(zhPage, '.rt-paper-title, .rt-paper-meta, .rt-cell-val, .rt-mcard-v, .rt-col-label, .rt-tag-filter option, .question-model-trigger');
+      assertNoZhEnglishLeaks(zhRt, 'zh-CN Review Table Triage', ['pilot', 'screening', 'extraction', 'evidence']);
       await zhCtx.close();
       assert.deepEqual(pageErrors, []); assert.deepEqual(consoleErrors, []);
     } finally { await browser.close(); }

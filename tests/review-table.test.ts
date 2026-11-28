@@ -4,10 +4,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { LIBRARY_PAGE_SIZE, rankDocsByRelevance, slicePage } from '../src/shared/library-relevance.js';
 import {
   computeScreeningStatus, exportReviewCsv, exportReviewMarkdown, REVIEW_PRESETS, SUGGESTED_REVIEW_COLUMNS, verifyQuote,
   type ExtractionCell, type ReviewTable
 } from '../src/shared/review-types.js';
+import type { DocumentInfo } from '../src/shared/types.js';
 import { apply } from '../src/server/index.js';
 import { Library } from '../src/server/library.js';
 import { ReaderStore } from '../src/server/reader-store.js';
@@ -151,4 +153,59 @@ test('extraction enforces manualOverride lock, Pilot(3), Abort/resume, Attach PD
   }));
   const frames = (await streamRes.text()).trim().split('\n').map(l => JSON.parse(l) as Record<string, unknown>);
   assert.ok(frames.some(f => typeof f.delta === 'string' && String(f.delta).includes('"kind":"extract"')));
+});
+
+test('BM25 relevance ranks 520 English+CJK papers in <50ms with bounded pagination', () => {
+  const docs: DocumentInfo[] = Array.from({ length: 520 }, (_, i) => ({
+    id: `doc-${i}`, kind: 'abstract', authors: `Author ${i}`, year: String(2020 + (i % 6)),
+    title: i === 42 ? 'PagedAttention Virtual Memory KV Cache Serving' : i === 108 ? '大语言模型注意力机制与显存优化综述' : i === 250 ? '低比特量化推理加速方法' : `Synthetic Benchmark Study ${i}`,
+    abstract: i === 42 ? 'Virtual memory paging eliminates KV cache fragmentation in LLM serving.' : i === 108 ? '系统分析大语言模型中的注意力机制与缓存管理策略。' : i === 250 ? '针对大模型的权重量化与推理加速。' : `Evaluation of synthetic topic cluster ${i % 17} across standard workloads.`,
+    meta: { status: 'unread', starred: false, tags: i === 42 ? ['kv-cache', 'serving'] : i === 77 ? ['kv-cache'] : [`grp-${i % 10}`] }
+  }));
+  const t0 = performance.now(), ranked = rankDocsByRelevance('KV cache virtual memory paging', docs, new Map([['doc-300', 'virtual memory kv cache paging block table']]));
+  const elapsedMs = performance.now() - t0;
+  assert.ok(elapsedMs < 50, `Expected <50ms for 520 docs, got ${elapsedMs.toFixed(2)}ms`);
+  assert.equal(ranked.length, 520); assert.equal(ranked[0].docId, 'doc-42'); assert.ok(ranked[0].score >= 85 && ranked[0].score <= 100);
+  assert.ok(ranked.find(r => r.docId === 'doc-77')!.score > 0 && ranked.find(r => r.docId === 'doc-300')!.score > 0 && ranked.at(-1)!.score === 0);
+  for (let i = 1; i < ranked.length; i++) assert.ok(ranked[i - 1].score >= ranked[i].score);
+  const page = slicePage(ranked, LIBRARY_PAGE_SIZE);
+  assert.deepEqual({ shown: page.shown, total: page.total, hasMore: page.hasMore }, { shown: 50, total: 520, hasMore: true });
+  const zhRanked = rankDocsByRelevance('大模型注意力机制', docs), zhSingle = rankDocsByRelevance('量', docs);
+  assert.ok(zhRanked[0].docId === 'doc-108' && zhRanked[0].score >= 70 && zhSingle[0].docId === 'doc-250' && zhSingle[0].score > 0);
+});
+
+test('review.bulkSetCell is atomic with doc_meta sync, accepts >500 docs, and review.rerank degrades cleanly offline', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-review-bulk-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id));
+  const rerankHost = fakeHost((_sys, data) => {
+    const scores: Record<string, { score: number; rationale: string }> = {};
+    for (const p of ((data.papers as { docId: string; title: string }[]) ?? [])) scores[p.docId] = { score: p.title.includes('Target') ? 94 : 28, rationale: p.title.includes('Target') ? 'Direct match' : 'Tangential' };
+    return JSON.stringify({ scores });
+  });
+  const act = createServices({ root, ctx: rerankHost, library, store });
+  const ids = (await Promise.all([
+    act('library.createAbstract', { title: 'Target KV Cache Paging', authors: 'A', year: '2025', abstract: 'Virtual memory KV paging.' }),
+    act('library.createAbstract', { title: 'Unrelated Vision Study', authors: 'B', year: '2024', abstract: 'Image classification benchmark.' }),
+    act('library.createAbstract', { title: 'Another Target Serving Engine', authors: 'C', year: '2025', abstract: 'High throughput KV serving.' })
+  ])).map(r => r.doc.id);
+  const bulkYes = await act('review.bulkSetCell', { docIds: ids, colId: '__screen__', value: 'yes', reasoning: 'Top match' });
+  assert.equal(bulkYes.updatedCount, 3);
+  for (const id of ids) assert.ok(store.listDocMeta(id).get(id)?.tags.includes('screen:yes'));
+  await assert.rejects(() => act('review.bulkSetCell', { docIds: ids, colId: 'nonexistent_col', value: 'yes' }), statusIs(400));
+  await assert.rejects(() => act('review.bulkSetCell', { docIds: ids, colId: '__screen__', value: 'invalid_val' }), statusIs(400));
+  store.withDb(true, db => db.exec(`CREATE TRIGGER fail_second BEFORE UPDATE ON extraction_cells WHEN NEW.doc_id='${ids[1]}' BEGIN SELECT RAISE(ABORT, 'boom'); END;`));
+  await assert.rejects(() => act('review.bulkSetCell', { docIds: ids, colId: '__screen__', value: 'no' }), statusIs(500));
+  store.withDb(true, db => db.exec('DROP TRIGGER fail_second;'));
+  assert.ok(store.listDocMeta(ids[0]).get(ids[0])?.tags.includes('screen:yes') && !store.listDocMeta(ids[0]).get(ids[0])?.tags.includes('screen:no'));
+
+  const reranked = await act('review.rerank', { topic: 'KV cache serving', docIds: ids });
+  assert.ok(reranked.degraded === undefined && reranked.scores.length === 3 && reranked.scores[0].score === 94 && reranked.scores.at(-1)!.score === 28 && reranked.scores[0].rationale === 'Direct match');
+  assert.deepEqual(await createServices({ root, library, store })('review.rerank', { topic: 'KV cache serving', docIds: ids }), { scores: [], degraded: true });
+
+  const manyDocs: DocumentInfo[] = Array.from({ length: 950 }, (_, i) => ({ id: `syn-${i}`, kind: 'abstract', title: `Paper ${i}` }));
+  const manySet = new Set(manyDocs.map(d => d.id));
+  const bigLib = Object.assign(Object.create(library) as Library, { list: async () => manyDocs, get: async (id: string) => manyDocs.find(d => d.id === id)!, hasSync: (id: unknown) => typeof id === 'string' && manySet.has(id) });
+  const bigAct = createServices({ root, ctx: rerankHost, library: bigLib, store });
+  assert.equal((await bigAct('review.bulkSetCell', { docIds: manyDocs.map(d => d.id), colId: '__screen__', value: 'yes' })).updatedCount, 950);
+  assert.equal((await bigAct('review.get', {})).cells.filter(c => c.docId.startsWith('syn-')).length, 950);
 });

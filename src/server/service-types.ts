@@ -203,6 +203,8 @@ export interface ServiceResults {
   'review.screen': Operations['review.screen'][1];
   'review.extract': Operations['review.extract'][1];
   'review.setCell': Operations['review.setCell'][1];
+  'review.bulkSetCell': Operations['review.bulkSetCell'][1];
+  'review.rerank': Operations['review.rerank'][1];
   'review.export': Operations['review.export'][1];
   'deepSearch.clarify': Operations['deepSearch.clarify'][1];
   'deepSearch.run': Operations['deepSearch.run'][1];
