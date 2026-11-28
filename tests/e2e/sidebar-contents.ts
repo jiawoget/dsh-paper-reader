@@ -31,7 +31,7 @@ async function importPdf(page: Page, title: string, buffer: Buffer) {
   await page.getByRole('button', { name: 'Open library', exact: true }).click();
   const library = page.getByRole('dialog', { name: 'Library', exact: true });
   const choice = page.waitForEvent('filechooser');
-  await library.getByRole('button', { name: 'Open a PDF', exact: true }).click();
+  await library.getByRole('button', { name: 'Open file', exact: true }).click();
   await (await choice).setFiles({ name: title, mimeType: 'application/pdf', buffer });
   await library.waitFor({ state: 'hidden' });
   await page.locator('#loading').waitFor({ state: 'hidden' });

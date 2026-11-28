@@ -57,12 +57,12 @@ export function articleContent(owner: Document, format: ArticleBlock | undefined
       if (span.kind === 'math' && span.value) {
         try {
           // Native MathML keeps subscripts and fractions legible at either pane width.
-          renderMath(span.value, part, { output: 'mathml', throwOnError: true, trust: false, strict: 'ignore', maxSize: 12, maxExpand: 500 });
+          renderMath(span.value, part, { output: 'mathml', displayMode: kind === 'equation', throwOnError: true, trust: false, strict: 'ignore', maxSize: 12, maxExpand: 500 });
           const math = part.querySelector('math');
           if (math) { part.replaceChildren(math); part.dataset.articleText = content; }
         } catch { part.textContent = content; }
       } else if (part instanceof HTMLAnchorElement && span.value) {
-        const url = articleUrl(span.value);
+        const url = span.value.startsWith('#') ? new URL(span.value, 'https://local.invalid/') : articleUrl(span.value);
         if (url) actions.onLink(part, url);
       }
       element.append(part);

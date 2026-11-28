@@ -2,6 +2,7 @@ import { openStaxLocation } from '../shared/openstax.js';
 import type { DocStatus, DocumentInfo, LibrarySearchHit, LibrarySearchKind } from '../shared/types.js';
 import { abstractOnlyLabel } from './abstract-view.js';
 import { localBookPlace } from './book-position.js';
+import { researchText } from './research/labels.js';
 import { PaperFloatBar } from './research/paper-float-bar.js';
 import { api, button, byId, el, icon, message, readerLabel as t, toast, type ReaderPort } from './ui.js';
 
@@ -145,7 +146,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           const venueYear = [doc.venue, doc.year && !doc.venue?.includes(doc.year) ? doc.year : undefined].filter(Boolean).join(' · ');
           if (venueYear) details.push(venueYear);
         } else {
-          if (doc.url) details.push(new URL(doc.url).hostname);
+          details.push(doc.url ? new URL(doc.url).hostname : researchText.localDocument());
           if (doc.meta?.scrollFraction && doc.meta.scrollFraction > 0) details.push(Math.round(doc.meta.scrollFraction * 100) + '%');
         }
         if (doc.authors) details.push(doc.authors);
@@ -161,7 +162,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
           for (const tag of doc.meta.tags) tagRow.append(el('span', 'library-tag', tag));
           text.append(tagRow);
         }
-        row.append(icon(doc.book ? 'book' : doc.kind === 'pdf' || doc.kind === 'abstract' ? 'note' : 'globe', 18), text);
+        row.append(icon(doc.book ? 'book' : doc.kind === 'pdf' || doc.kind === 'abstract' || !doc.url ? 'note' : 'globe', 18), text);
         if (doc.id === app.doc.id) { row.setAttribute('aria-current', 'true'); row.append(el('small', 'library-current', t('Open', '正在阅读'))); }
 
         const wrap = el('div', 'library-device-item'), actions = el('div', 'library-item-actions');

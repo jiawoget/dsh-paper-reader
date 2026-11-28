@@ -293,8 +293,10 @@ export function extractArticle<N>(
     else if (found.includes('ltx_equation') || found.includes('ltx_eqn_row') || ((name === 'div' || name === 'p') && found.includes('math'))) next = 'equation';
     else if (found.includes('ltx_authors') || found.includes('author')) next = 'byline';
     if (name === 'a') {
-      const link = articleUrl(attr(node, 'href') || '', base);
+      const href = attr(node, 'href') || '';
+      const link = articleUrl(href, base);
       if (link) inline = { kind: 'link', value: link.href };
+      else if (href.startsWith('#') && href.length > 1 && href.length <= 256) inline = { kind: 'link', value: href };
     } else if (!inline && ['code', 'em', 'strong', 'b', 'i'].includes(name)) {
       inline = { kind: name === 'b' || name === 'strong' ? 'strong' : name === 'code' ? 'code' : 'em' };
     }
@@ -321,7 +323,7 @@ export function extractArticle<N>(
   const pdfUrl = articleUrl(firstMeta('citation_pdf_url'), base)?.href;
   const titleTail = title && pageTitle.toLowerCase().startsWith(title.toLowerCase())
     ? pageTitle.slice(title.length).match(/^(?:\s*:\s+|\s+-\s+|\s*[—–|]\s*)(.+)$/)?.[1]?.trim() : '';
-  const resolvedTitle = h1Count > 1 && !paperTitle && pageTitle ? (titleTail || pageTitle) : (title || paperTitle || pageTitle || new URL(address).hostname);
+  const resolvedTitle = h1Count > 1 && !paperTitle && pageTitle ? (titleTail || pageTitle) : (title || paperTitle || pageTitle || articleUrl(address)?.hostname || 'Document');
   return {
     article: {
       url: address,

@@ -1,6 +1,6 @@
 // src/server/index.ts
 import { existsSync as existsSync5, readdirSync } from "node:fs";
-import path13 from "node:path";
+import path15 from "node:path";
 import os from "node:os";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
@@ -852,8 +852,10 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
     else if (found.includes("ltx_equation") || found.includes("ltx_eqn_row") || (name2 === "div" || name2 === "p") && found.includes("math")) next = "equation";
     else if (found.includes("ltx_authors") || found.includes("author")) next = "byline";
     if (name2 === "a") {
-      const link2 = articleUrl(attr(node, "href") || "", base);
+      const href = attr(node, "href") || "";
+      const link2 = articleUrl(href, base);
       if (link2) inline = { kind: "link", value: link2.href };
+      else if (href.startsWith("#") && href.length > 1 && href.length <= 256) inline = { kind: "link", value: href };
     } else if (!inline && ["code", "em", "strong", "b", "i"].includes(name2)) {
       inline = { kind: name2 === "b" || name2 === "strong" ? "strong" : name2 === "code" ? "code" : "em" };
     }
@@ -882,7 +884,7 @@ function extractArticle(root, tree, address2, fallbackTitle, picked, limits) {
   const abstract = firstMeta("citation_abstract", "dcterms.abstract", "dc.description", "description", "og:description");
   const pdfUrl = articleUrl(firstMeta("citation_pdf_url"), base)?.href;
   const titleTail = title && pageTitle.toLowerCase().startsWith(title.toLowerCase()) ? pageTitle.slice(title.length).match(/^(?:\s*:\s+|\s+-\s+|\s*[—–|]\s*)(.+)$/)?.[1]?.trim() : "";
-  const resolvedTitle = h1Count > 1 && !paperTitle && pageTitle ? titleTail || pageTitle : title || paperTitle || pageTitle || new URL(address2).hostname;
+  const resolvedTitle = h1Count > 1 && !paperTitle && pageTitle ? titleTail || pageTitle : title || paperTitle || pageTitle || articleUrl(address2)?.hostname || "Document";
   return {
     article: {
       url: address2,
@@ -2138,9 +2140,13 @@ function readArticleLayout(raw, paragraphs) {
           result2.value = span.value;
         }
         if (span.kind === "link") {
-          const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
-          if (!link2) fail("Invalid article link.");
-          result2.value = link2.href;
+          if (typeof span.value === "string" && span.value.startsWith("#") && span.value.length > 1 && span.value.length <= 256) {
+            result2.value = span.value;
+          } else {
+            const link2 = typeof span.value === "string" ? articleUrl(span.value) : void 0;
+            if (!link2) fail("Invalid article link.");
+            result2.value = link2.href;
+          }
         }
         return result2;
       });
@@ -2233,6 +2239,33 @@ async function importShardedWebArticle(library, input, url, paragraphs) {
   const title = typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 250) : url.hostname;
   const sharded = shardArticle({ url: baseHref, title, paragraphs, ...articleLayout ? { articleLayout } : {} }, targetIndex === void 0 ? void 0 : { targetIndex });
   return importShardedBook(library, { ...sanitizeDocMeta(input), url: baseHref, title, sharded, ...fragment ? { fragment } : {} });
+}
+async function importLocalArticle(library, article) {
+  let chars = 0;
+  for (const p of article.paragraphs) chars += p.length;
+  if (!article.paragraphs.length || chars > MAX_SHARDED_CHARS) fail("The document is empty or too long.");
+  const cleanTitle = article.title.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
+  const meta = sanitizeDocMeta({ ...article });
+  if (shouldShardArticle(article)) {
+    return importShardedBook(library, { ...meta, title: cleanTitle, sharded: shardArticle({ ...article, url: "", title: cleanTitle }) });
+  }
+  const id = "web-" + hash(JSON.stringify(["local", cleanTitle, article.paragraphs]));
+  const documentsDir = path3.join(library.root, "documents");
+  await mkdir2(documentsDir, { recursive: true });
+  if (article.articleLayout) {
+    await writeOnce(path3.join(documentsDir, id + ".layout.json"), JSON.stringify(readArticleLayout(article.articleLayout, article.paragraphs)));
+  }
+  const record = {
+    id,
+    kind: "web",
+    title: cleanTitle,
+    ...meta,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    defaultPage: 1,
+    paragraphs: article.paragraphs
+  };
+  await writeOnce(path3.join(documentsDir, id + ".json"), JSON.stringify(record));
+  return { doc: await library.get(id) };
 }
 
 // src/server/openstax.ts
@@ -2813,7 +2846,7 @@ var Library = class {
     const read = async () => {
       const saved = JSON.parse(await readFile2(file, "utf8"));
       if (!isRecord(saved) || !Array.isArray(saved.paragraphs) || !saved.paragraphs.every((p) => typeof p === "string") || !isRecord(saved.articleLayout)) fail("The saved book section is damaged.", 500);
-      return { ...doc, sectionPage: page, url: section.url, paragraphs: saved.paragraphs, articleLayout: saved.articleLayout };
+      return { ...doc, sectionPage: page, ...section.url ? { url: section.url } : {}, paragraphs: saved.paragraphs, articleLayout: saved.articleLayout };
     };
     if (cachedOnly) {
       try {
@@ -5688,6 +5721,346 @@ function registerPaperReaderTools(ctx, deps) {
   });
 }
 
+// src/server/file-import.ts
+import path10 from "node:path";
+
+// src/server/academic-intake.ts
+var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
+var isArxivHtmlUnavailable = (parsed) => parsed.paragraphs.length <= 4 && /html\s+(?:is\s+)?not\s+available|no\s+html\s+(?:version|for)/i.test(`${parsed.title} ${parsed.paragraphs.slice(0, 3).join(" ")}`);
+function pdfFilename(url) {
+  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
+  try {
+    name2 = decodeURIComponent(name2);
+  } catch {
+  }
+  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
+}
+function decodeHtml(bytes, type, charset) {
+  if (type === "application/pdf" || bytes.length > HTML_LIMIT) fail("This link did not return a readable HTML article or PDF.", 415);
+  const sniff = bytes.subarray(0, 4096).toString("latin1");
+  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
+  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return new TextDecoder().decode(bytes);
+  }
+}
+var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
+var mergeMeta = (p, f, doi) => ({
+  paperTitle: p.paperTitle ?? f.paperTitle,
+  authors: p.authors ?? f.authors,
+  venue: p.venue ?? f.venue,
+  year: p.year ?? f.year,
+  doi: p.doi ?? f.doi ?? doi,
+  publisher: p.publisher ?? f.publisher,
+  abstract: p.abstract ?? f.abstract
+});
+function parseCrossref(bytes) {
+  try {
+    const body = JSON.parse(bytes.toString("utf8"));
+    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
+    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
+    const authors = Array.isArray(m.author) ? m.author.map(
+      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
+    ).filter(Boolean).join("; ") : void 0;
+    let year;
+    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
+      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
+      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
+        year = String(part);
+        break;
+      }
+    }
+    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
+    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
+    return {
+      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
+      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
+    };
+  } catch {
+    return { meta: {} };
+  }
+}
+function safeHtmlMeta(parseArticle, res) {
+  let html;
+  try {
+    html = decodeHtml(res.bytes, res.type, res.charset);
+  } catch {
+    return { meta: {} };
+  }
+  try {
+    const parsed = parseArticle(html, res.url.href);
+    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
+  } catch {
+    try {
+      const stub = parseArticle(html + "<p>.</p>", res.url.href);
+      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
+    } catch {
+      return { meta: {} };
+    }
+  }
+}
+async function resolveAcademicIntake(library, target, readResource, parseArticle, options) {
+  if (target.kind === "arxiv") {
+    const fmt = options?.arxivFormat ?? target.explicitFormat ?? options?.defaultArxivFormat ?? "html";
+    const baseMeta = options?.meta ?? {}, pdfName = (meta) => meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf";
+    if (fmt === "html") {
+      const [htmlRes, absRes2] = await Promise.allSettled([
+        readResource(target.htmlUrl, "document"),
+        baseMeta.authors ? Promise.resolve(null) : readResource(target.absUrl, "document")
+      ]);
+      const absInfo2 = absRes2.status === "fulfilled" && absRes2.value && !isPdfBytes(absRes2.value.bytes) ? safeHtmlMeta(parseArticle, absRes2.value) : void 0;
+      if (htmlRes.status === "fulfilled") {
+        if (isPdfBytes(htmlRes.value.bytes)) {
+          const meta = mergeMeta(baseMeta, absInfo2?.meta ?? {});
+          return { doc: await library.importPdf(pdfName(meta), htmlRes.value.bytes, target.absUrl, meta) };
+        }
+        const htmlInfo = safeHtmlMeta(parseArticle, htmlRes.value);
+        if (htmlInfo.parsed && !isArxivHtmlUnavailable(htmlInfo.parsed)) {
+          const meta = mergeMeta(baseMeta, mergeMeta(htmlInfo.meta, absInfo2?.meta ?? {}));
+          return library.importWebDocument({ ...htmlInfo.parsed, ...meta, title: meta.paperTitle || htmlInfo.parsed.title });
+        }
+      }
+      const pdfRes2 = await readResource(target.pdfUrl, "document").then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason }));
+      if (pdfRes2.status === "fulfilled" && isPdfBytes(pdfRes2.value.bytes)) {
+        const meta = mergeMeta(baseMeta, absInfo2?.meta ?? {});
+        return { doc: await library.importPdf(pdfName(meta), pdfRes2.value.bytes, target.absUrl, meta), arxivFallback: "html-to-pdf" };
+      }
+      if (absInfo2?.parsed) {
+        const meta = mergeMeta(baseMeta, absInfo2.meta);
+        return library.importWebDocument({ ...absInfo2.parsed, ...meta, title: meta.paperTitle || absInfo2.parsed.title });
+      }
+      throw pdfRes2.status === "rejected" ? pdfRes2.reason : htmlRes.status === "rejected" ? htmlRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
+    }
+    const [absRes, pdfRes] = await Promise.allSettled([
+      baseMeta.authors ? Promise.resolve(null) : readResource(target.absUrl, "document"),
+      readResource(target.pdfUrl, "document")
+    ]);
+    const absInfo = absRes.status === "fulfilled" && absRes.value && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
+    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
+      const meta = mergeMeta(baseMeta, absInfo?.meta ?? {});
+      return { doc: await library.importPdf(pdfName(meta), pdfRes.value.bytes, target.absUrl, meta) };
+    }
+    if (absInfo?.parsed) {
+      const meta = mergeMeta(baseMeta, absInfo.meta);
+      return library.importWebDocument({ ...absInfo.parsed, ...meta, title: meta.paperTitle || absInfo.parsed.title });
+    }
+    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
+  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
+  const tryPdf = async (candidate, sourceUrl2, meta) => {
+    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
+    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
+  };
+  if (landRes.status === "fulfilled") {
+    const land = landRes.value;
+    if (isPdfBytes(land.bytes)) {
+      const meta = mergeMeta({}, cr.meta, target.doi);
+      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
+    }
+    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
+    if (redirected?.kind === "arxiv") return resolveAcademicIntake(library, { ...redirected, explicitFormat: void 0 }, readResource, parseArticle, { ...options, meta: merged });
+    const primary = landInfo.pdfUrl, sourceUrl2 = land.url.href;
+    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
+    if (pdfDoc) return pdfDoc;
+    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
+    fail("This link did not return a readable HTML article or PDF.", 415);
+  }
+  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
+}
+
+// src/server/markdown-article.ts
+import path9 from "node:path";
+import { cjkFriendly } from "@mdit/plugin-cjk-friendly";
+import { katex } from "@mdit/plugin-katex";
+import MarkdownIt from "markdown-it";
+
+// src/server/web-article.ts
+import { parse as parse2 } from "parse5";
+var LARGE_ARTICLE_LIMITS = { maxBlocks: 25e3, maxChars: 16e6, maxBlockChars: 24e3 };
+function parseWebArticle(html, url = "", fallbackTitle = "") {
+  return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, fallbackTitle, void 0, LARGE_ARTICLE_LIMITS).article;
+}
+async function openWebArticle(library, raw, readResource = publicResource, options) {
+  const book = openStaxLocation(raw);
+  if (book) return library.openBook(book);
+  const target = parseAcademicInput(raw);
+  if (target && target.kind !== "url") return resolveAcademicIntake(library, target, readResource, parseWebArticle, options);
+  const rawHash = typeof raw === "string" ? articleUrl(raw)?.hash ?? "" : "";
+  const { url, bytes, type, charset } = await readResource(target ? target.url : raw, "document");
+  if (isPdfBytes(bytes)) return { doc: await library.importPdf(pdfFilename(url), bytes, url.href) };
+  const parsed = parseWebArticle(decodeHtml(bytes, type, charset), url.href);
+  return library.importWebDocument(rawHash ? { ...parsed, url: url.href + rawHash } : parsed);
+}
+
+// src/server/markdown-article.ts
+var markdown = new MarkdownIt({ html: false, linkify: false, typographer: false }).use(cjkFriendly).use(katex, { delimiters: "all", mathFence: true });
+var escapeHtml = (value) => markdown.utils.escapeHtml(value);
+var renderMathBlock = (raw) => {
+  const tex = raw.trim();
+  return tex ? `<div class="math"><math alttext="${escapeHtml(tex)}">${escapeHtml(tex)}</math></div>
+` : "";
+};
+function slugifyHeading(text2) {
+  return text2.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}\s_-]+/gu, "").trim().replace(/\s+/g, "-").replace(/^-+|-+$/g, "") || "section";
+}
+function uniqueSlug(base, used) {
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  let suffix = 1;
+  while (used.has(`${base}-${suffix}`)) suffix++;
+  const candidate = `${base}-${suffix}`;
+  used.add(candidate);
+  return candidate;
+}
+markdown.core.ruler.push("heading_ids", (state) => {
+  const used = state.env?.slugs ?? /* @__PURE__ */ new Set();
+  const tokens = state.tokens;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (tokens[i].type !== "heading_open" || tokens[i + 1].type !== "inline") continue;
+    const inline = tokens[i + 1];
+    const plain = (inline.children ?? []).map((c) => c.type === "text" || c.type === "code_inline" || c.type === "math_inline" ? c.content : "").join("").trim() || inline.content.trim();
+    tokens[i].attrSet("id", uniqueSlug(slugifyHeading(plain), used));
+  }
+});
+markdown.renderer.rules.math_inline = (tokens, index) => {
+  const tex = tokens[index].content.trim();
+  return tex ? `<math alttext="${escapeHtml(tex)}">${escapeHtml(tex)}</math>` : "";
+};
+markdown.renderer.rules.math_block = (tokens, index) => renderMathBlock(tokens[index].content);
+var defaultFence = markdown.renderer.rules.fence;
+markdown.renderer.rules.fence = (tokens, index, options, env, self) => tokens[index].info.trim().toLowerCase() === "math" ? renderMathBlock(tokens[index].content) : defaultFence ? defaultFence(tokens, index, options, env, self) : self.renderToken(tokens, index, options);
+function unquoteYaml(raw) {
+  const trimmed = raw.trim();
+  if (trimmed.length >= 2 && (trimmed.startsWith('"') && trimmed.endsWith('"') || trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).replace(/\\(["'\\])/g, "$1").trim();
+  }
+  return trimmed;
+}
+function stripFrontmatter(raw) {
+  const normalized = raw.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  if (!normalized.startsWith("---\n")) return { body: normalized };
+  const closeMatch = /\n(?:---|\.\.\.)[ \t]*(?:\n|$)/.exec(normalized.slice(4));
+  if (!closeMatch) return { body: normalized };
+  const header = normalized.slice(4, 4 + closeMatch.index);
+  const meta = { body: normalized.slice(4 + closeMatch.index + closeMatch[0].length) };
+  for (const line of header.split("\n")) {
+    const pair = /^([A-Za-z_][\w-]*)\s*:\s*(.+)$/.exec(line);
+    if (!pair) continue;
+    const key2 = pair[1].toLowerCase(), val = unquoteYaml(pair[2]);
+    if (!val) continue;
+    if (key2 === "title" && !meta.title) meta.title = val.slice(0, 250);
+    else if ((key2 === "author" || key2 === "authors") && !meta.authors) meta.authors = val.slice(0, 300);
+    else if ((key2 === "year" || key2 === "date") && !meta.year) {
+      const year = /(?:^|\D)(1[5-9]\d{2}|20\d{2}|21\d{2})(?:\D|$)/.exec(val)?.[1];
+      if (year) meta.year = year;
+    } else if (key2 === "doi" && !meta.doi) {
+      const doi = val.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").replace(/^doi:\s*/i, "").trim();
+      if (/^10\.\d{4,9}\/\S+$/i.test(doi)) meta.doi = doi;
+    }
+  }
+  return meta;
+}
+function cleanFilenameTitle(filename) {
+  const stem = path9.basename((filename || "").trim()).replace(/\.(?:markdown|md|html|htm|pdf)$/i, "");
+  return stem.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 250) || "Document";
+}
+function parseMarkdownArticle(raw, filename) {
+  const frontmatter = stripFrontmatter(raw);
+  const rendered = markdown.render(frontmatter.body, { slugs: /* @__PURE__ */ new Set() });
+  const fallback = cleanFilenameTitle(filename);
+  const parsed = parseWebArticle(`<!doctype html><html><body><article>${rendered}</article></body></html>`, "", fallback);
+  const firstH1 = Object.entries(parsed.articleLayout ?? {}).find(([, block]) => block.kind === "h1");
+  const h1Title = firstH1 ? parsed.paragraphs[Number(firstH1[0].slice(2)) - 1] : "";
+  return {
+    ...parsed,
+    url: "",
+    title: frontmatter.title || h1Title || fallback,
+    ...frontmatter.authors ? { authors: frontmatter.authors } : {},
+    ...frontmatter.year ? { year: frontmatter.year } : {},
+    ...frontmatter.doi ? { doi: frontmatter.doi } : {}
+  };
+}
+
+// src/server/file-import.ts
+var UNSUPPORTED_MESSAGE = "Unsupported file type. Choose a PDF, Markdown (.md), or HTML (.html) file.";
+var hasBinaryPrefix = (bytes) => bytes.subarray(0, 4096).includes(0) || isPdfBytes(bytes);
+var mdHandler = {
+  limit: HTML_LIMIT,
+  async run({ library }, input, filename) {
+    if (hasBinaryPrefix(input.bytes)) fail("This file does not contain readable Markdown text.", 415);
+    const article = parseMarkdownArticle(new TextDecoder("utf-8").decode(input.bytes), filename);
+    return { opened: await importLocalArticle(library, article) };
+  }
+};
+var htmlHandler = {
+  limit: HTML_LIMIT,
+  async run({ library }, input, filename) {
+    if (hasBinaryPrefix(input.bytes)) fail("This file does not contain readable HTML.", 415);
+    const article = parseWebArticle(decodeHtml(input.bytes, "text/html"), "", cleanFilenameTitle(filename));
+    return { opened: await importLocalArticle(library, article) };
+  }
+};
+var FORMAT_HANDLERS = {
+  ".pdf": {
+    limit: PDF_LIMIT,
+    async run({ library }, input, filename) {
+      const doc = await library.importPdf(filename || "Document.pdf", input.bytes, input.url, input.meta);
+      return { opened: { doc }, pdfBytes: input.bytes };
+    }
+  },
+  ".md": mdHandler,
+  ".markdown": mdHandler,
+  ".html": htmlHandler,
+  ".htm": htmlHandler
+};
+function resolveImportFilename(headers, params) {
+  const raw = (headers.get("x-filename") || "").trim();
+  if (raw) {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return (params.get("filename") || params.get("title") || "").trim();
+}
+function resolveExtension(filename, contentType) {
+  const ext = path10.extname(filename.trim()).toLowerCase();
+  if (ext) return ext;
+  const mime = (contentType || "").split(";")[0].trim().toLowerCase();
+  return mime === "application/pdf" ? ".pdf" : mime === "text/markdown" || mime === "text/x-markdown" ? ".md" : mime === "text/html" || mime === "application/xhtml+xml" ? ".html" : "";
+}
+function getHandler(filename, contentType) {
+  const ext = resolveExtension(filename, contentType);
+  const handler = Object.hasOwn(FORMAT_HANDLERS, ext) ? FORMAT_HANDLERS[ext] : void 0;
+  if (!handler) fail(UNSUPPORTED_MESSAGE, 415);
+  return { ext, handler };
+}
+function fileImportLimit(filename, contentType) {
+  return getHandler(filename, contentType).handler.limit;
+}
+async function indexImported(deps, doc, pdfBytes) {
+  try {
+    const pages = await extractDocumentPages(doc, pdfBytes, doc.book ? (page) => deps.library.cachedSection(doc, page) : void 0);
+    if (pages.length && deps.library.hasSync(doc.id)) deps.store.withDb(true, (db) => replaceDocPages(db, doc.id, pages));
+  } catch {
+  }
+}
+async function importLocalFile(deps, input) {
+  const filename = path10.basename(input.filename.trim());
+  const { ext, handler } = getHandler(filename, input.contentType);
+  if (input.bytes.length > handler.limit) fail(ext === ".pdf" ? "Choose a PDF of up to 80 MB." : "Choose a file of up to 32 MB.", 413);
+  if (!input.bytes.length) fail("The file is empty.", 400);
+  const { opened, pdfBytes } = await handler.run(deps, input, filename || `Document${ext}`);
+  await indexImported(deps, opened.doc, pdfBytes);
+  return opened;
+}
+
 // src/shared/citation-bulk.ts
 var ACCENTS = {
   "'": "\u0301",
@@ -5948,171 +6321,6 @@ function exportBulkRefs(docs, format) {
     const m = buildCitationMetadata(doc);
     return [m.title, (m.authors ?? []).join("; "), m.year ?? "", m.venue ?? "", m.doi ?? "", m.url ?? "", m.abstract ?? "", (doc.meta?.tags ?? []).join("; ")].map(csvCell).join(",");
   })].join("\n") + "\n";
-}
-
-// src/server/academic-intake.ts
-var isPdfBytes = (bytes) => bytes.subarray(0, 1024).includes("%PDF-");
-var isArxivHtmlUnavailable = (parsed) => parsed.paragraphs.length <= 4 && /html\s+(?:is\s+)?not\s+available|no\s+html\s+(?:version|for)/i.test(`${parsed.title} ${parsed.paragraphs.slice(0, 3).join(" ")}`);
-function pdfFilename(url) {
-  let name2 = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
-  try {
-    name2 = decodeURIComponent(name2);
-  } catch {
-  }
-  return name2.toLowerCase().endsWith(".pdf") ? name2 : name2 + ".pdf";
-}
-function decodeHtml(bytes, type, charset) {
-  if (type === "application/pdf" || bytes.length > HTML_LIMIT) fail("This link did not return a readable HTML article or PDF.", 415);
-  const sniff = bytes.subarray(0, 4096).toString("latin1");
-  if (!type.includes("html") && !/<(?:!doctype\s+html|html|head|body|article|main)\b/i.test(sniff)) fail("This link did not return a readable HTML article or PDF.", 415);
-  const encoding = charset || /<meta[^>]*charset\s*=\s*["']?([\w-]+)/i.exec(sniff)?.[1] || "utf-8";
-  try {
-    return new TextDecoder(encoding).decode(bytes);
-  } catch {
-    return new TextDecoder().decode(bytes);
-  }
-}
-var pickMeta = ({ paperTitle, authors, venue, year, doi, publisher, abstract }) => ({ paperTitle, authors, venue, year, doi, publisher, abstract });
-var mergeMeta = (p, f, doi) => ({
-  paperTitle: p.paperTitle ?? f.paperTitle,
-  authors: p.authors ?? f.authors,
-  venue: p.venue ?? f.venue,
-  year: p.year ?? f.year,
-  doi: p.doi ?? f.doi ?? doi,
-  publisher: p.publisher ?? f.publisher,
-  abstract: p.abstract ?? f.abstract
-});
-function parseCrossref(bytes) {
-  try {
-    const body = JSON.parse(bytes.toString("utf8"));
-    if (!isRecord(body) || !isRecord(body.message)) return { meta: {} };
-    const m = body.message, first = (v) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : void 0;
-    const authors = Array.isArray(m.author) ? m.author.map(
-      (a) => isRecord(a) ? typeof a.family === "string" && typeof a.given === "string" ? `${a.family}, ${a.given}` : typeof a.family === "string" ? a.family : typeof a.name === "string" ? a.name : "" : ""
-    ).filter(Boolean).join("; ") : void 0;
-    let year;
-    for (const k of ["published-print", "published-online", "published", "issued", "created"]) {
-      const part = isRecord(m[k]) && Array.isArray(m[k]["date-parts"]) && Array.isArray(m[k]["date-parts"][0]) ? m[k]["date-parts"][0][0] : void 0;
-      if ((typeof part === "number" || typeof part === "string") && /^(1[5-9]\d{2}|20\d{2}|21\d{2})$/.test(String(part))) {
-        year = String(part);
-        break;
-      }
-    }
-    const abstract = typeof m.abstract === "string" ? m.abstract.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : void 0;
-    const pdfLink = Array.isArray(m.link) ? m.link.find((l) => isRecord(l) && typeof l["content-type"] === "string" && l["content-type"].toLowerCase().includes("application/pdf") && typeof l.URL === "string") : void 0;
-    return {
-      meta: { paperTitle: first(m.title), authors: authors || void 0, venue: first(m["container-title"]), year, publisher: typeof m.publisher === "string" ? m.publisher : void 0, abstract: abstract || void 0 },
-      pdfUrl: isRecord(pdfLink) && typeof pdfLink.URL === "string" ? articleUrl(pdfLink.URL)?.href : void 0
-    };
-  } catch {
-    return { meta: {} };
-  }
-}
-function safeHtmlMeta(parseArticle, res) {
-  let html;
-  try {
-    html = decodeHtml(res.bytes, res.type, res.charset);
-  } catch {
-    return { meta: {} };
-  }
-  try {
-    const parsed = parseArticle(html, res.url.href);
-    return { parsed, meta: pickMeta(parsed), pdfUrl: parsed.pdfUrl };
-  } catch {
-    try {
-      const stub = parseArticle(html + "<p>.</p>", res.url.href);
-      return { meta: pickMeta(stub), pdfUrl: stub.pdfUrl };
-    } catch {
-      return { meta: {} };
-    }
-  }
-}
-async function resolveAcademicIntake(library, target, readResource, parseArticle, options) {
-  if (target.kind === "arxiv") {
-    const fmt = options?.arxivFormat ?? target.explicitFormat ?? options?.defaultArxivFormat ?? "html";
-    const baseMeta = options?.meta ?? {}, pdfName = (meta) => meta.paperTitle || target.versionedId.replace(/\//g, "_") + ".pdf";
-    if (fmt === "html") {
-      const [htmlRes, absRes2] = await Promise.allSettled([
-        readResource(target.htmlUrl, "document"),
-        baseMeta.authors ? Promise.resolve(null) : readResource(target.absUrl, "document")
-      ]);
-      const absInfo2 = absRes2.status === "fulfilled" && absRes2.value && !isPdfBytes(absRes2.value.bytes) ? safeHtmlMeta(parseArticle, absRes2.value) : void 0;
-      if (htmlRes.status === "fulfilled") {
-        if (isPdfBytes(htmlRes.value.bytes)) {
-          const meta = mergeMeta(baseMeta, absInfo2?.meta ?? {});
-          return { doc: await library.importPdf(pdfName(meta), htmlRes.value.bytes, target.absUrl, meta) };
-        }
-        const htmlInfo = safeHtmlMeta(parseArticle, htmlRes.value);
-        if (htmlInfo.parsed && !isArxivHtmlUnavailable(htmlInfo.parsed)) {
-          const meta = mergeMeta(baseMeta, mergeMeta(htmlInfo.meta, absInfo2?.meta ?? {}));
-          return library.importWebDocument({ ...htmlInfo.parsed, ...meta, title: meta.paperTitle || htmlInfo.parsed.title });
-        }
-      }
-      const pdfRes2 = await readResource(target.pdfUrl, "document").then((value) => ({ status: "fulfilled", value }), (reason) => ({ status: "rejected", reason }));
-      if (pdfRes2.status === "fulfilled" && isPdfBytes(pdfRes2.value.bytes)) {
-        const meta = mergeMeta(baseMeta, absInfo2?.meta ?? {});
-        return { doc: await library.importPdf(pdfName(meta), pdfRes2.value.bytes, target.absUrl, meta), arxivFallback: "html-to-pdf" };
-      }
-      if (absInfo2?.parsed) {
-        const meta = mergeMeta(baseMeta, absInfo2.meta);
-        return library.importWebDocument({ ...absInfo2.parsed, ...meta, title: meta.paperTitle || absInfo2.parsed.title });
-      }
-      throw pdfRes2.status === "rejected" ? pdfRes2.reason : htmlRes.status === "rejected" ? htmlRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
-    }
-    const [absRes, pdfRes] = await Promise.allSettled([
-      baseMeta.authors ? Promise.resolve(null) : readResource(target.absUrl, "document"),
-      readResource(target.pdfUrl, "document")
-    ]);
-    const absInfo = absRes.status === "fulfilled" && absRes.value && !isPdfBytes(absRes.value.bytes) ? safeHtmlMeta(parseArticle, absRes.value) : void 0;
-    if (pdfRes.status === "fulfilled" && isPdfBytes(pdfRes.value.bytes)) {
-      const meta = mergeMeta(baseMeta, absInfo?.meta ?? {});
-      return { doc: await library.importPdf(pdfName(meta), pdfRes.value.bytes, target.absUrl, meta) };
-    }
-    if (absInfo?.parsed) {
-      const meta = mergeMeta(baseMeta, absInfo.meta);
-      return library.importWebDocument({ ...absInfo.parsed, ...meta, title: meta.paperTitle || absInfo.parsed.title });
-    }
-    throw pdfRes.status === "rejected" ? pdfRes.reason : absRes.status === "rejected" ? absRes.reason : fail("This link did not return a readable HTML article or PDF.", 415);
-  }
-  const [landRes, crRes] = await Promise.allSettled([readResource(target.url, "document"), readResource("https://api.crossref.org/works/" + encodeURIComponent(target.doi), "json")]);
-  const cr = crRes.status === "fulfilled" ? parseCrossref(crRes.value.bytes) : { meta: {} };
-  const tryPdf = async (candidate, sourceUrl2, meta) => {
-    const pdfRes = candidate ? await readResource(candidate, "document").catch(() => null) : null;
-    return pdfRes && isPdfBytes(pdfRes.bytes) ? { doc: await library.importPdf(meta.paperTitle || pdfFilename(pdfRes.url), pdfRes.bytes, sourceUrl2, meta) } : null;
-  };
-  if (landRes.status === "fulfilled") {
-    const land = landRes.value;
-    if (isPdfBytes(land.bytes)) {
-      const meta = mergeMeta({}, cr.meta, target.doi);
-      return { doc: await library.importPdf(meta.paperTitle || pdfFilename(land.url), land.bytes, land.url.href, meta) };
-    }
-    const landInfo = safeHtmlMeta(parseArticle, land), merged = mergeMeta(landInfo.meta, cr.meta, target.doi), redirected = parseAcademicInput(land.url.href);
-    if (redirected?.kind === "arxiv") return resolveAcademicIntake(library, { ...redirected, explicitFormat: void 0 }, readResource, parseArticle, { ...options, meta: merged });
-    const primary = landInfo.pdfUrl, sourceUrl2 = land.url.href;
-    const pdfDoc = await tryPdf(primary, sourceUrl2, merged) ?? (cr.pdfUrl && cr.pdfUrl !== primary ? await tryPdf(cr.pdfUrl, sourceUrl2, merged) : null);
-    if (pdfDoc) return pdfDoc;
-    if (landInfo.parsed) return library.importWebDocument({ ...landInfo.parsed, ...merged });
-    fail("This link did not return a readable HTML article or PDF.", 415);
-  }
-  return await tryPdf(cr.pdfUrl, target.url, mergeMeta({}, cr.meta, target.doi)) ?? Promise.reject(landRes.reason);
-}
-
-// src/server/web-article.ts
-import { parse as parse2 } from "parse5";
-var LARGE_ARTICLE_LIMITS = { maxBlocks: 25e3, maxChars: 16e6, maxBlockChars: 24e3 };
-function parseWebArticle(html, url) {
-  return extractArticle(parse2(html, { scriptingEnabled: false }), htmlTree, url, "", void 0, LARGE_ARTICLE_LIMITS).article;
-}
-async function openWebArticle(library, raw, readResource = publicResource, options) {
-  const book = openStaxLocation(raw);
-  if (book) return library.openBook(book);
-  const target = parseAcademicInput(raw);
-  if (target && target.kind !== "url") return resolveAcademicIntake(library, target, readResource, parseWebArticle, options);
-  const rawHash = typeof raw === "string" ? articleUrl(raw)?.hash ?? "" : "";
-  const { url, bytes, type, charset } = await readResource(target ? target.url : raw, "document");
-  if (isPdfBytes(bytes)) return { doc: await library.importPdf(pdfFilename(url), bytes, url.href) };
-  const parsed = parseWebArticle(decodeHtml(bytes, type, charset), url.href);
-  return library.importWebDocument(rawHash ? { ...parsed, url: url.href + rawHash } : parsed);
 }
 
 // src/server/paper-save.ts
@@ -7005,7 +7213,7 @@ async function checkWatchlist(input, deps, signal) {
 // src/server/notebook.ts
 import { createHash as createHash8 } from "node:crypto";
 import { lstatSync as lstatSync4 } from "node:fs";
-import path11 from "node:path";
+import path13 from "node:path";
 
 // src/shared/annotations.ts
 var ANNOTATION_COLOR_META = {
@@ -7027,8 +7235,8 @@ function markdownHeading(text2) {
 }
 var marker = /^<!-- paper-reader:(note|source|end) ([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}) -->\r?$/gm;
 var markerError = () => new Error("A note marker is incomplete or repeated. Restore its matching note, source and end comments in the Markdown file.");
-function notebookBlocks(markdown2) {
-  const matches = [...markdown2.matchAll(marker)];
+function notebookBlocks(markdown3) {
+  const matches = [...markdown3.matchAll(marker)];
   const seen = /* @__PURE__ */ new Set();
   const result = [];
   for (let i = 0; i < matches.length; i += 3) {
@@ -7036,15 +7244,15 @@ function notebookBlocks(markdown2) {
     if (!end || open2[1] !== "note" || source2[1] !== "source" || end[1] !== "end" || open2[2] !== source2[2] || open2[2] !== end[2] || seen.has(open2[2])) throw markerError();
     seen.add(open2[2]);
     const afterOpen = open2.index + open2[0].length;
-    const bodyStart = afterOpen + (markdown2.slice(afterOpen, source2.index).match(/^\n(?:\r?\n)?/)?.[0].length ?? 0);
-    const bodyEnd = source2.index - (markdown2.slice(bodyStart, source2.index).match(/(?:\r?\n){1,2}$/)?.[0].length ?? 0);
+    const bodyStart = afterOpen + (markdown3.slice(afterOpen, source2.index).match(/^\n(?:\r?\n)?/)?.[0].length ?? 0);
+    const bodyEnd = source2.index - (markdown3.slice(bodyStart, source2.index).match(/(?:\r?\n){1,2}$/)?.[0].length ?? 0);
     result.push({
       id: open2[2],
       start: open2.index,
       end: end.index + end[0].length,
       bodyStart,
       bodyEnd,
-      reference: markdown2.slice(source2.index + source2[0].length, end.index).trim()
+      reference: markdown3.slice(source2.index + source2[0].length, end.index).trim()
     });
   }
   return result;
@@ -7147,7 +7355,7 @@ import {
   unlinkSync as unlinkSync2,
   writeFileSync
 } from "node:fs";
-import path10 from "node:path";
+import path12 from "node:path";
 
 // src/server/vault-markdown.ts
 import { createHash as createHash6 } from "node:crypto";
@@ -7155,14 +7363,14 @@ import { createHash as createHash6 } from "node:crypto";
 // src/server/vault-sources.ts
 import { createHash as createHash5, randomUUID as randomUUID6 } from "node:crypto";
 import { constants, copyFileSync, linkSync, lstatSync as lstatSync2, unlinkSync } from "node:fs";
-import path9 from "node:path";
+import path11 from "node:path";
 var readerRoute = /^\/api\/paper-reader\/app(?:\/(?:index\.html)?)?$/;
 function publicSource(value) {
   const url = value && URL.parse(value);
   if (url && ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !isLoopbackHost(url.hostname) && !readerRoute.test(url.pathname)) return url;
 }
 function publishPdf(original, file) {
-  const temp = path9.join(path9.dirname(file), ".source-" + randomUUID6() + ".tmp");
+  const temp = path11.join(path11.dirname(file), ".source-" + randomUUID6() + ".tmp");
   copyFileSync(original, temp, constants.COPYFILE_EXCL);
   try {
     try {
@@ -7210,7 +7418,7 @@ var VaultSources = class {
         const id = createHash5("sha256").update(doc.id + "/" + (section?.slug ?? "")).digest("hex").slice(0, 12);
         const title = section?.title ?? doc.title.replace(/\.pdf$/i, "");
         const name2 = filenameStem(title, 64) + " - " + id + (doc.kind === "pdf" ? ".pdf" : ".md");
-        const file = path9.join(vaultFolder(vault, "Sources", true), name2);
+        const file = path11.join(vaultFolder(vault, "Sources", true), name2);
         const existing = lstatSync2(file, { throwIfNoEntry: false });
         if (existing && !existing.isFile()) throw new ServiceError(409, "The library copy in the vault must be a regular file.");
         if (!existing) {
@@ -7221,7 +7429,7 @@ var VaultSources = class {
             writeMarkdown(file, void 0, ["# " + markdownHeading(title), ...original ? ["[Original source](<" + original.href + ">)"] : [], ...paragraphs].join("\n\n") + "\n");
           }
         }
-        copy = path9.relative(folder, file).split(path9.sep).map(encodeURIComponent).join("/");
+        copy = path11.relative(folder, file).split(path11.sep).map(encodeURIComponent).join("/");
         if (doc.kind === "pdf") copy += "#page=" + page;
         else if (/^p-[1-9]\d*$/.test(anchor) && material?.paragraphs?.[Number(anchor.slice(2)) - 1]) copy += "#^" + anchor;
       }
@@ -7247,10 +7455,10 @@ function readerUrl(raw, docId) {
   const url = URL.parse(raw);
   if (url && ["http:", "https:"].includes(url.protocol) && readerRoute.test(url.pathname) && url.searchParams.get("doc") === docId) return url;
 }
-function citations(markdown2, docId) {
+function citations(markdown3, docId) {
   const lines = [];
   let fence = "";
-  for (const line of markdown2.matchAll(/[^\r\n]+/g)) {
+  for (const line of markdown3.matchAll(/[^\r\n]+/g)) {
     const border = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line[0]);
     if (border && !fence) {
       fence = border[1];
@@ -7289,15 +7497,15 @@ function citations(markdown2, docId) {
   for (const cite of found) if (cite.definition && !referenced.has(cite.definition)) cite.label = "Cited passage";
   return found.sort((a, b) => a.from - b.from);
 }
-function vaultMarkdown(markdown2, docId, render, live = true) {
+function vaultMarkdown(markdown3, docId, render, live = true) {
   let at = 0, out = "";
-  for (const cite of citations(markdown2, docId)) {
+  for (const cite of citations(markdown3, docId)) {
     const shown = cite.label ? render(cite.label, cite.url) : "";
     const marker2 = live ? "<!--cite:" + key(cite.raw) + ":" + key(shown.replace(firstLabel, "[]")) + "-->" : "";
-    out += markdown2.slice(at, cite.from) + shown + marker2;
+    out += markdown3.slice(at, cite.from) + shown + marker2;
     at = cite.to;
   }
-  return out + markdown2.slice(at);
+  return out + markdown3.slice(at);
 }
 function readerMarkdown(external, baseline, docId) {
   if (!external.includes("<!--cite:")) return external;
@@ -7341,10 +7549,10 @@ function vaultFolder(vaultPath, bookSlug2, create = false) {
     segments.push(name2 === bookSlug2 ? name2 : name2 + " - " + hash2(bookSlug2).slice(0, 12));
   }
   for (const part of segments) {
-    folder = path10.join(folder, part);
+    folder = path12.join(folder, part);
     if (create) mkdirSync2(folder, { recursive: true, mode: 448 });
     const info = lstatSync3(folder, { throwIfNoEntry: false });
-    if (info && (!info.isDirectory() || path10.relative(folder, realpathSync(folder)) !== "")) {
+    if (info && (!info.isDirectory() || path12.relative(folder, realpathSync(folder)) !== "")) {
       throw new ServiceError(409, "The notebook folder must be inside the selected vault.");
     }
   }
@@ -7380,7 +7588,7 @@ function vocabulary(base, words, chapter) {
   }
   return rows;
 }
-function markdown(title, docId, base, entries, highlights = "") {
+function markdown2(title, docId, base, entries, highlights = "") {
   const rows = ["# " + markdownHeading(title), "", "[Open in Paper Reader](<" + source(base, docId, 1, "") + ">)"];
   if (entries.notes.length) rows.push("", "## Notes");
   for (const note of entries.notes) {
@@ -7443,7 +7651,7 @@ function fileContent(file) {
 }
 function writeMarkdown(file, observed, next) {
   if (observed === next) return;
-  const temp = path10.join(path10.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
+  const temp = path12.join(path12.dirname(file), ".paper-reader-" + randomUUID7() + ".tmp");
   const fd = openSync2(temp, "wx", 384);
   try {
     try {
@@ -7481,8 +7689,8 @@ function exportNotebook(store, input, sources, notebook) {
     try {
       const folder = vaultFolder(settings.vaultPath, void 0, true);
       const name2 = filename ?? filenameFor(title, docId);
-      if (name2 !== path10.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
-      const file = path10.join(folder, name2);
+      if (name2 !== path12.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The stored note filename is invalid.");
+      const file = path12.join(folder, name2);
       const observed = fileContent(file);
       const doc = sources.doc ?? { id: docId, kind: "pdf", title, ...supplied ? { url: supplied } : {} };
       const liveMarks = annotations.filter(isLiveAnnotation);
@@ -7490,7 +7698,7 @@ function exportNotebook(store, input, sources, notebook) {
         formatLink: (ann) => markLink(ann, base),
         isWeb: doc.kind === "web" && !doc.book
       });
-      const content = notebook === void 0 ? markdown(title, docId, base, entries, highlights) : [
+      const content = notebook === void 0 ? markdown2(title, docId, base, entries, highlights) : [
         notebook.replace(/^<!-- paper-reader:(?:note|source|end) [\da-f-]+ -->\r?\n?/gm, "").replace(/<!--(\s*Paper Reader\b[^\n]*?)-->/gi, "&lt;!--$1--&gt;").replace(/<!--(?=\s*Paper Reader\b)/gi, "&lt;!--").trimEnd(),
         highlights,
         entries.vocabulary.length ? vocabulary(base, entries.vocabulary).join("\n") : ""
@@ -7508,9 +7716,9 @@ function exportNotebook(store, input, sources, notebook) {
 }
 
 // src/server/notebook-markdown.ts
-function blocks2(markdown2) {
+function blocks2(markdown3) {
   try {
-    return notebookBlocks(markdown2);
+    return notebookBlocks(markdown3);
   } catch (error) {
     throw new ServiceError(409, error.message);
   }
@@ -7536,22 +7744,22 @@ function initialMarkdown(doc, notes) {
     ...notes.map((note) => formatNote(note, doc))
   ].join("\n\n") + "\n";
 }
-function putNote(markdown2, note, doc, beforeId) {
-  const parsed = blocks2(markdown2);
+function putNote(markdown3, note, doc, beforeId) {
+  const parsed = blocks2(markdown3);
   const current = parsed.find((block) => block.id === note.id);
-  if (current) return markdown2.slice(0, current.bodyStart) + note.text + markdown2.slice(current.bodyEnd);
+  if (current) return markdown3.slice(0, current.bodyStart) + note.text + markdown3.slice(current.bodyEnd);
   const before = beforeId && parsed.find((block) => block.id === beforeId);
   if (beforeId && !before) throw new ServiceError(409, "The note at this insertion point moved or was deleted. Choose a new position.");
-  const at = before ? before.start : markdown2.length;
-  const prefix2 = markdown2.slice(0, at);
+  const at = before ? before.start : markdown3.length;
+  const prefix2 = markdown3.slice(0, at);
   const spacing = !prefix2 || /\n\s*\n$/.test(prefix2) ? "" : prefix2.endsWith("\n") ? "\n" : "\n\n";
-  return prefix2 + spacing + formatNote(note, doc) + (before ? "\n\n" : "\n") + markdown2.slice(at);
+  return prefix2 + spacing + formatNote(note, doc) + (before ? "\n\n" : "\n") + markdown3.slice(at);
 }
-function withoutNote(markdown2, id) {
-  const block = blocks2(markdown2).find((item) => item.id === id);
-  if (!block) return markdown2;
-  const tail = markdown2.slice(block.end).replace(/^(?:\r?\n){1,2}/, "");
-  return markdown2.slice(0, block.start) + tail;
+function withoutNote(markdown3, id) {
+  const block = blocks2(markdown3).find((item) => item.id === id);
+  if (!block) return markdown3;
+  const tail = markdown3.slice(block.end).replace(/^(?:\r?\n){1,2}/, "");
+  return markdown3.slice(0, block.start) + tail;
 }
 function sourceFields(doc, block, previous) {
   const match = block.reference.match(/^\[((?:\\.|[^\]\\\r\n])+)\]\(<([^>\r\n]+)>\)/m);
@@ -7607,17 +7815,17 @@ function reconcileNotes(records, doc, previous, next) {
   }
   for (const id of old.keys()) records.remove({ id });
 }
-function contentFor(markdown2, entries) {
+function contentFor(markdown3, entries) {
   const indexed = new Map(entries.map((note) => [note.id, note]));
   const notes = [];
   const parts = [];
   let position = 0;
   const addFreeText = (end) => {
-    let free = markdown2.slice(position, end);
+    let free = markdown3.slice(position, end);
     if (position === 0) free = free.replace(/^# [^\r\n]*\r?\n\r?\n\[Open in Paper Reader\]\(<[^>]+>\)\r?\n?/, "");
     if (free.trim()) parts.push({ markdown: free });
   };
-  for (const block of blocks2(markdown2)) {
+  for (const block of blocks2(markdown3)) {
     addFreeText(block.start);
     const note = indexed.get(block.id);
     if (note) {
@@ -7626,7 +7834,7 @@ function contentFor(markdown2, entries) {
     }
     position = block.end;
   }
-  addFreeText(markdown2.length);
+  addFreeText(markdown3.length);
   return { notes, parts };
 }
 
@@ -7649,16 +7857,16 @@ function load(records, local, sources, stored = true) {
     let name2;
     if (binding) {
       name2 = binding.filename;
-      if (name2 !== path11.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
+      if (name2 !== path13.basename(name2) || !name2.endsWith(".md")) throw new ServiceError(500, "The saved notebook filename is invalid.");
     } else {
       const stem = local.chapter ? filenameStem(local.chapter.title) : filenameFor(local.title.replace(/\.pdf$/i, ""), local.docId).slice(0, -3) + " - Notebook";
       const reserved = local.chapter && records.chapterFilenames(vault, local.docId);
       name2 = stem + ".md";
-      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path11.join(folder, name2), { throwIfNoEntry: false }); n++) {
+      for (let n = 2; reserved?.has(name2.normalize("NFC").toLowerCase()) || lstatSync4(path13.join(folder, name2), { throwIfNoEntry: false }); n++) {
         name2 = stem + " (" + n + ").md";
       }
     }
-    book.file = path11.join(folder, name2);
+    book.file = path13.join(folder, name2);
     book.observed = binding ? fileContent(book.file) : void 0;
     book.baseline = binding?.baseline;
     if (binding && book.observed === void 0) {
@@ -7708,14 +7916,14 @@ function persist(records, book) {
   if (book.file) {
     const file = book.file;
     const projected = vaultAccess(() => {
-      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path11.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
+      if (vaultFolder(book.vault, doc.chapter?.bookSlug, true) !== path13.dirname(file)) throw new ServiceError(409, "The notebook location changed. Refresh before saving.");
       const zotero = records.zoteroSource(doc.docId);
       if (!book.sources.doc?.url) book.sources.useSavedSources([zotero?.original ?? "", ...records.entries("note", doc.docId, doc.chapter).map((note) => note.sourceUrl)]);
-      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path11.dirname(file), zotero?.link)));
+      const portable = vaultMarkdown(book.markdown, doc.docId, (label, url) => portableCitation(label, book.sources.targets(url, book.vault, path13.dirname(file), zotero?.link)));
       writeMarkdown(file, book.observed, portable);
       return portable;
     });
-    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path11.basename(book.file));
+    if (book.baseline !== book.markdown) records.bind(book.vault, doc, path13.basename(book.file));
     book.observed = projected;
   }
   if (book.local.markdown !== book.markdown || !book.stored) records.store(doc);
@@ -7785,7 +7993,7 @@ var PaperNotebooks = class {
     });
   }
   async write(input) {
-    const markdown2 = stringValue(input.markdown, "notebook Markdown", 4e6, false, true);
+    const markdown3 = stringValue(input.markdown, "notebook Markdown", 4e6, false, true);
     if (typeof input.markdown !== "string") throw new ServiceError(400, "The full Markdown text is required.");
     const sources = await this.sources(input.docId, input.sourceUrl);
     if (typeof input.docId === "string" && storedDocId.test(input.docId) && !sources.doc) {
@@ -7794,11 +8002,11 @@ var PaperNotebooks = class {
     return this.database.withNotebook((records) => {
       const book = requestDocument(records, input, sources);
       if (input.expectedRevision !== revision(book)) throw new ServiceError(409, "The notebook changed. Compare the latest Markdown with your draft before saving.");
-      blocks2(markdown2);
-      reconcileNotes(records, book.local, book.conflict ? book.local.markdown : book.markdown, markdown2);
+      blocks2(markdown3);
+      reconcileNotes(records, book.local, book.conflict ? book.local.markdown : book.markdown, markdown3);
       book.conflict = false;
       book.warning = void 0;
-      book.markdown = markdown2;
+      book.markdown = markdown3;
       persist(records, book);
       return snapshot(records, book, Boolean(this.launch));
     });
@@ -7883,7 +8091,7 @@ var PaperNotebooks = class {
 import { spawn } from "node:child_process";
 import { statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
-import path12 from "node:path";
+import path14 from "node:path";
 var isFile = (file) => {
   try {
     return Boolean(statSync3(file, { throwIfNoEntry: false })?.isFile());
@@ -7898,7 +8106,7 @@ var isDir = (file) => {
     return false;
   }
 };
-var onPath = (name2) => (process.env.PATH ?? "").split(path12.delimiter).filter((dir) => path12.isAbsolute(dir)).map((dir) => path12.join(dir, name2)).find(isFile);
+var onPath = (name2) => (process.env.PATH ?? "").split(path14.delimiter).filter((dir) => path14.isAbsolute(dir)).map((dir) => path14.join(dir, name2)).find(isFile);
 function launch(command, args, errorMessage) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { shell: false, detached: true, stdio: "ignore", windowsHide: false });
@@ -7911,13 +8119,13 @@ function launch(command, args, errorMessage) {
 }
 function installedObsidian() {
   if (process.platform === "win32") {
-    const directories = [process.env.LOCALAPPDATA && path12.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
-    const executable = directories.filter((dir) => Boolean(dir && path12.isAbsolute(dir))).map((dir) => path12.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
+    const directories = [process.env.LOCALAPPDATA && path14.join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles];
+    const executable = directories.filter((dir) => Boolean(dir && path14.isAbsolute(dir))).map((dir) => path14.join(dir, "Obsidian", "Obsidian.exe")).find(isFile);
     if (!executable) return;
     return (uri) => launch(executable, [uri], "Windows could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "darwin") {
-    if (!["/Applications/Obsidian.app", path12.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
+    if (!["/Applications/Obsidian.app", path14.join(homedir(), "Applications/Obsidian.app")].some(isDir)) return;
     return (uri) => launch("/usr/bin/open", ["-a", "Obsidian", uri], "macOS could not start Obsidian. Open the notebook link with the Obsidian app.");
   }
   if (process.platform === "linux") {
@@ -7925,7 +8133,7 @@ function installedObsidian() {
     const present = Boolean(onPath("obsidian") || [
       "/opt/Obsidian/obsidian",
       "/var/lib/flatpak/exports/bin/md.obsidian.Obsidian",
-      path12.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
+      path14.join(homedir(), ".local/share/flatpak/exports/bin/md.obsidian.Obsidian")
     ].some(isFile));
     if (!opener || !present) return;
     return (uri) => launch(opener, [uri], "Could not start Obsidian via xdg-open. Open the notebook link with the Obsidian app.");
@@ -8998,7 +9206,7 @@ var name = "paper-reader";
 var inject = ["connection"];
 var builtWeb = fileURLToPath5(new URL("../web/", import.meta.url));
 var publicDir = existsSync5(builtWeb) ? builtWeb : fileURLToPath5(new URL("../../public/", import.meta.url));
-var pdfDir = path13.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
+var pdfDir = path15.dirname(fileURLToPath5(import.meta.resolve("pdfjs-dist/package.json")));
 var mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -9054,7 +9262,7 @@ async function boundedBody(request, limit) {
   return Buffer.concat(chunks, bytes);
 }
 function apply(ctx) {
-  const root = process.env.PAPER_READER_HOME || path13.join(process.env.DSH_HOME || path13.join(os.homedir(), ".dsh"), "paper-reader");
+  const root = process.env.PAPER_READER_HOME || path15.join(process.env.DSH_HOME || path15.join(os.homedir(), ".dsh"), "paper-reader");
   const store = new ReaderStore(root);
   const library = new Library(root, publicResource, (id) => store.deleteDocument(id));
   const models = {};
@@ -9108,17 +9316,17 @@ function apply(ctx) {
       }
     }
   });
-  const asset = (url, file) => route(url, ["GET", "HEAD"], createStaticAssetHandler(url, file, mimeTypes[path13.extname(file)] ?? "application/octet-stream"));
+  const asset = (url, file) => route(url, ["GET", "HEAD"], createStaticAssetHandler(url, file, mimeTypes[path15.extname(file)] ?? "application/octet-stream"));
   function assets(url, dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const file = path13.join(dir, entry.name);
+      const file = path15.join(dir, entry.name);
       if (entry.isDirectory()) assets(url + entry.name + "/", file);
-      else if (entry.isFile() && Object.hasOwn(mimeTypes, path13.extname(entry.name))) asset(url + entry.name, file);
+      else if (entry.isFile() && Object.hasOwn(mimeTypes, path15.extname(entry.name))) asset(url + entry.name, file);
     }
   }
   assets("app/", publicDir);
-  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path13.join(pdfDir, "build", file));
-  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path13.join(pdfDir, dir));
+  for (const file of ["pdf.mjs", "pdf.worker.mjs", "pdf.renderer.mjs"]) asset("vendor/" + file, path15.join(pdfDir, "build", file));
+  for (const dir of ["cmaps", "standard_fonts", "wasm", "iccs"]) assets("vendor/" + dir + "/", path15.join(pdfDir, dir));
   route("pdf", ["GET", "HEAD"], async (req) => pdfBytesResponse(req, await library.bytes(new URL(req.url).searchParams.get("id"))));
   route("article-image", ["GET"], async (req) => {
     const params = new URL(req.url).searchParams;
@@ -9143,6 +9351,15 @@ function apply(ctx) {
     } catch {
     }
     return json({ doc });
+  }, "streaming");
+  route("import-file", ["POST"], async (req) => {
+    const params = new URL(req.url).searchParams;
+    const filename = resolveImportFilename(req.headers, params);
+    const contentType = req.headers.get("content-type") ?? void 0;
+    const limit = fileImportLimit(filename, contentType);
+    const meta = { paperTitle: params.get("paperTitle") ?? void 0, authors: params.get("authors") ?? void 0, venue: params.get("venue") ?? void 0, year: params.get("year") ?? void 0, doi: params.get("doi") ?? void 0 };
+    const bytes = await boundedBody(req, limit);
+    return json(await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get("url") ?? void 0, meta }));
   }, "streaming");
   route("attach-pdf", ["POST"], async (req) => {
     if (req.headers.get("content-type")?.split(";")[0] !== "application/pdf") fail("Choose a PDF file.", 415);

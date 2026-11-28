@@ -434,7 +434,7 @@ try {
         await page.locator('#railBody h1').filter({ hasText: 'Refined ArXiv Title' }).waitFor({ state: 'visible' });
         const metaPdf = await makePdf(context, 'Local Meta Extract', ['Preprint arXiv:2402.54321 and doi:10.1145/9999.1 body text.']);
         await page.locator('#library').click();
-        const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('dialog').getByRole('button', { name: 'Open a PDF', exact: true }).click()]);
+        const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('dialog').getByRole('button', { name: 'Open file', exact: true }).click()]);
         await chooser.setFiles({ name: 'local-meta.pdf', mimeType: 'application/pdf', buffer: metaPdf });
         await page.getByRole('dialog').waitFor({ state: 'hidden' });
         await page.locator('#original [data-pdf-side="source"]').first().waitFor({ timeout: 25_000 });

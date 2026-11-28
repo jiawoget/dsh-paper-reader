@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { registerPaperReaderTools, type HostToolsRegistry } from './host-tools.js';
+import { fileImportLimit, importLocalFile, resolveImportFilename } from './file-import.js';
 import { Library, PDF_LIMIT, fail, isRecord } from './library.js';
 import { extractPdfPages } from './pdf-text.js';
 import { publicResource } from './public-resource.js';
@@ -136,6 +137,15 @@ export function apply(ctx:ReaderHost):void {
       if (pages.length && library.hasSync(doc.id)) store.withDb(true, db => replaceDocPages(db, doc.id, pages));
     } catch {}
     return json({ doc });
+  },'streaming');
+  route('import-file',['POST'],async req => {
+    const params = new URL(req.url).searchParams;
+    const filename = resolveImportFilename(req.headers, params);
+    const contentType = req.headers.get('content-type') ?? undefined;
+    const limit = fileImportLimit(filename, contentType);
+    const meta = { paperTitle: params.get('paperTitle') ?? undefined, authors: params.get('authors') ?? undefined, venue: params.get('venue') ?? undefined, year: params.get('year') ?? undefined, doi: params.get('doi') ?? undefined };
+    const bytes = await boundedBody(req, limit);
+    return json(await importLocalFile({ library, store }, { filename, bytes, contentType, url: params.get('url') ?? undefined, meta }));
   },'streaming');
   route('attach-pdf',['POST'],async req => {
     if(req.headers.get('content-type')?.split(';')[0]!=='application/pdf') fail('Choose a PDF file.',415);

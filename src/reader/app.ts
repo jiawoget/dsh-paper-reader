@@ -36,7 +36,7 @@ import { api, button, byId, el, message, readerLabel as label, sourceUrl, toast,
 import { DocSearch } from './doc-search.js';
 import { bindJumpHistoryControls, JumpHistory, type ReadingPosition } from './jump-history.js';
 import { bindPdfControls, runRetranslate, type PdfControlsHandle, type ZoomSetting } from './pdf-controls.js';
-import { bindPdfDropTarget, importPdfFiles } from './pdf-import.js';
+import { bindPdfDropTarget, importPdfFiles, isPdfFile } from './pdf-import.js';
 import { FigurePins } from './figure-pin.js';
 import { trackReadingProgress } from './reading-progress.js';
 import { copyRegionPng, saveRegionPng } from './region-png.js';
@@ -887,7 +887,7 @@ class Reader implements ReaderPort {
     for(const [title,glyph,action] of items)byId('menu').append(button(title,async()=>{this.closeMenu(true);await action();},'',glyph));
     this.desk.connect(mode=>this.pdfView?.setFocusMode(mode), () => refreshNotebookHighlights(this));
     bindPdfDropTarget(byId('reader'), files => {
-      if (this.doc.kind === 'abstract' && files.length === 1) { void this.attachAbstractPdf(files[0]); return; }
+      if (this.doc.kind === 'abstract' && files.length === 1 && isPdfFile(files[0])) { void this.attachAbstractPdf(files[0]); return; }
       void this.importFiles(files, text => toast(text)).catch(e => toast(message(e)));
     }, { isBlocked: () => this.research.isOpen() || Boolean(document.querySelector('dialog[open]')) });
     byId('menu').addEventListener('focusout',event=>{

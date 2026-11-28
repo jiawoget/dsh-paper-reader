@@ -210,7 +210,7 @@ export class Library {
       const saved: unknown = JSON.parse(await readFile(file, 'utf8'));
       if (!isRecord(saved) || !Array.isArray(saved.paragraphs) || !saved.paragraphs.every((p: unknown) => typeof p === 'string') ||
         !isRecord(saved.articleLayout)) fail('The saved book section is damaged.', 500);
-      return { ...doc, sectionPage: page, url: section.url, paragraphs: saved.paragraphs, articleLayout: saved.articleLayout as DocumentInfo['articleLayout'] };
+      return { ...doc, sectionPage: page, ...(section.url ? { url: section.url } : {}), paragraphs: saved.paragraphs, articleLayout: saved.articleLayout as DocumentInfo['articleLayout'] };
     };
     if (cachedOnly) {
       try { return await read(); }

@@ -84,7 +84,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
       onLink(link, address) {
         const fragment = address.hash.slice(1); address.hash = '';
         let key = fragment; try { key = decodeURIComponent(fragment); } catch { /* Use the literal anchor. */ }
-        const baseHref = originalUrl ? originalUrl.origin + originalUrl.pathname + originalUrl.search : '';
+        const baseHref = originalUrl ? originalUrl.origin + originalUrl.pathname + originalUrl.search : 'https://local.invalid/';
         const bookLink = doc.book && format?.kind !== 'byline' ? openStaxLocation(address.href) : undefined;
         const destination = bookLink?.book === doc.book?.slug && bookLink?.section ? bookPages.get(bookLink.section)
           : address.href === baseHref && key && doc.book?.anchorPages && Object.hasOwn(doc.book.anchorPages, key) ? doc.book.anchorPages[key] : undefined;
@@ -103,7 +103,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
             event.preventDefault();
             void onBookSection(destination, key).catch(error => toast(message(error)));
           }, { signal: events.signal });
-        } else {
+        } else if (address.hostname !== 'local.invalid') {
           if (fragment) address.hash = fragment;
           link.href = address.href; link.rel = 'noopener noreferrer'; link.target = '_blank';
         }

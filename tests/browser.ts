@@ -34,7 +34,7 @@ async function dragWord(page: Page, run: Locator, text: string): Promise<void> {
 
 async function upload(page: Page, pane: FrameLocator, file: string): Promise<void> {
   await pane.getByRole('button', { name: 'Open library' }).click();
-  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), pane.getByRole('button', { name: 'Open a PDF' }).click()]);
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), pane.getByRole('button', { name: 'Open file' }).click()]);
   await chooser.setFiles(file);
   await pane.getByRole('dialog').waitFor({ state: 'hidden' });
 }
