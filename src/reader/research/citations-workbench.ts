@@ -5,7 +5,7 @@ import type { DocumentInfo, GraphPaper, GraphSource } from '../../shared/types.j
 import { api, el } from '../ui.js';
 import { researchIcon } from './icons.js';
 import { researchText } from './labels.js';
-import { mkBtn } from './paper-intake.js';
+import { isAbortError, mkBtn } from './paper-intake.js';
 import { PaperPicker, type PaperPickerExternalItem } from './paper-picker.js';
 
 export const CITATIONS_RECENT_KEY = 'reader.citations.recent';
@@ -46,8 +46,13 @@ export function statementToGraphPaper(s: CitationStatement, docs: readonly Docum
   };
 }
 
+const isBareCitationId = (s: string, doi?: string, arxivId?: string): boolean => {
+  const t = s.trim(), low = t.toLowerCase();
+  return !t || (Boolean(doi) && low === doi!.toLowerCase()) || (Boolean(arxivId) && low === `arxiv:${arxivId!.toLowerCase()}`) || /^10\.\d{4,9}\/\S+$|^arxiv:\S+$|^pmid:?\s*\d+$|^w\d+$/i.test(t);
+};
+
 export function canonicalCitationTargetKey(t: { docId?: string; doi?: string; arxivId?: string; query?: string }): string {
-  const docId = t.docId?.trim(), doi = cleanDoi(t.doi).toLowerCase(), arxivId = t.arxivId?.trim().toLowerCase(), query = t.query?.trim().toLowerCase();
+  const docId = t.docId?.trim(), doi = cleanDoi(t.doi).toLowerCase(), arxivId = (t.arxivId?.trim() || extractArxivId(doi) || '').toLowerCase(), query = t.query?.trim().toLowerCase();
   if (docId) return 'doc:' + docId;
   if (doi && !/^10\.48550\/arxiv\./i.test(doi)) return 'doi:' + doi;
   if (arxivId) return 'arxiv:' + arxivId;
@@ -57,20 +62,27 @@ export function canonicalCitationTargetKey(t: { docId?: string; doi?: string; ar
 const sameCitationIdentity = (
   a: { key?: string; docId?: string; doi?: string; arxivId?: string },
   b: { key?: string; docId?: string; doi?: string; arxivId?: string }
-): boolean => Boolean(
-  (a.key && b.key && a.key === b.key) || (a.docId && b.docId && a.docId === b.docId)
-  || (a.doi && b.doi && cleanDoi(a.doi).toLowerCase() === cleanDoi(b.doi).toLowerCase())
-  || (a.arxivId && b.arxivId && a.arxivId.toLowerCase() === b.arxivId.toLowerCase())
-);
+): boolean => {
+  const axA = (a.arxivId?.trim() || extractArxivId(a.doi) || '').toLowerCase(), axB = (b.arxivId?.trim() || extractArxivId(b.doi) || '').toLowerCase();
+  return Boolean(
+    (a.key && b.key && a.key === b.key) || (a.docId && b.docId && a.docId === b.docId)
+    || (a.doi && b.doi && cleanDoi(a.doi).toLowerCase() === cleanDoi(b.doi).toLowerCase())
+    || (axA && axB && axA === axB)
+  );
+};
 
 export function upsertRecentCitations(
   list: readonly RecentCitationEntry[], input: Omit<RecentCitationEntry, 'key'> & { key?: string }, max = RECENT_CAP
 ): RecentCitationEntry[] {
-  const title = input.title.trim(), docId = input.docId?.trim() || undefined, doi = cleanDoi(input.doi) || undefined, arxivId = input.arxivId?.trim().toLowerCase() || undefined;
-  const query = !docId && !doi && !arxivId ? (input.query?.trim() || title) : undefined;
+  const rawTitle = input.title.trim(), docId = input.docId?.trim() || undefined, doi = cleanDoi(input.doi) || undefined;
+  const arxivId = input.arxivId?.trim().toLowerCase() || extractArxivId(doi)?.toLowerCase() || undefined;
+  const query = !docId && !doi && !arxivId ? (input.query?.trim() || rawTitle) : undefined;
   const key = input.key?.trim() || canonicalCitationTargetKey({ docId, doi, arxivId, query });
-  if (!title || !key) return [...list];
-  const year = typeof input.year === 'number' && Number.isFinite(input.year) && input.year > 1800 ? Math.round(input.year) : undefined;
+  if (!rawTitle || !key) return [...list];
+  const prev = list.find(item => sameCitationIdentity(item, { key, docId, doi, arxivId }));
+  const title = prev && !isBareCitationId(prev.title, doi, arxivId) && isBareCitationId(rawTitle, doi, arxivId) ? prev.title : rawTitle;
+  const inYear = typeof input.year === 'number' && Number.isFinite(input.year) && input.year > 1800 ? Math.round(input.year) : undefined;
+  const year = inYear ?? prev?.year;
   const next: RecentCitationEntry = { key, title: title.slice(0, 220), ...(year ? { year } : {}), ...(docId ? { docId } : {}), ...(doi ? { doi } : {}), ...(arxivId ? { arxivId } : {}), ...(query ? { query } : {}) };
   return [next, ...list.filter(item => !sameCitationIdentity(item, next))].slice(0, Math.max(1, max));
 }
@@ -114,7 +126,8 @@ const loadRecent = (): RecentCitationEntry[] => { try { return parseRecentCitati
 const saveRecent = (list: readonly RecentCitationEntry[]): void => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(CITATIONS_RECENT_KEY, JSON.stringify(list)); } catch {} };
 const externalMeta = (p: GraphPaper): string => [
   p.inLibrary ? researchText.inLibraryNode() : '', p.authors.length > 1 ? `${p.authors[0]} et al.` : (p.authors[0] ?? ''),
-  p.year ? String(p.year) : '', p.venue ?? '', p.doi ? `DOI: ${p.doi}` : (p.arxivId ? `arXiv:${p.arxivId}` : '')
+  p.year ? String(p.year) : '', typeof p.citationCount === 'number' && p.citationCount > 0 ? researchText.citedCount(p.citationCount) : '',
+  p.venue ?? '', p.doi ? `DOI: ${p.doi}` : (p.arxivId ? `arXiv:${p.arxivId}` : '')
 ].filter(Boolean).join(' · ');
 
 export class CitationsWorkbench {
@@ -149,9 +162,15 @@ export class CitationsWorkbench {
         if (!hasOptions && q.length >= 3) { this.close(false); this.opts.onSelectTarget({ docId: '', doi: '', arxivId: '', query: q }, { title: q }); return true; }
         return false;
       },
-      externalSearch: async (query, signal): Promise<PaperPickerExternalItem[]> => {
-        const res = await api('graph.search', { query, limit: 8 }, false, signal);
-        return res.papers.map(p => ({ id: p.id, title: p.title, meta: externalMeta(p), paper: p }));
+      externalSearch: async (query, signal) => {
+        try {
+          const res = await api('graph.search', { query, limit: 8 }, false, signal);
+          const items = res.papers.map(p => ({ id: p.id, title: p.title, meta: externalMeta(p), paper: p }));
+          return { items, ...(!items.length && res.degraded.length ? { note: researchText.pickerExternalDegraded() } : {}) };
+        } catch (err) {
+          if (signal.aborted || isAbortError(err)) throw err;
+          return { items: [], note: researchText.pickerExternalDegraded() };
+        }
       },
       onClose: refocus => this.close(refocus)
     });
@@ -180,7 +199,8 @@ export class CitationsWorkbench {
   }
   refresh(): void { this.picker.refresh(); this.sync(); }
   recordAnalyzed(info: CitationTargetInfo): void {
-    this.recent = upsertRecentCitations(this.recent, { title: info.title, year: info.year, docId: info.docId, doi: info.doi, arxivId: info.arxivId });
+    const query = !info.docId && !info.doi && !info.arxivId && info.pmid ? `PMID:${info.pmid}` : undefined;
+    this.recent = upsertRecentCitations(this.recent, { title: info.title, year: info.year, docId: info.docId, doi: info.doi, arxivId: info.arxivId, ...(query ? { query } : {}) });
     saveRecent(this.recent); this.sync();
   }
   onDocDeleted(docId: string): void {

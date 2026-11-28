@@ -1,3 +1,4 @@
+import { extractArxivId } from '../../shared/citation-export.js';
 import type { DocumentInfo, GraphPaper } from '../../shared/types.js';
 import { el } from '../ui.js';
 import { researchText } from './labels.js';
@@ -6,6 +7,7 @@ import { mkBtn } from './paper-intake.js';
 export const PAPER_PICKER_VISIBLE_CAP = 40;
 
 export interface PaperPickerExternalItem { id: string; title: string; meta?: string; paper?: GraphPaper }
+type PaperPickerExternalResult = PaperPickerExternalItem[] | { items: PaperPickerExternalItem[]; note?: string };
 interface PaperPickerOptions {
   docs: () => readonly DocumentInfo[]; selectedDocId?: () => string; currentReadingDocId?: () => string;
   ariaLabel?: string; placeholder?: string; searchAriaLabel?: string;
@@ -13,7 +15,7 @@ interface PaperPickerOptions {
   onSelectDoc: (doc: DocumentInfo) => void;
   onSelectExternal?: (item: PaperPickerExternalItem) => void;
   onSubmitRaw?: (query: string, hasOptions: boolean) => boolean;
-  externalSearch?: (query: string, signal: AbortSignal) => Promise<PaperPickerExternalItem[]>;
+  externalSearch?: (query: string, signal: AbortSignal) => Promise<PaperPickerExternalResult>;
   onClose?: (refocus: boolean) => void;
 }
 
@@ -28,7 +30,7 @@ export function filterLibraryPapers(
 ): { total: number; matched: number; items: DocumentInfo[] } {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const matched = tokens.length ? docs.filter(d => {
-    const hay = `${d.paperTitle || d.title} ${d.authors ?? ''} ${d.year ?? ''} ${d.doi ?? ''} ${(d.meta?.tags ?? []).join(' ')}`.toLowerCase();
+    const hay = `${d.paperTitle || d.title} ${d.authors ?? ''} ${d.year ?? ''} ${d.doi ?? ''} ${extractArxivId(d.url, d.doi) ?? ''} ${(d.meta?.tags ?? []).join(' ')}`.toLowerCase();
     return tokens.every(tok => hay.includes(tok));
   }) : [...docs];
   return { total: docs.length, matched: matched.length, items: matched.slice(0, Math.max(1, cap)) };
@@ -43,6 +45,7 @@ export class PaperPicker {
   private optionBtns: HTMLButtonElement[] = [];
   private activeIdx = -1;
   private extItems: PaperPickerExternalItem[] = [];
+  private extNote = '';
   private extLoading = false;
   private extTimer: ReturnType<typeof setTimeout> | undefined;
   private extCtrl: AbortController | null = null;
@@ -75,15 +78,19 @@ export class PaperPicker {
 
   private abortExternal(): void { ++this.extSeq; if (this.extTimer) { clearTimeout(this.extTimer); this.extTimer = undefined; } this.extCtrl?.abort(); this.extCtrl = null; this.extLoading = false; }
   private scheduleExternal(): void {
-    this.abortExternal(); this.extItems = [];
+    this.abortExternal(); this.extItems = []; this.extNote = '';
     const q = this.searchInput.value.trim();
     if (!this.opts.externalSearch || q.length < 2) return;
     const seq = this.extSeq; this.extLoading = true;
     this.extTimer = setTimeout(() => {
       this.extCtrl = new AbortController();
-      void this.opts.externalSearch!(q, this.extCtrl.signal).then(items => {
-        if (seq === this.extSeq) { this.extLoading = false; this.extItems = items; this.render(); }
-      }).catch(() => { if (seq === this.extSeq) { this.extLoading = false; this.render(); } });
+      void this.opts.externalSearch!(q, this.extCtrl.signal).then(res => {
+        if (seq !== this.extSeq) return;
+        this.extLoading = false;
+        this.extItems = Array.isArray(res) ? res : res.items;
+        this.extNote = Array.isArray(res) ? '' : (res.note ?? '');
+        this.render();
+      }).catch(() => { if (seq === this.extSeq) { this.extLoading = false; this.extNote = ''; this.render(); } });
     }, 220);
   }
   private moveFocus(delta: number): void {
@@ -93,7 +100,7 @@ export class PaperPicker {
     this.optionBtns[this.activeIdx]?.scrollIntoView({ block: 'nearest' });
   }
 
-  open(): void { this.root.hidden = false; this.searchInput.value = ''; this.activeIdx = -1; this.extItems = []; this.abortExternal(); this.render(); this.searchInput.focus({ preventScroll: true }); }
+  open(): void { this.root.hidden = false; this.searchInput.value = ''; this.activeIdx = -1; this.extItems = []; this.extNote = ''; this.abortExternal(); this.render(); this.searchInput.focus({ preventScroll: true }); }
   close(): void { this.root.hidden = true; this.abortExternal(); }
   refresh(): void { if (!this.root.hidden) this.render(); }
   dispose(): void { this.abortExternal(); }
@@ -103,7 +110,7 @@ export class PaperPicker {
     const { total, matched, items } = filterLibraryPapers(docs, this.searchInput.value);
     const curId = this.opts.currentReadingDocId?.() ?? '', curDoc = curId ? docs.find(d => d.id === curId) : undefined;
     this.currentWrap.replaceChildren(); this.currentWrap.hidden = !curDoc;
-    if (curDoc) { const btn = mkBtn('btn pp-current-btn', researchText.pickerCurrentPaper(), () => this.opts.onSelectDoc(curDoc)); btn.dataset.currentDocId = curDoc.id; this.currentWrap.append(btn); }
+    if (curDoc) { const btn = mkBtn('btn pp-current-btn', researchText.pickerCurrentPaper(), () => this.opts.onSelectDoc(curDoc)); btn.dataset.currentDocId = curDoc.id; btn.title = curDoc.paperTitle || curDoc.title; this.currentWrap.append(btn); }
     this.countEl.textContent = researchText.pickerCount(items.length, matched, total);
     this.listEl.replaceChildren(); this.optionBtns = [];
     const optCls = this.opts.optionClass ?? 'pp-opt';
@@ -126,6 +133,10 @@ export class PaperPicker {
         opt.append(el('span', `${optCls}-title`, item.title), ...(item.meta ? [el('span', `${optCls}-meta`, item.meta)] : []));
         this.listEl.append(opt); this.optionBtns.push(opt);
       }
+    } else if (this.extNote) {
+      const note = el('p', 'pp-ext-note', this.extNote);
+      note.setAttribute('role', 'status');
+      this.listEl.append(note);
     }
     if (this.activeIdx >= this.optionBtns.length) this.activeIdx = -1;
     this.optionBtns.forEach((b, i) => b.classList.toggle('is-focused', i === this.activeIdx));

@@ -214,7 +214,8 @@ export function createCitationsView(): ResearchViewModule {
       const res = await api('citations.analyze', payload, false, signal);
       if (!mounted || seq !== reqSeq) return;
       report = res; targetTitleHint = '';
-      target = { docId: target.docId || res.target.docId || '', doi: target.doi || res.target.doi || '', arxivId: target.arxivId || res.target.arxivId || '', query: target.query };
+      const docId = target.docId || res.target.docId || '', doi = target.doi || res.target.doi || '', arxivId = target.arxivId || res.target.arxivId || '';
+      target = { docId, doi, arxivId, query: docId || doi || arxivId ? '' : (res.target.pmid ? `PMID:${res.target.pmid}` : (res.target.title || target.query)) };
       let notice = '';
       if (preselectedStance && res.statements.length > 0 && !res.statements.some(matchesFilters)) {
         const st = stanceText(preselectedStance); stanceFilter.clear();

@@ -143,6 +143,11 @@ export const researchText = {
   pickerCurrentPaper: () => t('Current reading paper', '当前精读文献'),
   pickerSearching: () => t('Searching…', '检索中…'),
   pickerExternalHeading: () => t('External matches', '外部文献'),
+  pickerExternalDegraded: () => t('External search unavailable — enter a DOI or arXiv ID, or retry.', '外部文献检索暂不可用 — 可直接输入 DOI 或 arXiv 编号，或稍后重试。'),
+  citedCount: (n: number) => t(
+    n >= 1000 ? `${n >= 10_000 ? Math.round(n / 1000) : (n / 1000).toFixed(1).replace(/\.0$/, '')}k cited` : `${n} cited`,
+    n >= 10_000 ? `${(n / 10_000).toFixed(1).replace(/\.0$/, '')}万被引` : `${n} 被引`
+  ),
   citationsSearchPlaceholder: () => t('Title, DOI, arXiv ID, or library…', '搜索标题、DOI、arXiv 编号或本地文献…'),
   citationsSearchLabel: () => t('Search or switch analyzed paper', '搜索或切换分析文献'),
   citationsPickPaper: () => t('Search or pick paper…', '搜索或选择文献…'),

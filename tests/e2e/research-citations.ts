@@ -178,7 +178,8 @@ async function run(): Promise<void> {
         }
         if (body.op === 'graph.search') {
           const q = String(body.payload?.query ?? '').toLowerCase();
-          const papers = q.includes('attention') ? [{ id: 'W-ATT', openAlexId: 'W-ATT', title: extTarget.title, authors: extTarget.authors, firstAuthor: 'Ashish Vaswani', lastAuthor: 'Ashish Vaswani', year: 2017, arxivId: '1706.03762', venue: 'NeurIPS', source: 'openalex', inLibrary: false }] : [];
+          if (q.includes('rate-limited')) { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], degraded: ['openalex', 'europepmc'] }) }); return; }
+          const papers = q.includes('attention') ? [{ id: 'W-ATT', openAlexId: 'W-ATT', title: extTarget.title, authors: extTarget.authors, firstAuthor: 'Ashish Vaswani', lastAuthor: 'Ashish Vaswani', year: 2017, citationCount: 128000, arxivId: '1706.03762', venue: 'NeurIPS', source: 'openalex', inLibrary: false }] : [];
           await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers, degraded: [] }) });
           return;
         }
@@ -243,8 +244,12 @@ async function run(): Promise<void> {
       assert.equal(await ws.locator('.cit-facets select[data-facet="section"]').inputValue(), '');
 
       await ws.locator('.cit-wb-trigger').click();
+      await ws.locator('.cit-wb-search').fill('rate-limited');
+      await ws.locator('.cit-wb-picker .pp-ext-note').waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.cit-wb-picker .pp-ext-note').innerText(), /External search unavailable/);
       await ws.locator('.cit-wb-search').fill('Attention');
       await ws.locator('.cit-wb-picker .pp-opt.is-external').waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.cit-wb-picker .pp-opt.is-external .pp-opt-meta').innerText(), /128k cited/);
       await ws.locator('.cit-wb-picker .pp-opt.is-external').click();
       await ws.locator('.cit-card', { hasText: 'BERT Pre-training' }).waitFor({ state: 'visible' });
       assert.match(await ws.locator('.cit-title').innerText(), /Attention Is All You Need/);
@@ -257,6 +262,11 @@ async function run(): Promise<void> {
       assert.match(await ws.locator('.cit-title').innerText(), /Direct DOI Benchmark Paper/);
       assert.equal(await ws.locator('.cit-recent-chip[data-recent-key="doi:10.1000/ext-direct"]').getAttribute('aria-pressed'), 'true');
 
+      await ws.locator('.cit-recent-chip[data-recent-key="arxiv:1706.03762"]').click();
+      await ws.locator('.cit-card', { hasText: 'BERT Pre-training' }).waitFor({ state: 'visible' });
+      assert.match(await ws.locator('.cit-title').innerText(), /Attention Is All You Need/);
+      assert.match(await ws.locator('.cit-recent-chip[data-recent-key="arxiv:1706.03762"]').innerText(), /Attention Is All You Need[\s\S]*2017/);
+
       await ws.locator(`.cit-recent-chip[data-recent-key="doc:${localDocId}"]`).click();
       await ws.locator('.cit-card', { hasText: 'Paper B Support One' }).waitFor({ state: 'visible' });
       assert.equal(await ws.locator(`.cit-recent-chip[data-recent-key="doc:${localDocId}"]`).getAttribute('aria-pressed'), 'true');
@@ -264,6 +274,7 @@ async function run(): Promise<void> {
       await ws.locator('.rw-nav-btn[data-view="citations"]').click();
       assert.match(await ws.locator('.cit-title').innerText(), /Adaptive Block Scheduling/);
       await ws.locator('.cit-wb-trigger').click();
+      assert.match((await ws.locator('.cit-wb-picker .pp-current-btn').getAttribute('title')) ?? '', /PagedAttention/);
       await ws.locator('.cit-wb-picker .pp-current-btn').click();
       await ws.locator('.cit-title', { hasText: 'PagedAttention' }).waitFor({ state: 'visible' });
       await ws.locator('.cit-recent-chip[data-recent-key="arxiv:1706.03762"]').waitFor({ state: 'visible' });
@@ -386,11 +397,16 @@ async function run(): Promise<void> {
       await zhPage.route('**/api/paper-reader/action', async route => {
         const body = route.request().postDataJSON() as { op?: string };
         if (body.op === 'citations.analyze') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ target, direction: 'cited_by', tallies: calcTallies(citedStmts), statements: citedStmts, sciteUrl: target.sciteUrl, degraded: [], fromCache: false, offline: true }) }); return; }
+        if (body.op === 'graph.search') { await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ papers: [], degraded: ['openalex'] }) }); return; }
         await route.fallback();
       });
       await zhPage.locator('#mobileRail').click(); await zhPage.locator('#refsTab').click();
       await zhPage.locator('.ref-cit-all').click(); await zhPage.locator('.cit-card').first().waitFor({ state: 'visible' });
-      const zhItems = await collectChromeStrings(zhPage, '.cit-title, .cit-byline, .cit-wb-title, .cit-recent-chip, .cit-card-title, .cit-meta-text, .cit-ctx-text, .cit-rationale');
+      await zhPage.locator('.cit-wb-trigger').click();
+      await zhPage.locator('.cit-wb-search').fill('rate-limited');
+      await zhPage.locator('.cit-wb-picker .pp-ext-note').waitFor({ state: 'visible' });
+      assert.equal(await zhPage.locator('.cit-wb-picker .pp-current-btn').innerText(), '当前精读文献');
+      const zhItems = await collectChromeStrings(zhPage, '.cit-title, .cit-byline, .cit-wb-title, .cit-recent-chip, .pp-current-btn, .cit-card-title, .cit-meta-text, .cit-ctx-text, .cit-rationale');
       assertNoZhEnglishLeaks(zhItems, 'zh-CN Citations View');
       assert.equal(zhItems.some(s => /智能引用大卡|摘要存根|纳排筛选/.test(s.text)), false);
       assert.deepEqual(await zhPage.locator('.cit-facets select[data-facet="section"] option').allInnerTexts(), ['全部', 'Introduction', 'Methods', 'Results', 'Discussion', '未知']);

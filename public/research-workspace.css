@@ -229,6 +229,7 @@
 .pp-current-btn { width: 100%; justify-content: flex-start; min-height: 28px; padding: 4px 12px; font-size: 12px; color: var(--purple); background: var(--lavender); border-color: var(--quote-border); }
 .pp-count { font-size: 11px; color: var(--muted); padding: 0 4px; font-variant-numeric: tabular-nums; }
 .pp-section-label { font-size: 11px; font-weight: 600; color: var(--muted); padding: 8px 4px 4px; border-top: 1px solid var(--line); }
+.pp-ext-note { margin: 4px 0 0; padding: 8px 4px 4px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.45; color: var(--warn); }
 .cm-seed-input { flex: 1; min-width: 150px; min-height: 32px; padding: 4px 12px; font-size: 12px; }
 .cm-dir-group { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .cm-cap { padding: 2px 8px; border-radius: 999px; background: var(--surface-sunken); border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -910,7 +911,7 @@ a.ft-paper-title:hover { color: var(--purple); text-decoration: underline; }
   .cit-title-wrap, .cit-refresh-btn { display: none; }
   .cit-head { padding: 4px 8px; gap: 8px; } .cit-head-controls { width: 100%; flex-wrap: nowrap; }
   .cit-wb-wrap { flex: 1; min-width: 0; } .cit-wb-trigger { width: 100%; min-width: 0; max-width: none; }
-  .cit-wb-picker { inset-inline-start: 0; inset-inline-end: auto; width: calc(100vw - 16px); max-width: 374px; }
+  .cit-wb-picker { inset-inline-start: 0; inset-inline-end: auto; width: calc(100vw - 16px); max-width: 376px; }
   .cit-recent-strip { padding: 8px; } .cit-recent-list { scrollbar-width: none; } .cit-recent-chip { max-width: 200px; }
   .cit-filters-toggle { display: inline-flex; flex: none; padding-inline: 12px; }
   .cit-subbar { padding: 6px 10px; gap: 6px; flex-wrap: wrap; overflow-x: visible; }

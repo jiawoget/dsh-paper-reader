@@ -205,13 +205,21 @@ export async function searchAcademicPapers(rawQuery: string, rawLimit: number | 
     const res = await resolveAcademicPaper(query, ctx);
     return { papers: res.paper ? [res.paper] : [], degraded: res.degraded };
   }
-  const degraded = new Set<string>(), key = `oa:typeahead:${limit}:${normTitle(query).slice(0, 80)}`;
-  const res = await fetchJson('openalex', key, oaUrl('/works', { search: query, 'per-page': String(limit) }, ctx.settings), ctx, degraded, 3_600_000);
+  const degraded = new Set<string>(), qKey = normTitle(query).slice(0, 80) || query.slice(0, 80);
+  const res = await fetchJson('openalex', `oa:typeahead:${limit}:${qKey}`, oaUrl('/works', { search: query, 'per-page': String(limit) }, ctx.settings), ctx, degraded, 3_600_000);
   const papers = arrOf(isObject(res?.data) ? res.data.results : undefined).flatMap(r => {
     const w = parseOaWork(r);
     return w ? [attachLibraryMatch(w.paper, ctx.docs)] : [];
   });
-  return { papers, degraded: [...degraded] };
+  if (!papers.length && degraded.has('openalex')) {
+    const epmcUrl = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&format=json&resultType=core&pageSize=${limit}`;
+    const fb = await fetchJson('europepmc', `epmc:typeahead:${limit}:${qKey}`, epmcUrl, ctx, degraded, 3_600_000);
+    for (const row of arrOf(isObject(fb?.data) && isObject(fb.data.resultList) ? fb.data.resultList.result : undefined)) {
+      const p = parseEpmcItem(row);
+      if (p) papers.push(attachLibraryMatch(p, ctx.docs));
+    }
+  }
+  return { papers: papers.slice(0, limit), degraded: [...degraded] };
 }
 export async function exploreCitationGraph(params: { seeds: string[]; direction: GraphDirection; negativeSeeds?: string[]; limit?: number }, ctx: GraphContext): Promise<GraphExploreResult> {
   const limit = Math.min(45, Math.max(25, Math.floor(params.limit ?? 35))), degraded = new Set<string>(), resolvedSeeds: ResolvedWork[] = [], seedKeySet = new Set<string>();

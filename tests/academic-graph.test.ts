@@ -14,7 +14,9 @@ import {
 import { filterLibraryPapers, PAPER_PICKER_VISIBLE_CAP } from '../src/reader/research/paper-picker.js';
 import type { DocumentInfo, GraphEdge, GraphNode, GraphPaper } from '../src/shared/types.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, searchAcademicPapers, type GraphContext } from '../src/server/academic-graph.js';
+import { analyzeCitations, reclassifyCitation } from '../src/server/citation-stance.js';
 import { Library } from '../src/server/library.js';
+import { ReaderModel } from '../src/server/reader-model.js';
 import { ReaderStore } from '../src/server/reader-store.js';
 import { ensureResearchSchema, getGraphCache, setGraphCache } from '../src/server/research-store.js';
 import { ServiceError } from '../src/server/service-types.js';
@@ -392,8 +394,16 @@ test('searchAcademicPapers handles blank, direct DOI/arXiv, OpenAlex search with
     const bySearch = await searchAcademicPapers('attention', 99, ctx);
     assert.ok(seenUrls.some(u => u.includes('per-page=15')) && bySearch.papers.length === 2);
     assert.ok(bySearch.papers[0].inLibrary === true && bySearch.papers[0].docId === 'doc-lib' && bySearch.papers[1].inLibrary === false);
+    const fbFetch: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('api.openalex.org')) return jsonRes({}, 429);
+      if (url.includes('europepmc')) return jsonRes({ resultList: { result: [{ pmid: '990011', title: 'Local DOI Match', doi: '10.1000/local-hit', pubYear: '2024', authorString: 'Ada Lovelace', citedByCount: '42' }] } });
+      return jsonRes({}, 404);
+    };
+    const fbRes = await searchAcademicPapers('fallback query', 5, { ...ctx, fetchFn: fbFetch });
+    assert.ok(fbRes.papers.length === 1 && fbRes.papers[0].docId === 'doc-doi' && fbRes.papers[0].inLibrary && fbRes.degraded.includes('openalex') && !fbRes.degraded.includes('europepmc'));
     const offline = await searchAcademicPapers('offline query', 5, { ...ctx, fetchFn: async () => { throw new Error('offline'); } });
-    assert.deepEqual(offline, { papers: [], degraded: ['openalex'] });
+    assert.deepEqual(offline, { papers: [], degraded: ['openalex', 'europepmc'] });
   } finally { db.close(); }
 });
 
@@ -408,16 +418,48 @@ test('citations workbench recent list dedupes, caps, parses corrupt JSON, and pa
   list = upsertRecentCitations(list, { title: 'Paper 5 Updated', year: 2021, docId: 'local-5', doi: '10.1000/p5' }, 6);
   assert.equal(list.length, 6);
   assert.ok(list[0].docId === 'local-5' && list.filter(x => x.doi === '10.1000/p5').length === 1);
+  let extList = upsertRecentCitations([], { title: 'Attention Is All You Need', year: 2017, arxivId: '1706.03762' });
+  extList = upsertRecentCitations(extList, { title: '10.48550/arxiv.1706.03762', doi: '10.48550/arXiv.1706.03762' });
+  assert.ok(extList.length === 1 && extList[0].title === 'Attention Is All You Need' && extList[0].year === 2017 && extList[0].arxivId === '1706.03762');
   assert.deepEqual(parseRecentCitations('{broken'), []);
   assert.deepEqual(parseRecentCitations('{"not":"array"}'), []);
   const roundtrip = parseRecentCitations(JSON.stringify([...list, { bad: true }, { title: '' }]));
   assert.equal(roundtrip.length, 6);
   assert.equal(roundtrip[0].key, list[0].key);
   const docs: DocumentInfo[] = [{ id: 'doc-ax', kind: 'pdf', title: 'Attention', url: 'https://arxiv.org/abs/1706.03762', doi: '10.1000/exact' }];
+  assert.equal(filterLibraryPapers(docs, '1706.03762').items[0]?.id, 'doc-ax');
   assert.deepEqual(parseDirectCitationTarget('https://arxiv.org/abs/1706.03762', docs), { docId: 'doc-ax', doi: '', arxivId: '1706.03762', query: '' });
   assert.deepEqual(parseDirectCitationTarget('10.48550/arXiv.2309.06180', docs), { docId: '', doi: '', arxivId: '2309.06180', query: '' });
   assert.deepEqual(parseDirectCitationTarget('10.1000/exact', docs), { docId: 'doc-ax', doi: '10.1000/exact', arxivId: '', query: '' });
   assert.deepEqual(parseDirectCitationTarget('10.1000/external-doi', docs), { docId: '', doi: '10.1000/external-doi', arxivId: '', query: '' });
   assert.deepEqual(parseDirectCitationTarget('PMID:123456', docs), { docId: '', doi: '', arxivId: '', query: 'PMID:123456' });
   assert.equal(parseDirectCitationTarget('Attention Is All You Need', docs), null);
+});
+
+test('analyzeCitations resolves canonical keys/metadata for PMID, OpenAlex ID, and raw queries and preserves them on cache hits', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'reader-cit-canon-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ReaderStore(root), library = new Library(root, undefined, id => store.deleteDocument(id));
+  const s2Cit = (id: string, title: string) => ({ data: [{ isInfluential: false, intents: ['background'], contexts: ['Prior work established this benchmark clearly in clinical testing.'], citingPaper: { paperId: id, title, year: 2024, authors: [{ name: 'Eva Chen' }] } }] });
+  const fetchFn: typeof fetch = async input => {
+    const url = String(input);
+    if (url.includes('/works/pmid:123456')) return jsonRes(makeOa('W123', 'Real Clinical Trial Paper', 2023, 410, [], { doi: 'https://doi.org/10.1056/NEJMoa123456', ids: { pmid: 'https://pubmed.ncbi.nlm.nih.gov/123456' } }));
+    if (url.includes('/works/W2741809807')) return jsonRes(makeOa('W2741809807', 'Real OpenAlex Work Title', 2021, 95, [], { doi: 'https://doi.org/10.1000/oa-real' }));
+    if (url.includes('search=attention')) return jsonRes({ results: [makeOa('W302', 'Attention Is All You Need', 2017, 90000, [], { doi: 'https://doi.org/10.48550/arXiv.1706.03762' })] });
+    if (url.includes('semanticscholar.org') && url.includes('/citations')) return jsonRes(s2Cit('s2-1', 'Citing Followup'));
+    return jsonRes({}, 404);
+  };
+  const deps = { store, library, model: new ReaderModel(undefined, fetchFn), fetchFn, sleepFn: async () => {} };
+  const byPmid = await analyzeCitations(deps, { query: 'PMID:123456' });
+  assert.ok(byPmid.target.title === 'Real Clinical Trial Paper' && byPmid.target.targetKey === 'doi:10.1056/nejmoa123456' && byPmid.target.year === 2023 && byPmid.target.authors.length === 2);
+  reclassifyCitation({ store }, { targetKey: byPmid.target.targetKey, direction: 'cited_by', citingKey: 's2:s2-1', stance: 'supporting' });
+  const cachedPmid = await analyzeCitations({ ...deps, fetchFn: async () => { throw new Error('offline'); } }, { doi: '10.1056/NEJMoa123456' });
+  assert.ok(cachedPmid.fromCache && cachedPmid.target.title === 'Real Clinical Trial Paper' && cachedPmid.target.year === 2023 && cachedPmid.target.authors.includes('Alice Smith'));
+  assert.ok(cachedPmid.statements[0]?.manualOverride === true && cachedPmid.statements[0]?.stance === 'supporting');
+  const byOa = await analyzeCitations(deps, { query: 'W2741809807' });
+  assert.ok(byOa.target.title === 'Real OpenAlex Work Title' && byOa.target.targetKey === 'doi:10.1000/oa-real');
+  const byRaw = await analyzeCitations(deps, { query: 'attention' });
+  assert.ok(byRaw.target.title === 'Attention Is All You Need' && byRaw.target.targetKey === 'arxiv:1706.03762');
+  const cachedRaw = await analyzeCitations({ ...deps, fetchFn: async () => { throw new Error('offline'); } }, { doi: '10.48550/arXiv.1706.03762', arxivId: '1706.03762' });
+  assert.ok(cachedRaw.fromCache && cachedRaw.target.title === 'Attention Is All You Need' && cachedRaw.target.year === 2017 && cachedRaw.target.authors.length === 2);
 });
