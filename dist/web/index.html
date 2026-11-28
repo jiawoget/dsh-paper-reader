@@ -6,8 +6,8 @@
   <meta name="referrer" content="no-referrer">
   <title>Paper Reader</title>
   <link rel="preload" href="./assets/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="modulepreload" href="./app.js?v=d4943faaabef">
-  <link rel="stylesheet" href="./reader.bundle.css?v=abad80c260a1">
+  <link rel="modulepreload" href="./app.js?v=9bee65a49a10">
+  <link rel="stylesheet" href="./reader.bundle.css?v=2a48a47cd2e2">
 </head>
 <body>
   <main id="reader">
@@ -45,7 +45,7 @@
         <div id="pdfThemeMenu" class="pdf-theme-menu" role="menu" popover="auto" aria-label="PDF paper theme"></div>
       </header>
       <div id="pageFormat" hidden><span id="pageTextHint"></span><button id="placePin" class="btn" type="button">Add page note</button><button id="readText" class="btn" type="button" aria-controls="original">Read text</button></div>
-      <div class="headings"><span><b>Original</b><small id="sourceInfo"></small></span><span class="target-heading" id="pinHeading"><span><b>Translation</b><small id="translationInfo" hidden></small></span><select id="targetLang" aria-label="Translation language" title="Translation language"></select><select id="translationMode" aria-label="Translation scope" title="Translation scope"><option value="page">Full page</option><option value="column">Active column</option><option value="passage">Active passage</option></select><button id="retranslatePage" class="btn" type="button" hidden>Re-translate</button><button id="translate" hidden>Translate page</button></span></div>
+      <div class="headings"><span><b>Original</b><small id="sourceInfo"></small></span><span class="target-heading" id="pinHeading"><span><b>Translation</b><small id="translationInfo" hidden></small></span><select id="targetLang" aria-label="Translation language" title="Translation language"></select><select id="translationMode" aria-label="Translation scope" title="Translation scope"><option value="page">Full page</option><option value="column">Active column</option><option value="passage">Active passage</option></select><button id="retranslatePage" class="btn" type="button" hidden>Re-translate</button></span></div>
       <div id="paperScroll" tabindex="0" aria-label="Document pages">
         <div class="pages"><div class="lane"><div id="original"></div></div><div id="pageSplit" class="desk-split" role="separator" tabindex="0" aria-label="Resize original and translation" aria-orientation="vertical" aria-controls="original translated" title="Resize original and translation"></div><div class="lane translated"><div id="translated"></div></div></div>
         <div id="loading" role="status">Opening document…</div>
@@ -78,6 +78,6 @@
   <dialog id="dialog" aria-labelledby="dialogTitle"><header><h2 id="dialogTitle"></h2><button id="closeDialog" class="icon-btn" aria-label="Close dialog"></button></header><div id="dialogBody"></div></dialog>
   <dialog id="shortcutsDialog" aria-labelledby="shortcutsTitle"><header><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button id="closeShortcuts" type="button" class="icon-btn" aria-label="Close keyboard shortcuts"></button></header><div id="shortcutsBody"></div></dialog>
   <div id="toast" role="status" hidden></div>
-  <script type="module" src="./app.js?v=d4943faaabef"></script>
+  <script type="module" src="./app.js?v=9bee65a49a10"></script>
 </body>
 </html>

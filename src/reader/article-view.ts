@@ -169,11 +169,12 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     for (const sheet of [original, translated]) sectionFooter(sheet, doc, page, onBookSection);
   }
 
-  let pending: ReadonlySet<string> = new Set();
+  let pending = new Set<string>();
   function setTranslations(values: Record<string, string>, overwrite = false): void {
     for (const [id, { block, translation }] of pairs) {
       if (unchangedArticleBlock(doc.articleLayout?.[id]?.kind)) { block.translation = block.text; continue; }
       const supplied = values[id]?.trim() || undefined;
+      if (supplied) pending.delete(id);
       block.translation = overwrite ? (supplied ?? block.translation) : (block.translation || supplied);
       const busy = !block.translation && pending.has(id);
       translation.classList.toggle('is-untranslated', !block.translation);
@@ -350,7 +351,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
   }
   const view: PageView = {
     blocks: Array.from(pairs.values(), pair => pair.block), highlight, select, setTranslations,
-    setPendingBlocks(ids) { pending = ids; setTranslations({}); },
+    setPendingBlocks(ids) { pending = new Set(ids); setTranslations({}); },
     ...(regions && {
       beginRegion: (attach?: boolean) => regions.begin(attach), cancelRegion: () => regions.end(),
       reopenRegion: (id: string, receive?: RegionAction) => regions.reopen(id, receive)

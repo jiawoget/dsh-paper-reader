@@ -10,7 +10,7 @@ import { AnnotationLayer } from './annotation-layer.js';
 import { discardNotebook, insertNotebookPassage, leaveNotebook, refreshNotebookHighlights } from './notebook-loader.js';
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
 import { renderArticle } from './article-view.js';
-import { ArticleTranslationController } from './article-translation-controller.js';
+import { ArticleTranslationController, canTranslateDocument } from './article-translation-controller.js';
 import { abstractOnlyLabel, attachPdfToAbstract, renderAbstractView } from './abstract-view.js';
 import { initReaderChrome, openLibraryLabel } from './reader-chrome.js';
 import { installCitationPreviews } from './citation-preview.js';
@@ -113,7 +113,6 @@ class Reader implements ReaderPort {
     return this.view && 'setTextView' in this.view ? this.view as PdfPageView : undefined;
   }
   get pageCount(): number { return this.pdf?.pages || this.doc.book?.sections.length || 0; }
-  private readonly translate=byId<HTMLButtonElement>('translate');
   private readonly articleTranslator=new ArticleTranslationController({
     doc:()=>this.doc, page:()=>this.page, view:()=>this.view, isPdf:()=>Boolean(this.pdf), isBilingual:()=>this.parallel,
     settings:()=>this.state.settings, targetLanguage:()=>this.targetLanguage, targetLanguageLabel:()=>this.targetLanguageLabel,
@@ -394,7 +393,7 @@ class Reader implements ReaderPort {
       this.remember(anchor,quote,target,range);return;
     }
     const version=++this.epoch;
-    this.navigating=version;
+    this.navigating=version; this.articleTranslator.abort();
     byId('loading').textContent=label('Opening document…','正在打开文档…');byId('loading').hidden=false;
     try{
       const changed=Boolean(options?.forceReload) || id!==this.loadedId;
@@ -510,7 +509,6 @@ class Reader implements ReaderPort {
       if(this.desk.focus!==options.focusMode)view.setFocusMode(this.desk.focus);
       if(this.zoom!==options.zoom)view.setZoom(this.zoom);
       this.updatePageFormat();
-      this.translate.hidden=true;
       this.syncRetranslate();
       if(this.parallel)void this.translatePdf(view,doc,page);
     };
@@ -562,11 +560,10 @@ class Reader implements ReaderPort {
       throw error;
     } finally { opening.abort(); }
     if(version!==this.epoch){view.dispose?.();return;}
-    this.view=view;this.translate.disabled=false;
+    this.view=view;
     this.contents.document(doc,page,pdf);
     this.updatePageFormat();
     this.paintMarks();
-    this.translate.hidden=true;
     this.syncRetranslate();
     byId('loading').hidden=true;
     this.repaintNotes();
@@ -606,19 +603,11 @@ class Reader implements ReaderPort {
       this.card.refresh();
       const missing = view.blocks.filter(block => !block.translation);
       if (!missing.length) return;
-      const canUseLocal = Boolean(this.state.settings.localTranslationAvailable) && targetsSimplifiedChinese(target);
-      if (this.state.settings.aiMode === 'unconfigured' && !canUseLocal) {
+      if (!canTranslateDocument(this.state.settings, target)) {
         const guidance = this.state.settings.localTranslationAvailable && !targetsSimplifiedChinese(target)
-          ? label(
-              'The built-in offline translator only supports Simplified Chinese. Connect a translation model in Connections to translate into ' + targetName + '.',
-              '内置离线翻译仅支持简体中文。请在连接设置中配置翻译模型以翻译为' + targetName + '。'
-            )
-          : label(
-              'Connect a translation model to read this page in ' + targetName + '.',
-              '请连接翻译模型以将本页翻译为' + targetName + '。'
-            );
-        view.setTranslationState('unavailable', guidance, [connections, retry]);
-        return;
+          ? label('The built-in offline translator only supports Simplified Chinese. Connect a translation model in Connections to translate into ' + targetName + '.', '内置离线翻译仅支持简体中文。请在连接设置中配置翻译模型以翻译为' + targetName + '。')
+          : label('Connect a translation model to read this page in ' + targetName + '.', '请连接翻译模型以将本页翻译为' + targetName + '。');
+        view.setTranslationState('unavailable', guidance, [connections, retry]); return;
       }
       view.setTranslationState('loading', label('Translating this page into ' + targetName + '…', '正在将本页翻译为' + targetName + '…'));
       const key = doc.id + ':' + page + ':' + target;
@@ -643,7 +632,7 @@ class Reader implements ReaderPort {
       if(active())this.syncRetranslate();
     }
   }
-  private syncRetranslate():void { this.pdfControls?.syncRetranslate(Boolean(this.view && this.translate.hidden && this.view.blocks.some(b=>b.translation))); }
+  private syncRetranslate():void { this.pdfControls?.syncRetranslate(Boolean(this.view?.blocks.some(b=>b.translation))); }
   async retranslateBlocks(blockIds?: string[]):Promise<void> {
     if(!this.view)return;
     if(!blockIds?.length && !this.pdf){await this.articleTranslator.start(true);return;}
@@ -825,7 +814,6 @@ class Reader implements ReaderPort {
       this.readingText=false;this.placingPin=true;this.updatePageFormat();this.markLayer.place(true);
     };
     click('readText',toggleReadText); click('placePin',togglePlacePin);
-    click('translate',()=>this.articleTranslator.start());
     window.addEventListener('paper-reader:reextract-matrix',event=>this.openResearchWorkspace('review-table',{docId:(event as CustomEvent<{docId?:string}>).detail?.docId}));
     const resizePages=(value:ZoomSetting)=>{
       this.zoom=value; this.desk.setZoom(value);

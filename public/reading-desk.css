@@ -168,7 +168,6 @@
 .headings .target-heading { grid-column: 3; justify-content: flex-start; }
 .target-heading > span { min-width: 0; flex-wrap: nowrap; }
 .target-heading small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#translate { color: var(--purple); font-size: 12px; font-weight: 600; }
 #pinHeading { flex-wrap: wrap; gap: 4px 5px; }
 #pinHeading > span { flex: 1 1 120px; margin-inline-end: auto; }
 #pinHeading > #placePin { min-height: 28px; padding-inline: 6px; font-size: 12px; }
@@ -836,7 +835,7 @@
   .mode-narrow { display: inline; }
   .mode-wide, #reader[data-reading-mode="bilingual"] :is(#pageSplit, .lane:not(.translated), .headings > span:not(.target-heading)),
   .workspace:has(#card[data-workspace="chat"]:not([hidden])) > .paper-chat[data-open="false"], #card[data-workspace="chat"] > .selection-main { display: none; }
-  .toc-entry, .toc-chapter > summary, .toc-fold, .headings, #translationMode, #pinHeading > #placePin, .target-heading #translate,
+  .toc-entry, .toc-chapter > summary, .toc-fold, .headings, #translationMode, #pinHeading > #placePin,
   #highlightDisplay, #returnDiscussion, #readText, #placePin, #pageJump :is(input, .btn), .citation-export .btn,
   #reader #menu :is(button, #zoom) { min-height: 44px; }
   .toc-fold { width: 44px; }
