@@ -8606,8 +8606,8 @@ function createServices({ root, ctx, fetchImpl = globalThis.fetch, openObsidian 
 // src/server/static-cache.ts
 import { createHash as createHash9 } from "node:crypto";
 import { readFile as readFile3, stat } from "node:fs/promises";
-var IMMUTABLE_PREFIXES = ["vendor/", "app/chunks/", "app/assets/fonts/", "app/katex/fonts/"];
-var LONG_CACHE_PREFIXES = ["app/assets/", "app/katex/"];
+var IMMUTABLE_PREFIXES = ["app/chunks/"];
+var LONG_CACHE_PREFIXES = ["vendor/", "app/assets/", "app/katex/"];
 function shortDigest(bytes) {
   return createHash9("sha256").update(bytes).digest("hex").slice(0, 12);
 }
@@ -8642,7 +8642,7 @@ function createStaticAssetHandler(url, file, contentType) {
       "referrer-policy": "no-referrer"
     };
     if (etagMatches(req.headers.get("if-none-match"), cached.etag)) return new Response(null, { status: 304, headers });
-    return new Response(req.method === "HEAD" ? null : new Uint8Array(cached.bytes), { headers });
+    return new Response(req.method === "HEAD" ? null : cached.bytes, { headers });
   };
 }
 function pdfBytesResponse(req, bytes) {

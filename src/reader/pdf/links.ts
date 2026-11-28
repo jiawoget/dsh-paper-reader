@@ -1,4 +1,5 @@
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/types/src/display/api.js';
+import { dedupeCitePdfLinks } from '../citation-preview.js';
 import { el, readerLabel as label, safeWeb } from '../ui.js';
 import { resolvePdfDestination, type PdfDestCache, type PdfLinkDestination } from './outline.js';
 
@@ -14,19 +15,6 @@ export function viewportBox(
   const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
   if (Number.isFinite(width) && Number.isFinite(height) && width >= 1 && height >= 1)
     return { x: Math.min(x1, x2), y: Math.min(y1, y2), width, height };
-}
-
-export function dedupeCitePdfLinks(plane: ParentNode): void {
-  const cites = Array.from(plane.querySelectorAll<HTMLElement>('.pdf-link[data-link-kind="cite"]'));
-  if (!cites.length) return;
-  const focuses = Array.from(plane.querySelectorAll<HTMLElement>('.pdf-citation-focus'), n => n.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0);
-  for (const link of cites) {
-    const r = link.getBoundingClientRect();
-    const hit = r.width > 0 && r.height > 0 && focuses.some(c => r.left < c.right && r.right > c.left && r.top < c.bottom && r.bottom > c.top);
-    link.tabIndex = hit ? -1 : 0;
-    link.style.pointerEvents = hit ? 'none' : '';
-    if (hit) link.setAttribute('aria-hidden', 'true'); else link.removeAttribute('aria-hidden');
-  }
 }
 
 export async function mountPdfLinks(

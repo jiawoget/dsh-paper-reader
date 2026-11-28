@@ -1,5 +1,5 @@
 import type { ChatSource } from '../shared/types.js';
-import { goToNoteChapter, type NotebookInsertion } from './notebook-loader.js';
+import { goToNoteChapter, loadedNotebook, loadNotebook, type NotebookInsertion } from './notebook-loader.js';
 import { paperNotebook } from './notes-panel.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';
@@ -48,6 +48,10 @@ export class AnswerNotebookAction {
   private restoreSaved(): void {
     for (const [text, entry] of this.state.entries) if (!entry.mounted()) this.state.entries.delete(text);
     if (this.state.entries.has(this.text) || !this.app.notebook?.markdown.includes(this.requestId)) return;
+    if (!loadedNotebook()) {
+      void loadNotebook().then(() => { if (this.root.isConnected) this.refresh(); }, () => undefined);
+      return;
+    }
     const saved = paperNotebook(this.app)?.savedAnswer(this.requestId, this.text);
     if (saved) this.state.entries.set(this.text, saved);
   }

@@ -1,7 +1,19 @@
 import type { OpenDocument } from '../shared/types.js';
 import { bibliography, citationGroups, type BibliographyEntry, type CitationGroup } from './bibliography.js';
-import { dedupeCitePdfLinks } from './pdf/links.js';
 import type { PdfDocument } from './pdf-view.js';
+
+export function dedupeCitePdfLinks(plane: ParentNode): void {
+  const cites = Array.from(plane.querySelectorAll<HTMLElement>('.pdf-link[data-link-kind="cite"]'));
+  if (!cites.length) return;
+  const focuses = Array.from(plane.querySelectorAll<HTMLElement>('.pdf-citation-focus'), n => n.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0);
+  for (const link of cites) {
+    const r = link.getBoundingClientRect();
+    const hit = r.width > 0 && r.height > 0 && focuses.some(c => r.left < c.right && r.right > c.left && r.top < c.bottom && r.bottom > c.top);
+    link.tabIndex = hit ? -1 : 0;
+    link.style.pointerEvents = hit ? 'none' : '';
+    if (hit) link.setAttribute('aria-hidden', 'true'); else link.removeAttribute('aria-hidden');
+  }
+}
 import { api, copyText, el, readerLabel as t, safeWeb, toast, webPageError } from './ui.js';
 
 const prose = '.selection-prose, .selection-excerpt blockquote, .selection-counterpart p, .selection-main .meaning, .selection-main .selection-context';

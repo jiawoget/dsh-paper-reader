@@ -4,13 +4,13 @@ import { readFile, stat } from 'node:fs/promises';
 interface CachedAsset {
   mtimeMs: number;
   size: number;
-  bytes: Uint8Array;
+  bytes: Uint8Array<ArrayBuffer>;
   hash: string;
   etag: string;
 }
 
-const IMMUTABLE_PREFIXES = ['vendor/', 'app/chunks/', 'app/assets/fonts/', 'app/katex/fonts/'];
-const LONG_CACHE_PREFIXES = ['app/assets/', 'app/katex/'];
+const IMMUTABLE_PREFIXES = ['app/chunks/'];
+const LONG_CACHE_PREFIXES = ['vendor/', 'app/assets/', 'app/katex/'];
 
 export function shortDigest(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex').slice(0, 12);
@@ -49,7 +49,7 @@ export function createStaticAssetHandler(url: string, file: string, contentType:
       'referrer-policy': 'no-referrer'
     };
     if (etagMatches(req.headers.get('if-none-match'), cached.etag)) return new Response(null, { status: 304, headers });
-    return new Response(req.method === 'HEAD' ? null : new Uint8Array(cached.bytes), { headers });
+    return new Response(req.method === 'HEAD' ? null : cached.bytes, { headers });
   };
 }
 

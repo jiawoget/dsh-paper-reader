@@ -203,8 +203,8 @@ class Reader implements ReaderPort {
   attachDiscussionPosition(header: HTMLElement, signal: AbortSignal): void { this.desk.attachDiscussion(header, signal); }
   showNotebook():void {
     this.tab='notes';
-    this.repaintNotes();
     this.desk.showNotebook();
+    this.repaintNotes();
   }
   private async openContentsEntry(destination:ContentsDestination):Promise<boolean> {
     const id=this.doc.id, page=destination.page, wasDrawer=this.desk.isNarrow && this.desk.notebookOpen;
@@ -339,7 +339,7 @@ class Reader implements ReaderPort {
     }
     if(contents)return;
     if(this.tab==='marks')this.marks.attach(body,readingPackBar(this,'marks'));
-    else if(this.tab==='notes')notesPanel(this,body);
+    else if(this.tab==='notes')notesPanel(this,body,this.desk.notebookOpen);
     else {body.replaceChildren();referencePanel(this,body);}
   }
   private keepSourceReply(source:URL):void {
@@ -922,7 +922,8 @@ class Reader implements ReaderPort {
   private toggleSidebar(tab:SidebarTab):void {
     if(this.desk.notebookOpen && this.tab===tab){this.desk.showNotebook(false);return;}
     const switching=this.desk.notebookOpen;
-    this.selectTab(tab);this.desk.showNotebook(true,tab==='contents');
+    this.desk.showNotebook(true,tab==='contents');
+    this.selectTab(tab);
     if(switching)byId(Object.entries(sidebarTabs).find(([,t])=>t===tab)![0]).focus({preventScroll:true});
   }
   private closeMenu(restoreFocus=false):void {

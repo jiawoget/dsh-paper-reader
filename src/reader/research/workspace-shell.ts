@@ -176,7 +176,12 @@ export class ResearchWorkspace {
       if (!this.modules.size) {
         this.main.append(el('p', 'hint', label('Loading…', '正在加载…')));
         void this.ensureViews().then(() => { if (seq === this.viewSeq && this.modules.has(view)) this.switchView(view, restoredState, scrollTop); })
-          .catch(error => { if (seq === this.viewSeq) toast(message(error)); });
+          .catch(error => {
+            if (seq !== this.viewSeq) return;
+            const text = message(error);
+            this.main.replaceChildren(el('p', 'hint', text));
+            toast(text);
+          });
       }
       return;
     }

@@ -85,7 +85,7 @@ export interface PdfDocument {
   destroy(): Promise<void>;
 }
 
-export const bundledPdfUrl = '/api/paper-reader/app/assets/pagedattention.pdf';
+export { bundledPdfUrl } from './pdf-loader.js';
 const vendor = '/api/paper-reader/vendor/';
 const hostOwners = new WeakMap<HTMLElement, AbortController>();
 

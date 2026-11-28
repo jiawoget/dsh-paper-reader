@@ -116,25 +116,28 @@ export function paperNotebook(app: ReaderPort) {
   return loadedNotebook()?.notebookEditor(app, sourceChip, () => settingsDialog(app, true));
 }
 
-export function notesPanel(app: ReaderPort, parent: HTMLElement): void {
+export function notesPanel(app: ReaderPort, parent: HTMLElement, loadEditor = true): void {
+  delete parent.dataset.notesPending;
   const editor = paperNotebook(app);
   const bar = readingPackBar(app, 'notes');
   if (editor) {
-    delete parent.dataset.notesPending;
     editor.attach(parent, app.doc.id === 'pagedattention' ? node => guide(app, node) : undefined, bar);
     return;
   }
-  parent.replaceChildren(el('p', 'hint', app.notebookError || label('Opening notes…', '正在打开笔记…')),
+  const hint = el('p', 'hint', app.notebookError || label('Opening notes…', '正在打开笔记…'));
+  parent.replaceChildren(hint,
     button(label('Obsidian vault settings', 'Obsidian 笔记库设置'), () => settingsDialog(app, true), 'text-btn'), bar);
-  if (!loadedNotebook() && !app.notebookError) {
+  if (loadEditor && !loadedNotebook() && !app.notebookError) {
     parent.dataset.notesPending = '1';
     void loadNotebook().then(() => {
       if (parent.isConnected && parent.dataset.notesPending === '1' && !parent.hidden && parent.getAttribute('aria-labelledby') === 'notesTab') {
-        notesPanel(app, parent);
+        notesPanel(app, parent, true);
       }
     }).catch(err => {
       delete parent.dataset.notesPending;
-      toast(err instanceof Error ? err.message : label('Could not load notes editor.', '无法加载笔记编辑器。'));
+      const text = err instanceof Error ? err.message : label('Could not load notes editor.', '无法加载笔记编辑器。');
+      hint.textContent = text;
+      toast(text);
     });
   }
 }
