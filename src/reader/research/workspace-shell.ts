@@ -1,3 +1,4 @@
+import { isTagPopoverOpen } from '../tag-picker.js';
 import { byId, el, message, readerLabel as label, toast } from '../ui.js';
 import { dismissInfoTip, researchIcon } from './icons.js';
 import { RESEARCH_VIEWS, researchText, researchViewMeta, researchViewName, type ResearchViewId } from './labels.js';
@@ -59,7 +60,7 @@ export class ResearchWorkspace {
       this.navButtons.set(view.id, btn); nav.append(btn); this.mobileSelect.append(new Option(name, view.id));
     }
     this.rail.append(railHead, nav); this.root.append(mobileBar, this.rail, this.backdrop, this.main); byId('reader').after(this.root);
-    this.floatBar = new PaperFloatBar(this.root, createWorkspaceFloatCallbacks(() => this.shellCtx));
+    this.floatBar = new PaperFloatBar(this.root, createWorkspaceFloatCallbacks(() => this.shellCtx), { isSuppressed: () => isTagPopoverOpen() });
     const switcher = el('div', 'rw-mode-switch');
     switcher.id = 'workspaceSwitch'; switcher.setAttribute('role', 'group'); switcher.ariaLabel = researchText.modeSwitch();
     const readBtn = el('button', 'rw-sw-btn rw-sw-read');
@@ -191,7 +192,8 @@ export class ResearchWorkspace {
       openContext: () => this.openCtx, openView: (next, nextCtx) => this.open(next, nextCtx),
       inspectInReader: target => this.inspectInReader(target), notifyDocumentMutated: (docId, deleted) => this.notifyDocumentMutated(docId, deleted),
       refreshNotebook: docId => this.host.refreshNotebook?.(docId), paperFloatBar: this.floatBar, openSettings: tab => this.host.openSettings?.(tab), arxivFormat: () => this.host.arxivFormat?.() ?? 'html',
-      createModelPicker: this.host.createModelPicker, currentQuestionModel: this.host.currentQuestionModel
+      createModelPicker: this.host.createModelPicker, currentQuestionModel: this.host.currentQuestionModel,
+      aiConfigured: this.host.aiConfigured, syncActiveDocMeta: this.host.syncActiveDocMeta
     };
     this.shellCtx = ctx;
     void Promise.resolve(mod.mount(this.main, ctx)).then(() => {

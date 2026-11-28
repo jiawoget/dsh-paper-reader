@@ -1,4 +1,4 @@
-import type { ArxivFormat, PageView, QuestionModel } from '../../shared/types.js';
+import type { ArxivFormat, DocMeta, PageView, QuestionModel } from '../../shared/types.js';
 import type { ReadingPosition } from '../jump-history.js';
 import type { questionModelButton } from '../question-model.js';
 import type { ResearchViewId } from './labels.js';
@@ -15,6 +15,7 @@ export interface ResearchShellContext {
   inspectInReader: (target: InspectTarget) => Promise<void>; notifyDocumentMutated: (docId: string, deleted?: boolean) => void; refreshNotebook?: (docId: string) => void;
   paperFloatBar?: PaperFloatBar; openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void; arxivFormat?: () => ArxivFormat;
   createModelPicker?: () => ReturnType<typeof questionModelButton>; currentQuestionModel?: () => QuestionModel | undefined;
+  aiConfigured?: () => boolean; syncActiveDocMeta?: (docId: string, meta: DocMeta) => void;
 }
 
 export interface ResearchViewModule {
@@ -28,6 +29,7 @@ export interface ResearchWorkspaceHost {
   inspectFromWorkspace: (target: InspectTarget, returnAnchor?: ReturnAnchor) => Promise<void>; focusAfterCollapse: () => void; refreshNotebook?: (docId: string) => void;
   openSettings?: (tab?: 'ai' | 'obsidian' | 'zotero' | 'academic') => void; arxivFormat?: () => ArxivFormat;
   createModelPicker?: () => ReturnType<typeof questionModelButton>; currentQuestionModel?: () => QuestionModel | undefined;
+  aiConfigured?: () => boolean; syncActiveDocMeta?: (docId: string, meta: DocMeta) => void;
 }
 
 const norm = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();

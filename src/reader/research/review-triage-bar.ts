@@ -1,5 +1,6 @@
 import { LIBRARY_PAGE_SIZE, rankDocsByRelevance, slicePage } from '../../shared/library-relevance.js';
 import type { ReviewDecision, ReviewExportFormat, ReviewRerankResult } from '../../shared/review-types.js';
+import { collectLibraryTags } from '../../shared/tags.js';
 import type { DocumentInfo, TopicRecord } from '../../shared/types.js';
 import { el, message, toast } from '../ui.js';
 import { researchText } from './labels.js';
@@ -69,18 +70,17 @@ export class ReviewTriageBar {
   saveState(): SavedTriageState { return { topicQuery: this.topicQuery, tagFilter: this.tagFilter, topicScope: this.topicScope, extractScope: this.extractScope }; }
   restoreState(s?: SavedTriageState): void { if (!s) return; this.topicQuery = this.topicIn.value = s.topicQuery ?? ''; this.tagFilter = s.tagFilter ?? ''; this.topicScope = s.topicScope ?? 'matches'; this.extractScope = s.extractScope ?? 'included'; }
   syncTags(docs: readonly DocumentInfo[], topics: readonly TopicRecord[]): void {
-    const tagMap = new Map<string, string>();
-    for (const tp of topics) { const tag = tp.tag || tp.name; if (tag) tagMap.set(tag, tp.name && tp.name !== tag ? `${tp.name} (#${tag})` : tag); }
-    for (const d of docs) for (const tag of d.meta?.tags ?? []) if (tag && !/^screen:/i.test(tag) && !tagMap.has(tag)) tagMap.set(tag, tag);
-    if (this.tagFilter && !tagMap.has(this.tagFilter)) this.tagFilter = '';
-    this.tagSel.replaceChildren(new Option(researchText.triageTagAll(), ''), ...[...tagMap.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([v, l]) => new Option(l, v)));
+    const sorted = [...collectLibraryTags(docs, topics)].sort((a, b) => (a.label ?? a.tag).localeCompare(b.label ?? b.tag));
+    const match = this.tagFilter ? sorted.find(s => s.tag.toLocaleLowerCase() === this.tagFilter.toLocaleLowerCase()) : undefined;
+    this.tagFilter = match ? match.tag : '';
+    this.tagSel.replaceChildren(new Option(researchText.triageTagAll(), ''), ...sorted.map(s => new Option(s.label ?? s.tag, s.tag)));
     this.tagSel.value = this.tagFilter;
   }
   computeView(docs: readonly DocumentInfo[], step: ReviewTriageStep, isIncluded: (doc: DocumentInfo) => boolean, extraTextByDocId?: ReadonlyMap<string, string>): TriageViewResult {
     this.step = step;
     const validIds = new Set(docs.map(d => d.id));
     for (const id of [...this.selectedIds]) if (!validIds.has(id)) this.selectedIds.delete(id);
-    const tagged = this.tagFilter ? docs.filter(d => d.meta?.tags?.includes(this.tagFilter)) : [...docs], q = this.topicQuery.trim(), hasQuery = q.length > 0;
+    const tf = this.tagFilter.toLocaleLowerCase(), tagged = tf ? docs.filter(d => d.meta?.tags?.some(tag => tag.toLocaleLowerCase() === tf)) : [...docs], q = this.topicQuery.trim(), hasQuery = q.length > 0;
     this.scores.clear();
     let ordered = tagged, matchedCount = 0;
     if (hasQuery) {

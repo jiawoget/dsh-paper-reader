@@ -213,6 +213,7 @@ export interface Operations {
   'library.progress.save': [{ docId: string; lastPage?: number; pageCount?: number; scrollFraction?: number }, { meta: DocMeta }];
   'library.triage': [{ docId: string; status?: DocStatus; starred?: boolean; tags?: string[] }, { meta: DocMeta }];
   'library.bulkTriage': [{ docIds: string[]; addTags?: string[]; removeTags?: string[]; status?: DocStatus; starred?: boolean }, { updated: number }];
+  'library.suggestTags': [{ docId: string }, { tags: string[]; source: 'ai' | 'offline' }];
   'library.search': [{ query: string }, { hits: LibrarySearchHit[] }];
   'pages.index': [{ docId?: string; force?: boolean }, { indexed: number; pages: number }];
   'pages.search': [{ query: string; docIds?: string[]; limit?: number }, { hits: DocPageHit[] }];

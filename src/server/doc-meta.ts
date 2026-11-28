@@ -1,6 +1,11 @@
 import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
 import type { PaperAnnotation } from '../shared/annotations.js';
+import { collectLibraryTags, isInternalTag, mergeTags, normalizeTagList, suggestOfflineTags } from '../shared/tags.js';
 import type { DocMeta, DocStatus, DocumentInfo, LibrarySearchHit } from '../shared/types.js';
+import type { Library } from './library.js';
+import type { ReaderModel, StreamOptions } from './reader-model.js';
+import type { ReaderStore } from './reader-store.js';
+import { getDocPages, listTopics } from './research-store.js';
 import { pageNumber, ServiceError, single, type Input } from './service-types.js';
 
 type Row = Record<string, SQLOutputValue>;
@@ -69,15 +74,7 @@ export function saveDocProgress(db: DatabaseSync, input: Input): DocMeta {
 
 function sanitizeTags(raw: unknown): string[] {
   if (!Array.isArray(raw) || raw.length > 50 || !raw.every(item => typeof item === 'string')) throw new ServiceError(400, 'Tags must be an array of strings.');
-  const seen = new Set<string>(), tags: string[] = [];
-  for (const item of raw) {
-    const clean = item.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
-    const key = clean.toLocaleLowerCase();
-    if (!clean || seen.has(key)) continue;
-    seen.add(key); tags.push(clean);
-    if (tags.length >= 20) break;
-  }
-  return tags;
+  return normalizeTagList(raw);
 }
 
 export function updateDocTriage(db: DatabaseSync, input: Input): DocMeta {
@@ -107,25 +104,50 @@ export function bulkUpdateDocTriage(db: DatabaseSync, input: Input, validIds: Re
   if (input.status === undefined && input.starred === undefined && addTags === undefined && removeTags === undefined) {
     throw new ServiceError(400, 'Provide tags, status, or starred to update.');
   }
-  const removeKeys = new Set((removeTags ?? []).map(tag => tag.toLocaleLowerCase()));
   const targets = docIds.filter(id => validIds.has(id));
   if (!targets.length) return { updated: 0 };
   const existing = listDocMeta(db);
   for (const docId of targets) {
     const prev = existing.get(docId) ?? { status: 'unread', starred: false, tags: [] };
-    let tags = prev.tags;
-    if (removeKeys.size || addTags?.length) {
-      const kept = prev.tags.filter(tag => !removeKeys.has(tag.toLocaleLowerCase()));
-      const seen = new Set(kept.map(tag => tag.toLocaleLowerCase()));
-      tags = [...kept];
-      for (const tag of addTags ?? []) {
-        const key = tag.toLocaleLowerCase();
-        if (!seen.has(key) && tags.length < 20) { seen.add(key); tags.push(tag); }
-      }
-    }
+    const tags = removeTags?.length || addTags?.length ? mergeTags(prev.tags, { remove: removeTags, add: addTags }) : prev.tags;
     upsertMeta(db, docId, { ...prev, status: input.status ?? prev.status, starred: input.starred ?? prev.starred, tags });
   }
   return { updated: targets.length };
+}
+
+const TAG_SUGGEST_SYSTEM = 'Suggest 2 to 4 concise topical tags (1-3 words each) for this academic paper. Prefer matching tags from existingTags first before inventing new tags. Never repeat currentTags and never use "screen:" prefixes. Return ONLY valid JSON shaped as {"tags":["tag1","tag2"]}.';
+
+function parseSuggestedTags(raw: string, currentKeys: ReadonlySet<string>): string[] {
+  const match = raw.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim().match(/\{[\s\S]*\}/);
+  if (!match) return [];
+  const parsed: unknown = JSON.parse(match[0]);
+  if (typeof parsed !== 'object' || parsed === null || !('tags' in parsed) || !Array.isArray(parsed.tags)) return [];
+  return normalizeTagList(parsed.tags.filter((v): v is string => typeof v === 'string'))
+    .filter(tag => !isInternalTag(tag) && !currentKeys.has(tag.toLocaleLowerCase())).slice(0, 4);
+}
+
+export async function suggestDocTags(
+  input: Input, deps: { store: ReaderStore; library: Library; model: ReaderModel }, options?: StreamOptions
+): Promise<{ tags: string[]; source: 'ai' | 'offline' }> {
+  const docId = single(input.docId, 'document ID', 512, true);
+  const [doc, docs] = await Promise.all([deps.library.get(docId), deps.library.list()]);
+  const { metas, topics, firstPage } = deps.store.withDb(false, db => ({
+    metas: listDocMeta(db), topics: listTopics(db), firstPage: doc.abstract ? '' : (getDocPages(db, doc.id)[0]?.text ?? '')
+  }));
+  const taxonomy = collectLibraryTags(docs.map(d => { const m = metas.get(d.id); return m ? { ...d, meta: m } : d; }), topics);
+  const excerpt = (doc.abstract || doc.paragraphs?.slice(0, 4).join(' ') || firstPage || '').replace(/\s+/g, ' ').trim().slice(0, 1400);
+  const docMeta = metas.get(doc.id), docWithExcerpt: DocumentInfo = { ...doc, meta: docMeta, abstract: excerpt };
+  const currentKeys = new Set((docMeta?.tags ?? []).map(t => t.toLocaleLowerCase()));
+  try {
+    const res = await deps.model.completeText(deps.store.settings(), TAG_SUGGEST_SYSTEM, {
+      title: doc.paperTitle || doc.title, venue: doc.venue ?? '', excerpt, currentTags: docMeta?.tags ?? [], existingTags: taxonomy.slice(0, 40).map(t => t.tag)
+    }, { signal: options?.signal });
+    const aiTags = parseSuggestedTags(res.text, currentKeys);
+    if (aiTags.length) return { tags: aiTags, source: 'ai' };
+  } catch (error) {
+    if (options?.signal?.aborted || (error instanceof ServiceError && error.status === 499)) throw error;
+  }
+  return { tags: suggestOfflineTags(docWithExcerpt, taxonomy, 4), source: 'offline' };
 }
 
 export async function bulkDeleteDocuments(

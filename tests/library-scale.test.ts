@@ -6,7 +6,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { filterDocsByQuery, LIBRARY_PAGE_SIZE, rankDocsByRelevance, slicePage } from '../src/shared/library-relevance.js';
-import type { DocumentInfo } from '../src/shared/types.js';
+import {
+  collectLibraryTags, filterTagStats, isInternalTag, MAX_DOC_TAGS, MAX_TAG_LEN,
+  mergeTags, normalizeTag, normalizeTagList, suggestOfflineTags
+} from '../src/shared/tags.js';
+import type { DocumentInfo, TopicRecord } from '../src/shared/types.js';
 import { ReaderStore } from '../src/server/reader-store.js';
 import { replaceDocPages } from '../src/server/research-store.js';
 import { createServices } from '../src/server/services.js';
@@ -129,5 +133,70 @@ test('520-paper backend scale: pages.search (>900 chunking), library.exportRefs,
     await assert.rejects(() => svc('library.chat', { docIds: overCap, question: 'test' }), hasHttpStatus(400));
     await assert.rejects(() => svc('pages.search', { query: 'test', docIds: overCap }), hasHttpStatus(400));
     await assert.rejects(() => svc('library.bulkDelete', { docIds: overCap }), hasHttpStatus(400));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('tag utilities normalize, deduplicate, collect 520-doc/120-tag taxonomy, and suggest offline tags', () => {
+  assert.equal(normalizeTag('  hello\x00\tworld  '), 'hello world');
+  assert.equal(normalizeTag('a'.repeat(60)).length, MAX_TAG_LEN);
+  assert.deepEqual([isInternalTag('screen:yes'), isInternalTag('systems')], [true, false]);
+  const cleaned = normalizeTagList(['Systems', 'systems', '  ML\n', '', ...Array.from({ length: 25 }, (_, i) => `tag-${i}`)]);
+  assert.equal(cleaned.length, MAX_DOC_TAGS);
+  assert.deepEqual(cleaned.slice(0, 3), ['Systems', 'ML', 'tag-0']);
+  assert.deepEqual(mergeTags(['Systems', 'NLP', 'ML'], { remove: ['nlp'], add: ['systems', 'Vision'] }), ['Systems', 'ML', 'Vision']);
+
+  const docs = makeSyntheticDocs(520).map((doc, i) => ({
+    ...doc,
+    meta: { status: doc.meta!.status, starred: doc.meta!.starred, tags: [i % 2 === 0 ? 'Systems' : 'systems', `bucket-${String(i % 120).padStart(3, '0')}`, ...(i % 5 === 0 ? ['screen:yes'] : [])] }
+  }));
+  const topics: TopicRecord[] = [{ id: 'tp-1', name: 'KV Cache Topic', tag: 'kv-cache', zoteroCollection: '', description: '', createdAt: '', updatedAt: '' }];
+  const t0 = performance.now(), stats = collectLibraryTags(docs, topics), elapsedMs = performance.now() - t0;
+  assert.ok(elapsedMs < 20, `Expected 520-doc/120-tag collectLibraryTags < 20ms, took ${elapsedMs.toFixed(2)}ms`);
+  assert.ok(stats.length >= 121 && stats[0].tag.toLocaleLowerCase() === 'systems' && stats[0].count === 520);
+  assert.ok(stats.every(s => !isInternalTag(s.tag)));
+  assert.equal(stats.find(s => s.tag === 'kv-cache')?.label, 'KV Cache Topic (#kv-cache)');
+
+  const top24 = filterTagStats(stats, '', 24), narrow = filterTagStats(stats, 'bucket-007', 24), novel = filterTagStats(stats, 'brand-new-tag', 24);
+  assert.deepEqual([top24.items.length, top24.hiddenCount, top24.createTag], [24, stats.length - 24, null]);
+  assert.deepEqual([narrow.items.length, narrow.createTag, novel.items.length, novel.createTag], [1, null, 0, 'brand-new-tag']);
+  assert.equal(filterTagStats(stats, 'screen:no', 24).createTag, null);
+
+  const sampleDoc: Pick<DocumentInfo, 'title' | 'paperTitle' | 'abstract' | 'venue' | 'meta'> = {
+    title: 'Sparse KV-Cache Quantization for Transformer Serving',
+    abstract: 'We introduce memory paging and speculative decoding to optimize GPU throughput.',
+    meta: { status: 'unread', starred: false, tags: ['kv-cache'] }
+  };
+  const tax = [{ tag: 'quantization', count: 12 }, { tag: 'transformer', count: 9 }, { tag: 'kv-cache', count: 8 }, { tag: 'robotics', count: 20 }];
+  const sug = suggestOfflineTags(sampleDoc, tax, 4);
+  assert.equal(sug.length, 4);
+  assert.deepEqual(sug.slice(0, 2), ['quantization', 'transformer']);
+  assert.ok(!sug.some(s => s.toLocaleLowerCase() === 'kv-cache') && sug.slice(2).every(s => s.length >= 3 && !isInternalTag(s)));
+});
+
+test('library.suggestTags uses LLM taxonomy suggestions when configured and falls back offline when unconfigured', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'paper-reader-tag-sug-'));
+  try {
+    const aiHost = {
+      llm: {
+        listProviders: () => [{ id: 'tag-mock' }], listModels: async () => [{ id: 'fast', name: 'Fast', inputModalities: ['text'] }],
+        stream: async function* () {
+          yield { type: 'text-delta', text: '```json\n{"tags":["quantization","existing-tag","screen:yes","memory-paging","kv-cache","extra-five"]}\n```' };
+          yield { type: 'finish', reason: { kind: 'stop' } };
+        }
+      }
+    };
+    const svcAi = createServices({ root, ctx: aiHost });
+    const doc = (await svcAi('library.createAbstract', {
+      title: 'Sparse Attention and Memory Paging for Serving',
+      abstract: 'Quantization and paging reduce GPU memory waste in long-context inference.'
+    })).doc;
+    await svcAi('library.triage', { docId: doc.id, tags: ['existing-tag'] });
+    const aiRes = await svcAi('library.suggestTags', { docId: doc.id });
+    assert.equal(aiRes.source, 'ai');
+    assert.deepEqual(aiRes.tags, ['quantization', 'memory-paging', 'kv-cache', 'extra-five']);
+
+    const offRes = await createServices({ root })('library.suggestTags', { docId: doc.id });
+    assert.equal(offRes.source, 'offline');
+    assert.ok(offRes.tags.length >= 2 && offRes.tags.length <= 4 && offRes.tags.every(t => t.toLocaleLowerCase() !== 'existing-tag' && !isInternalTag(t)));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -6,7 +6,7 @@ import {
 import { exportBulkRefs, parseBulkRefs, type BulkRefFormat } from '../shared/citation-bulk.js';
 import type { ResourceReader } from './academic-intake.js';
 import { discoverDocResources, scheduleResourceDiscovery } from './doc-resources-discover.js';
-import { bulkDeleteDocuments, bulkUpdateDocTriage, readBulkDocIds } from './doc-meta.js';
+import { bulkDeleteDocuments, bulkUpdateDocTriage, readBulkDocIds, suggestDocTags } from './doc-meta.js';
 import { addDocResource, listDocResources, pendingResourceCounts, removeDocResource, updateDocResourceStatus } from './doc-resources-store.js';
 import { exploreCitationGraph, readGraphPaperInput, resolveAcademicPaper, searchAcademicPapers, type GraphContext } from './academic-graph.js';
 import { saveGraphPaper } from './paper-save.js';
@@ -125,6 +125,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
       const validIds = new Set((await documents.list()).map(d => d.id));
       return database.withDb(true, db => bulkUpdateDocTriage(db, input, validIds));
     },
+    'library.suggestTags': (input, options) => suggestDocTags(input, { store: database, library: documents, model }, options),
     'library.search': async input => {
       const query = single(input.query, 'search query', 256);
       return { hits: query ? database.searchLibrary(query, await documents.list()) : [] };

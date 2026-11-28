@@ -34,6 +34,7 @@ export interface ReaderPort {
   exchangeDeleted?(thread: string, requestId: string): void;
   regionDiscussionClosed?(explicit: boolean): void;
   openResearchWorkspace?(view?: ResearchViewId, ctx?: ResearchOpenContext): void;
+  notifyDocumentMutated?(docId: string, deleted?: boolean): void;
   openPaperChat?(): void;
   notebook?: NotebookSnapshot;
   notebookError?: string;

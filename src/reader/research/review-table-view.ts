@@ -61,7 +61,7 @@ export function createReviewTableView(): ResearchViewModule {
   };
   const openPaperDrawer = (docId: string) => {
     const doc = docs.find(d => d.id === docId); if (!doc || !inspector) return;
-    selected = null; selectedPaperId = docId; inspector.showPaper(doc, docs); syncSplitAttr(); syncGridSelection();
+    selected = null; selectedPaperId = docId; inspector.showPaper(doc, docs, topics); syncSplitAttr(); syncGridSelection();
   };
   const paperBtn = (doc: DocumentInfo) => {
     const btn = el('button', 'rt-paper-btn'), m = [doc.authors, doc.year].filter(Boolean).join(' · ');
@@ -320,7 +320,9 @@ export function createReviewTableView(): ResearchViewModule {
         onRetry: (docId, colId) => runBatch('extract', 'cell', { docId, colId, force: true }),
         onSaveOverride: async (docId, colId, val, reason) => { try { await setManualCell(docId, colId, val, reason); toast(t('Saved manual override.', '已保存人工覆写。')); } catch (e) { toast(message(e)); } },
         onJump: (docId, page, quote) => { void shell?.inspectInReader({ docId, page, ...(quote ? { quote } : {}) }).catch(e => toast(message(e))); },
-        onPaperAction: runPaperAction, onAttachPaperHead: (elHead, doc) => shell?.paperFloatBar?.attach(elHead, { doc, inLibrary: true })
+        onPaperAction: runPaperAction, onAttachPaperHead: (elHead, doc) => shell?.paperFloatBar?.attach(elHead, { doc, inLibrary: true }),
+        aiConfigured: () => Boolean(shell?.aiConfigured?.()),
+        onTagsUpdated: (docId, meta) => { const d = docs.find(x => x.id === docId); if (d) d.meta = meta; shell?.syncActiveDocMeta?.(docId, meta); triage?.syncTags(docs, topics); renderBody(); }
       });
       colPicker = new ReviewColumnPicker(col => table ? saveTablePatch({ columns: [...table.columns, col] }) : Promise.resolve(false), preset => saveTablePatch({ preset }, preset !== 'custom'));
       splitEl.append(mainPane, inspector.backdrop, inspector.root); root.append(top, splitEl, colPicker.backdrop, colPicker.root); host.replaceChildren(root);
