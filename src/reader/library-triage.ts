@@ -1,3 +1,4 @@
+import { openStaxLocation } from '../shared/openstax.js';
 import type { DocStatus, DocumentInfo, LibrarySearchHit, LibrarySearchKind } from '../shared/types.js';
 import { abstractOnlyLabel } from './abstract-view.js';
 import { localBookPlace } from './book-position.js';
@@ -132,8 +133,10 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
         }
         const group = editions.get(doc.title.toLocaleLowerCase()) ?? [doc], details: string[] = [];
         if (doc.book) {
-          const place = localBookPlace(doc.id), section = place && doc.book.sections[place.page - 1];
-          details.push(section ? t('Continue at ', '续读 · ') + section.title : t('OpenStax book', 'OpenStax 图书'));
+          const place = localBookPlace(doc.id), section = place && doc.book.sections[place.page - 1], count = doc.book.sections.length;
+          details.push(section ? t('Continue at ', '续读 · ') + section.title
+            : openStaxLocation(doc.url) ? t('OpenStax book', 'OpenStax 图书')
+            : t(count + (count === 1 ? ' section' : ' sections'), count + ' 节'));
         } else if (doc.kind === 'pdf') {
           const total = doc.meta?.pageCount || Number(localStorage.getItem('reader.pdf-pages.' + doc.id)) || 0;
           if (doc.meta?.lastPage && doc.meta.lastPage > 1 && total > 1) details.push(t('p. ' + doc.meta.lastPage + ' / ' + total, '第 ' + doc.meta.lastPage + ' / ' + total + ' 页'));

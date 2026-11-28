@@ -17,7 +17,12 @@ export function extractTranslatedBlocks(blocks: readonly ReaderBlock[]): SearchB
   return out;
 }
 
-export function buildSearchSources(doc: DocumentInfo, pdfPages: readonly PaperPage[] | undefined, translations: ReadonlyMap<number, readonly SearchBlock[]>): SearchSource[] {
+export function buildSearchSources(
+  doc: DocumentInfo,
+  pdfPages: readonly PaperPage[] | undefined,
+  translations: ReadonlyMap<number, readonly SearchBlock[]>,
+  bookPages?: readonly PaperPage[]
+): SearchSource[] {
   const sources: SearchSource[] = [];
   const addTranslated = (page: number) => {
     for (const b of translations.get(page) ?? []) sources.push({ page, side: 'translation', blockId: b.id, text: b.text });
@@ -30,10 +35,23 @@ export function buildSearchSources(doc: DocumentInfo, pdfPages: readonly PaperPa
     return sources;
   }
   const page = doc.sectionPage ?? 1;
-  for (const [index, paragraph] of (doc.paragraphs ?? []).entries()) {
-    const id = 'p-' + (index + 1);
-    if (paragraph.trim() && doc.articleLayout?.[id]?.kind !== 'image') sources.push({ page, side: 'source', blockId: id, text: paragraph });
+  const addParagraphs = (targetPage: number) => {
+    for (const [index, paragraph] of (doc.paragraphs ?? []).entries()) {
+      const id = 'p-' + (index + 1);
+      if (paragraph.trim() && doc.articleLayout?.[id]?.kind !== 'image') sources.push({ page: targetPage, side: 'source', blockId: id, text: paragraph });
+    }
+  };
+  if (bookPages?.length) {
+    let includedCurrent = false;
+    for (const entry of bookPages) {
+      if (entry.page === page && doc.paragraphs?.length) { addParagraphs(page); includedCurrent = true; }
+      else if (entry.text.trim()) sources.push({ page: entry.page, side: 'source', text: entry.text });
+      addTranslated(entry.page);
+    }
+    if (!includedCurrent) { addParagraphs(page); addTranslated(page); }
+    return sources;
   }
+  addParagraphs(page);
   addTranslated(page);
   return sources;
 }

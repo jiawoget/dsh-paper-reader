@@ -30,7 +30,7 @@ export interface BookSection {
   chapterTitle: string;
   url: string;
 }
-export interface BookInfo { slug: string; sections: BookSection[] }
+export interface BookInfo { slug: string; sections: BookSection[]; anchorPages?: Record<string, number> }
 export interface DocMetadata {
   paperTitle?: string; authors?: string; venue?: string; year?: string; doi?: string; publisher?: string; abstract?: string;
 }
@@ -238,9 +238,10 @@ export interface Operations {
   'citations.analyze': [CitationAnalyzeInput, CitationReport];
   'citations.summary': [CitationSummaryInput, CitationSummary];
   'citations.reclassify': [CitationReclassifyInput, CitationReclassifyResult];
-  'web.import': [WebArticle, OpenDocument];
+  'web.import': [WebArticle & { anchor?: string }, OpenDocument];
   'web.open': [{ url: string; arxivFormat?: ArxivFormat }, OpenDocument];
   'book.section': [{ docId: string; page: number }, { doc: DocumentInfo }];
+  'book.pages': [{ docId: string }, { pages: DocPageRecord[] }];
   'article.capture.save': [{ docId: string; page: number; location: string; image: string; regionText: string; label: string }, { anchor: string }];
   'article.capture.get': [{ docId: string; page: number; anchor: string }, { image: string; regionText: string; label: string }];
   'translation.get': [{ docId: string; page: number; targetLanguage?: string }, { translations: Record<string,string> }];

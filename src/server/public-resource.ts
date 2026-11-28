@@ -144,6 +144,7 @@ function openResponse(url: URL, headers: Record<string, string>, signal: AbortSi
   });
 }
 
+export const HTML_LIMIT = 32 * 1024 * 1024;
 export interface PublicResource { url: URL; bytes: Buffer; type: string; charset?: string }
 export async function publicResource(raw: unknown, kind: 'document' | 'image' | 'json', options?: PublicResourceOptions): Promise<PublicResource> {
   let url = checkedUrl(raw);
@@ -174,7 +175,7 @@ export async function publicResource(raw: unknown, kind: 'document' | 'image' | 
       response.destroy(); fail(kind === 'image' ? 'The website did not return an illustration.' : 'This link does not return an HTML article or PDF.', 415);
     }
     const html = ['text/html', 'application/xhtml+xml'].includes(type);
-    const limit = kind === 'json' ? 1024 * 1024 : kind === 'image' ? 12 * 1024 * 1024 : html ? 5 * 1024 * 1024 : PDF_LIMIT;
+    const limit = kind === 'json' ? 1024 * 1024 : kind === 'image' ? 12 * 1024 * 1024 : html ? HTML_LIMIT : PDF_LIMIT;
     if (Number(response.headers['content-length']) > limit) { response.destroy(); fail('This resource is too large to open.', 413); }
     const encoding = response.headers['content-encoding'];
     const decoder = encoding === 'gzip' ? createGunzip() : encoding === 'br' ? createBrotliDecompress() : encoding === 'deflate' ? createInflate() : undefined;
