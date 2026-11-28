@@ -1,3 +1,4 @@
+import type { DocResourceKind } from '../../shared/doc-resources.js';
 import { readerLabel as t } from '../ui.js';
 
 export const RESEARCH_VIEWS = [
@@ -101,5 +102,36 @@ export const researchText = {
   fileTooLarge32Mb: () => t('Choose a file of up to 32 MB.', '请选择不超过 32 MB 的文件。'),
   localDocument: () => t('Local document', '本地文档'),
   speakerNotes: () => t('Speaker notes', '演讲者备注'),
-  legacyPptUnsupported: () => t('Legacy binary .ppt files are not supported directly. Save or export as .pptx or PDF, then import again.', '暂不支持旧版二进制 .ppt 格式，请另存或导出为 .pptx 或 PDF 后再导入。')
+  legacyPptUnsupported: () => t('Legacy binary .ppt files are not supported directly. Save or export as .pptx or PDF, then import again.', '暂不支持旧版二进制 .ppt 格式，请另存或导出为 .pptx 或 PDF 后再导入。'),
+  resourcesHeading: () => t('Resources', '关联资源'),
+  findLinks: () => t('Find links', '查找链接'),
+  findingLinks: () => t('Finding…', '查找中…'),
+  addLink: () => t('+ Add link', '+ 添加链接'),
+  resourceUrlMode: () => t('URL', '网页链接'),
+  resourceDocMode: () => t('Library doc', '本地文档'),
+  resourceModeGroup: () => t('Link type', '链接方式'),
+  resourceUrlLabel: () => t('Resource URL', '资源链接'),
+  resourceTitleLabel: () => t('Title (optional)', '标题（可选）'),
+  resourceKindLabel: () => t('Type', '类型'),
+  resourceDocLabel: () => t('Companion document', '关联本地文档'),
+  resourceDocPlaceholder: () => t('Select a library document…', '选择资料库文档…'),
+  resourceNoOtherDocs: () => t('No other library documents available.', '资料库中暂无其他文档。'),
+  resourceAddSubmit: () => t('Link', '关联'),
+  resourceCancel: () => t('Cancel', '取消'),
+  resourceAccept: () => t('Accept', '采纳'),
+  resourceDismiss: () => t('Dismiss', '忽略'),
+  resourceRemove: () => t('Remove link', '移除链接'),
+  resourceLinkedFrom: () => t('Linked from', '关联文献'),
+  resourceSuggested: () => t('Suggestions', '待确认推荐'),
+  resourcePendingBadge: (n: number) => t(`${n} suggested`, `${n} 条推荐`),
+  resourceFoundToast: (n: number) => n > 0 ? t(`Found ${n} new link${n === 1 ? '' : 's'}.`, `发现 ${n} 条新链接。`) : t('No new links found.', '未发现新链接。'),
+  resourceInvalidUrl: () => t('Enter a valid http or https URL.', '请输入有效的 http 或 https 链接。'),
+  resourceNeedTarget: () => t('Provide a URL or choose a library document.', '请输入链接或选择一个本地文档。'),
+  resourceKind: (kind: DocResourceKind) =>
+    kind === 'code' ? t('Code', '代码')
+    : kind === 'talk' ? t('Talk', '报告视频')
+    : kind === 'slides' ? t('Slides', '幻灯片')
+    : kind === 'project' ? t('Project', '项目主页')
+    : kind === 'dataset' ? t('Dataset', '数据集')
+    : t('Other', '其他')
 };

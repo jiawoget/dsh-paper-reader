@@ -4,6 +4,7 @@ import { researchText, type ResearchViewId } from './labels.js';
 export type ResearchIconName =
   | 'railToggle' | 'close'
   | 'read' | 'research' | 'ask-ai' | 'save' | 'info'
+  | 'code' | 'talk' | 'slides' | 'dataset' | 'link'
   | ResearchViewId;
 
 const RESEARCH_ICON_PATHS: Record<ResearchIconName, string> = {
@@ -14,6 +15,11 @@ const RESEARCH_ICON_PATHS: Record<ResearchIconName, string> = {
   'ask-ai': 'M12 4.5l1.6 4.4 4.4 1.6-4.4 1.6L12 16.5l-1.6-4.4L6 10.5l4.4-1.6zM17.5 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z',
   save: 'M6 4.5h12a1 1 0 0 1 1 1V20l-7-4-7 4V5.5a1 1 0 0 1 1-1M12 8.5v5M9.5 11h5',
   info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 11v5M12 8h.01',
+  code: 'M8.5 8L4 12l4.5 4M15.5 8L20 12l-4.5 4M13.5 6.5l-3 11',
+  talk: 'M4.5 6.5h15a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1M10.5 9.5l4.5 2.5-4.5 2.5z',
+  slides: 'M4 5.5h16a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1M12 15.5v4M8.5 19.5h7M7.5 9.5h5M7.5 12.5h9',
+  dataset: 'M5 7c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3m0 0v10c0 1.7 3.1 3 7 3s7-1.3 7-3V7M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3',
+  link: 'M10 14a4 4 0 0 1 0-5.7l2.1-2.1a4 4 0 0 1 5.7 5.7l-1.2 1.2M14 10a4 4 0 0 1 0 5.7l-2.1 2.1a4 4 0 0 1-5.7-5.7l1.2-1.2',
   'deep-search': 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13m8.5 15-3.9-3.9M11 8v6M8 11h6',
   'citation-map': 'M6.5 6a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4m11 0a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4M12 15a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4M8.4 9.6l2.5 5.6m4.7-5.6-2.5 5.6M8.7 8.2h6.6',
   citations: 'M5.5 10.5h4v5.5h-4zm0 0c0-2.8 1.4-4.5 3.8-5.5m5.2 5.5h4v5.5h-4zm0 0c0-2.8 1.4-4.5 3.8-5.5',

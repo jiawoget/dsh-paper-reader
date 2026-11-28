@@ -363,6 +363,80 @@ async function waitForTextOnDisk(file: string, text: string): Promise<string> {
   throw new Error('The notebook editor did not write the expected text to disk: ' + text);
 }
 
+async function linkedResources({ context, host, pane }: ReaderSession): Promise<void> {
+  const endpoint = host.origin + '/api/paper-reader/action';
+  const post = async (op: string, payload: Record<string, unknown>) => {
+    const res = await context.request.post(endpoint, { data: { op, payload } });
+    assert.ok(res.ok(), `RPC ${op} failed: ${res.status()}`);
+    return await res.json() as Record<string, unknown>;
+  };
+  const paper = (await post('web.import', {
+    title: 'KV Study', url: 'https://example.com/kv-study',
+    paragraphs: ['Dataset at https://huggingface.co/datasets/demo/kv-bench and talk https://youtu.be/demoTalk123 in this study.']
+  })).doc as { id: string; title: string };
+  const companion = (await post('web.import', {
+    title: 'Deck Slides.pptx', url: 'https://example.com/deck-slides',
+    paragraphs: ['Slide overview of block allocation.']
+  })).doc as { id: string; title: string };
+  await post('doc.resources.discover', { docId: paper.id });
+
+  await pane.getByRole('button', { name: 'Open library' }).click();
+  await pane.getByRole('tab', { name: 'On this device' }).click();
+  const paperRow = pane.getByRole('dialog').locator('.library-device-item', { hasText: paper.title });
+  await paperRow.locator('.library-res-dot').waitFor({ state: 'visible' });
+  await paperRow.getByRole('button', { name: /KV Study/ }).click();
+  await pane.getByRole('tab', { name: 'Reference' }).click();
+
+  const panel = pane.locator('.doc-res');
+  await panel.locator('.doc-res-dot').waitFor({ state: 'visible' });
+  assert.equal(await panel.locator('.doc-res-sug-row').count(), 2);
+
+  await panel.getByRole('button', { name: '+ Add link' }).click();
+  await panel.locator('.doc-res-url').fill('javascript:alert(1)');
+  await panel.getByRole('button', { name: 'Link', exact: true }).click();
+  await panel.locator('.doc-res-error').waitFor({ state: 'visible' });
+
+  await panel.locator('.doc-res-url').fill('https://github.com/vllm-project/vllm');
+  assert.equal(await panel.locator('.doc-res-kind').inputValue(), 'code');
+  await panel.getByRole('button', { name: 'Link', exact: true }).click();
+  const ghLink = panel.locator('.doc-res-chip[data-kind="code"] a.doc-res-chip-main');
+  await ghLink.waitFor({ state: 'visible' });
+  assert.equal(await ghLink.getAttribute('href'), 'https://github.com/vllm-project/vllm');
+  assert.equal(await ghLink.getAttribute('rel'), 'noopener noreferrer');
+
+  await panel.getByRole('button', { name: '+ Add link' }).click();
+  await panel.getByRole('button', { name: 'Library doc', exact: true }).click();
+  await panel.locator('.doc-res-doc-sel').selectOption(companion.id);
+  assert.equal(await panel.locator('.doc-res-kind').inputValue(), 'slides');
+  await panel.getByRole('button', { name: 'Link', exact: true }).click();
+  const localChip = panel.locator(`.doc-res-chip[data-target-doc-id="${companion.id}"] button.doc-res-chip-main`);
+  await localChip.waitFor({ state: 'visible' });
+
+  await panel.locator('.doc-res-sug-row').first().getByRole('button', { name: 'Accept', exact: true }).click();
+  await panel.locator('.doc-res-sug-row').first().getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await panel.locator('.doc-res-dot').waitFor({ state: 'hidden' });
+  assert.equal(await panel.locator('.doc-res-sug-row').count(), 0);
+  assert.equal(await panel.locator('.doc-res-chip').count(), 3);
+
+  await localChip.click();
+  await pane.locator('#docTitle').getByText(companion.title, { exact: true }).waitFor();
+  await pane.getByRole('tab', { name: 'Reference' }).click();
+  const backlink = panel.locator(`.doc-res-backlink-chip[data-source-doc-id="${paper.id}"]`);
+  await backlink.waitFor({ state: 'visible' });
+  await backlink.click();
+  await pane.locator('#docTitle').getByText(paper.title, { exact: true }).waitFor();
+
+  await pane.getByRole('button', { name: 'Research', exact: true }).click();
+  await pane.locator('.rw-nav-btn[data-view="review-table"]').click();
+  await pane.locator(`.rt-paper-cell .rt-paper-btn[data-doc-id="${paper.id}"]`).click();
+  const rtCodeChip = pane.locator('.rt-inspector .doc-res-chip[data-kind="code"]');
+  await rtCodeChip.waitFor({ state: 'visible' });
+  await rtCodeChip.hover();
+  await rtCodeChip.locator('.doc-res-chip-del').click();
+  await rtCodeChip.waitFor({ state: 'detached' });
+  console.log('PASS 10: linked paper resources (auto-classified URL, invalid URL rejection, local companion + backlink navigation, accept/dismiss/remove, library indicator, Review Table drawer).');
+}
+
 const selected = process.argv.slice(2);
 if (!selected.length || selected.includes('06')) await withHost(host => reader(host, obsidian));
 if (!selected.length || selected.includes('07')) {
@@ -380,3 +454,4 @@ if (!selected.length || selected.includes('09')) {
   try { await withHost(host => reader(host, session => connections(session, fixture))); }
   finally { await fixture.close(); }
 }
+if (!selected.length || selected.includes('10')) await withHost(host => reader(host, linkedResources));

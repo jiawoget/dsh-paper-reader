@@ -56,6 +56,13 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
   }, { placement: 'outside' });
 
   let searchTimer = 0, searchSeq = 0;
+  let pendingCounts: Record<string, number> = {};
+  let rerender: (() => void) | null = null;
+  void api('doc.resources.list', {}).then(res => {
+    if (!panel.closest('dialog[open]') || !res.pendingCounts) return;
+    pendingCounts = res.pendingCounts;
+    if (Object.keys(pendingCounts).length) rerender?.();
+  }).catch(() => undefined);
   function renderHits(hits: LibrarySearchHit[]): void {
     matches.replaceChildren(el('h3', 'library-matches-title', t('Matches across library', '跨库匹配结果')));
     matches.hidden = false;
@@ -156,6 +163,12 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
         const heading = el('span', 'library-row-heading');
         heading.append(el('strong', '', doc.title));
         if (doc.kind === 'abstract') heading.append(el('span', 'library-kind-badge', abstractOnlyLabel()));
+        const pending = pendingCounts[doc.id] ?? 0;
+        if (pending > 0) {
+          const badge = el('span', 'library-res-dot', String(pending));
+          badge.ariaLabel = badge.title = researchText.resourcePendingBadge(pending);
+          heading.append(badge);
+        }
         text.append(heading, el('small', '', details.join(' · ')));
         if (doc.meta?.tags.length) {
           const tagRow = el('span', 'library-tags');
@@ -198,6 +211,7 @@ export function renderDeviceLibrary(app: ReaderPort, panel: HTMLElement, read: (
         floatBar.attach(wrap, { doc, inLibrary: true });
       }
     }
+    rerender = render;
     search.addEventListener('input', () => { render(); scheduleSearch(); });
     for (const select of [statusSelect, typeSelect, sortSelect]) select.addEventListener('change', render);
     render();

@@ -1,6 +1,7 @@
 import { REVIEW_PRESET_IDS, SUGGESTED_REVIEW_COLUMNS, type ExtractionCell, type ReviewColumn, type ReviewColumnType, type ReviewDecision, type ReviewPresetId } from '../../shared/review-types.js';
 import type { DocumentInfo } from '../../shared/types.js';
 import { abstractOnlyLabel } from '../abstract-view.js';
+import { mountDocResourcesPanel } from '../doc-resources-panel.js';
 import { el, readerLabel as t } from '../ui.js';
 import { researchIcon, type ResearchIconName } from './icons.js';
 import { researchText, researchViewName } from './labels.js';
@@ -64,6 +65,7 @@ export class ReviewTableInspector {
   private readonly jumpBtn = el('button', 'btn primary rt-insp-jump');
   private readonly retryBtn = el('button', 'btn rt-insp-retry', t('Retry cell', '重抽此格'));
   private readonly paperTagsSec = el('section', 'rt-insp-sec'); private readonly paperTagsEl = el('div', 'rt-insp-tags');
+  private readonly paperResSec = el('div', 'rt-insp-res');
   private readonly paperAbsEl = el('p', 'rt-insp-abstract');
   private readonly paperReadBtn = el('button', 'btn primary rt-insp-open', `${researchText.openInReader()} ↗`);
   private target: InspectorTarget | null = null; private paperDoc: DocumentInfo | null = null; private busy = false;
@@ -106,7 +108,7 @@ export class ReviewTableInspector {
     this.paperTagsSec.append(el('span', 'rt-insp-label', researchText.tagsHeading()), this.paperTagsEl);
     const absSec = el('section', 'rt-insp-sec');
     absSec.append(el('span', 'rt-insp-label', researchText.abstractHeading()), this.paperAbsEl);
-    this.paperBody.append(actSec, this.paperTagsSec, absSec);
+    this.paperBody.append(actSec, this.paperTagsSec, this.paperResSec, absSec);
     this.paperReadBtn.addEventListener('click', () => { if (this.paperDoc) this.cb.onPaperAction?.('read', this.paperDoc); });
     this.paperFoot.append(this.paperReadBtn);
     this.paperBody.hidden = this.paperFoot.hidden = true;
@@ -134,7 +136,7 @@ export class ReviewTableInspector {
     this.jumpBtn.textContent = doc.kind === 'abstract' ? t('Open Abstract ↗', '打开摘要 ↗') : t(`Jump to p. ${cell?.page ?? 1} ↗`, `跳原文第 ${cell?.page ?? 1} 页 ↗`);
     this.retryBtn.hidden = isScreening; this.setBusy(this.busy); this.cb.onAttachPaperHead?.(this.headEl, doc);
   }
-  showPaper(doc: DocumentInfo): void {
+  showPaper(doc: DocumentInfo, docs?: readonly DocumentInfo[]): void {
     this.target = null; this.paperDoc = doc; this.backdrop.hidden = this.root.hidden = false;
     this.cellBody.hidden = this.cellFoot.hidden = true; this.paperBody.hidden = this.paperFoot.hidden = false;
     this.root.setAttribute('aria-label', researchText.paperSummary());
@@ -144,6 +146,7 @@ export class ReviewTableInspector {
     const tags = doc.meta?.tags?.filter(Boolean) ?? [];
     this.paperTagsSec.hidden = !tags.length;
     this.paperTagsEl.replaceChildren(...tags.map(tag => el('span', 'rt-insp-tag', tag)));
+    mountDocResourcesPanel(this.paperResSec, { docId: doc.id, docs, onOpenDoc: id => this.cb.onJump(id, 1) });
     this.paperAbsEl.textContent = doc.abstract?.trim() || researchText.noAbstract();
     this.cb.onAttachPaperHead?.(this.headEl, doc);
   }
