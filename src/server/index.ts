@@ -1,5 +1,4 @@
 import { existsSync, readdirSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +10,7 @@ import { replaceDocPages } from './research-store.js';
 import { createServices } from './services.js';
 import { ReaderStore } from './reader-store.js';
 import { onLoopback } from './service-types.js';
+import { createStaticAssetHandler, pdfBytesResponse } from './static-cache.js';
 
 type Method = 'GET'|'HEAD'|'POST';
 interface HostRoute { path:string; methods:Method[]; requestBody:'buffered'|'streaming'; fetch(request:Request):Promise<Response> }
@@ -104,8 +104,7 @@ export function apply(ctx:ReaderHost):void {
       }
     }
   });
-  const asset=(url:string,file:string) => route(url,['GET','HEAD'],async req => new Response(req.method==='HEAD'?null:new Uint8Array(await readFile(file)),{
-    headers:{'content-type':mimeTypes[path.extname(file)] ?? 'application/octet-stream','cache-control':url.startsWith('vendor/')?'private, max-age=86400':'private, no-cache','x-content-type-options':'nosniff','referrer-policy':'no-referrer'} }));
+  const asset=(url:string,file:string) => route(url,['GET','HEAD'],createStaticAssetHandler(url,file,mimeTypes[path.extname(file)] ?? 'application/octet-stream'));
   function assets(url:string,dir:string):void {
     for (const entry of readdirSync(dir,{withFileTypes:true})) {
       const file=path.join(dir,entry.name);
@@ -116,7 +115,7 @@ export function apply(ctx:ReaderHost):void {
   assets('app/',publicDir);
   for(const file of ['pdf.mjs','pdf.worker.mjs','pdf.renderer.mjs']) asset('vendor/'+file,path.join(pdfDir,'build',file));
   for(const dir of ['cmaps','standard_fonts','wasm','iccs']) assets('vendor/'+dir+'/',path.join(pdfDir,dir));
-  route('pdf',['GET'],async req => new Response(new Uint8Array(await library.bytes(new URL(req.url).searchParams.get('id'))),{headers:{'content-type':'application/pdf','cache-control':'private, no-cache'}}));
+  route('pdf',['GET','HEAD'],async req => pdfBytesResponse(req,await library.bytes(new URL(req.url).searchParams.get('id'))));
   route('article-image',['GET'],async req => {
     const params = new URL(req.url).searchParams;
     const page = params.get('page');

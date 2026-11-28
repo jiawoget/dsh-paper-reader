@@ -1,5 +1,5 @@
 import type { ChatSource } from '../shared/types.js';
-import { goToNoteChapter, type NotebookInsertion } from './notebook.js';
+import { goToNoteChapter, type NotebookInsertion } from './notebook-loader.js';
 import { paperNotebook } from './notes-panel.js';
 import { screenshotFigureLabel } from './pdf/region-geometry.js';
 import { isScreenshotAnchor } from './selection-context.js';

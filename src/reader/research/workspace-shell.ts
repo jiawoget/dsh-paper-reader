@@ -1,4 +1,4 @@
-import { byId, el, message, toast } from '../ui.js';
+import { byId, el, message, readerLabel as label, toast } from '../ui.js';
 import { dismissInfoTip, researchIcon } from './icons.js';
 import { RESEARCH_VIEWS, researchText, researchViewMeta, researchViewName, type ResearchViewId } from './labels.js';
 import { createWorkspaceFloatCallbacks, PaperFloatBar } from './paper-float-bar.js';
@@ -23,6 +23,7 @@ export class ResearchWorkspace {
   private opened = false; private overlayOpen = false; private activeView: ResearchViewId = 'deep-search'; private activeTopicTag = '';
   private returnAnchor?: ReturnAnchor; private snapshot?: WorkspaceSnapshot; private openCtx?: ResearchOpenContext;
   private activeModule?: ResearchViewModule; private shellCtx?: ResearchShellContext; private viewSeq = 0;
+  private viewsPromise?: Promise<void>;
 
   constructor(private readonly host: ResearchWorkspaceHost) {
     this.root.id = 'researchWorkspace'; this.root.hidden = true; this.root.ariaLabel = researchText.workspace();
@@ -69,6 +70,7 @@ export class ResearchWorkspace {
     researchBtn.ariaLabel = researchText.researchMode(); researchBtn.title = researchText.expandWithKey();
     researchBtn.append(researchIcon('research', 18), el('span', 'rw-sw-txt', researchText.researchMode()));
     researchBtn.addEventListener('click', () => this.open());
+    researchBtn.addEventListener('pointerenter', () => { void this.ensureViews().catch(() => undefined); }, { once: true });
     switcher.append(readBtn, researchBtn);
     this.returnPill.id = 'returnWorkspace'; this.returnPill.hidden = true;
     this.returnPill.setAttribute('role', 'region'); this.returnPill.ariaLabel = researchText.workspace();
@@ -156,6 +158,13 @@ export class ResearchWorkspace {
     this.railToggle.setAttribute('aria-expanded', String(expanded)); this.railToggle.ariaLabel = this.railToggle.title = this.railToggle.dataset.tooltip = tip;
   }
 
+  private ensureViews(): Promise<void> {
+    if (this.modules.size) return Promise.resolve();
+    return (this.viewsPromise ??= import('./index.js').then(({ registerResearchViews }) => {
+      registerResearchViews(this);
+    }, err => { this.viewsPromise = undefined; throw err; }));
+  }
+
   private switchView(view: ResearchViewId, restoredState?: unknown, scrollTop = 0): void {
     const seq = ++this.viewSeq;
     this.floatBar.hide();
@@ -163,7 +172,14 @@ export class ResearchWorkspace {
     for (const [id, btn] of this.navButtons) { if (id === view) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current'); }
     this.syncRail(); this.main.replaceChildren();
     const mod = this.modules.get(view);
-    if (!mod) return;
+    if (!mod) {
+      if (!this.modules.size) {
+        this.main.append(el('p', 'hint', label('Loading…', '正在加载…')));
+        void this.ensureViews().then(() => { if (seq === this.viewSeq && this.modules.has(view)) this.switchView(view, restoredState, scrollTop); })
+          .catch(error => { if (seq === this.viewSeq) toast(message(error)); });
+      }
+      return;
+    }
     this.activeModule = mod;
     const ctx: ResearchShellContext = {
       activeDocId: () => this.host.activeDocId(), activeTopic: () => this.activeTopicTag, setActiveTopic: tag => { this.activeTopicTag = tag; },

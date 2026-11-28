@@ -7,13 +7,14 @@ import { showSectionControls } from './book-navigation.js';
 import { outlineAnchor, outlineLocation, ReaderContents, type ContentsDestination } from './contents.js';
 import { AnnotationWorkspace, readPagePoint } from './annotations.js';
 import { AnnotationLayer } from './annotation-layer.js';
-import { discardNotebook, insertNotebookPassage, leaveNotebook, refreshNotebookHighlights } from './notebook.js';
+import { discardNotebook, insertNotebookPassage, leaveNotebook, refreshNotebookHighlights } from './notebook-loader.js';
 import { quoteLocator, readSelectionRange, readTranslatedLocator, writeSelectionRange, writeTranslatedLocator, type SavedSelectionRange, type TranslatedLocator } from '../shared/source-link.js';
 import { renderArticle } from './article-view.js';
 import { abstractOnlyLabel, attachPdfToAbstract, renderAbstractView } from './abstract-view.js';
 import { initReaderChrome, openLibraryLabel } from './reader-chrome.js';
 import { installCitationPreviews } from './citation-preview.js';
-import { openPdf, bundledPdfUrl, type PdfDocument, type PdfPageView } from './pdf-view.js';
+import type { PdfDocument, PdfPageView } from './pdf-view.js';
+import { bundledPdfUrl, loadPdfView } from './pdf-loader.js';
 import { collectionsDialog } from './collections-dialog.js';
 import { notesPanel, readingPackBar } from './notes-panel.js';
 import { referencePanel } from './reference-panel.js';
@@ -41,7 +42,6 @@ import { copyRegionPng, saveRegionPng } from './region-png.js';
 import { researchText, type ResearchViewId } from './research/labels.js';
 import { clearAbstractOnly } from './research/paper-intake.js';
 import { locateQuoteInView, type InspectTarget, type ResearchOpenContext, type ReturnAnchor } from './research/state.js';
-import { registerResearchViews } from './research/index.js';
 import { ResearchWorkspace } from './research/workspace-shell.js';
 
 const sidebarTabs = {contentsTab:'contents', notesTab:'notes', annotationsTab:'marks', refsTab:'reference'} as const;
@@ -397,7 +397,7 @@ class Reader implements ReaderPort {
       if(version!==this.epoch)return;
       let pdf=changed?undefined:this.pdf;
       if(changed && doc.kind==='pdf'){
-          const res=await fetch(doc.id==='pagedattention'?bundledPdfUrl:'../pdf?id='+encodeURIComponent(doc.id),{credentials:'same-origin'});
+          const [res,{openPdf}]=await Promise.all([fetch(doc.id==='pagedattention'?bundledPdfUrl:'../pdf?id='+encodeURIComponent(doc.id),{credentials:'same-origin'}),loadPdfView()]);
           if(!res.ok)throw new Error(label('Could not open this PDF (HTTP '+res.status+').','无法打开此 PDF（HTTP '+res.status+'）。'));
           pdf=await openPdf(new Uint8Array(await res.arrayBuffer()));
           if(version!==this.epoch){await pdf.destroy();return;}
@@ -829,7 +829,6 @@ class Reader implements ReaderPort {
     };
     click('readText',toggleReadText); click('placePin',togglePlacePin);
     click('translate',()=>this.translatePage());
-    registerResearchViews(this.research);
     window.addEventListener('paper-reader:reextract-matrix',event=>this.openResearchWorkspace('review-table',{docId:(event as CustomEvent<{docId?:string}>).detail?.docId}));
     const resizePages=(value:ZoomSetting)=>{
       this.zoom=value; this.desk.setZoom(value);

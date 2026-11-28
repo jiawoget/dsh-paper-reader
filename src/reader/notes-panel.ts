@@ -2,7 +2,7 @@ import type { SourceRecord } from '../shared/types.js';
 import { chapterPassageLabel } from '../shared/notebook-structure.js';
 import { formatReadingPackMarkdown, readingPackFilename } from '../shared/reading-pack.js';
 import { readSelectionRange, readTranslatedLocator } from '../shared/source-link.js';
-import { currentNotebookMarkdown, flushNotebook, notebookEditor } from './notebook.js';
+import { currentNotebookMarkdown, flushNotebook, loadedNotebook, loadNotebook } from './notebook-loader.js';
 import { settingsDialog } from './settings-dialog.js';
 import { api, button, copyText, downloadFile, el, icon, readerLabel as label, sourceUrl, toast, type ReaderPort } from './ui.js';
 
@@ -113,13 +113,28 @@ export function readingPackBar(app: ReaderPort, slot: 'notes' | 'marks'): HTMLEl
 }
 
 export function paperNotebook(app: ReaderPort) {
-  return notebookEditor(app, sourceChip, () => settingsDialog(app, true));
+  return loadedNotebook()?.notebookEditor(app, sourceChip, () => settingsDialog(app, true));
 }
 
 export function notesPanel(app: ReaderPort, parent: HTMLElement): void {
   const editor = paperNotebook(app);
   const bar = readingPackBar(app, 'notes');
-  if (editor) editor.attach(parent, app.doc.id === 'pagedattention' ? node => guide(app, node) : undefined, bar);
-  else parent.replaceChildren(el('p', 'hint', app.notebookError || label('Opening notes…', '正在打开笔记…')),
+  if (editor) {
+    delete parent.dataset.notesPending;
+    editor.attach(parent, app.doc.id === 'pagedattention' ? node => guide(app, node) : undefined, bar);
+    return;
+  }
+  parent.replaceChildren(el('p', 'hint', app.notebookError || label('Opening notes…', '正在打开笔记…')),
     button(label('Obsidian vault settings', 'Obsidian 笔记库设置'), () => settingsDialog(app, true), 'text-btn'), bar);
+  if (!loadedNotebook() && !app.notebookError) {
+    parent.dataset.notesPending = '1';
+    void loadNotebook().then(() => {
+      if (parent.isConnected && parent.dataset.notesPending === '1' && !parent.hidden && parent.getAttribute('aria-labelledby') === 'notesTab') {
+        notesPanel(app, parent);
+      }
+    }).catch(err => {
+      delete parent.dataset.notesPending;
+      toast(err instanceof Error ? err.message : label('Could not load notes editor.', '无法加载笔记编辑器。'));
+    });
+  }
 }
