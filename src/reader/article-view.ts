@@ -10,6 +10,7 @@ import { sectionFooter } from './book-navigation.js';
 import { pairSelection } from './pdf/alignment.js';
 import { ambiguousQuote, restoreSelection } from './saved-selection.js';
 import { annotationLayoutChanged, withAnnotationSurface } from './annotation-layer.js';
+import { researchText } from './research/labels.js';
 
 interface ArticleOptions {
   doc: DocumentInfo;
@@ -168,13 +169,16 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
     for (const sheet of [original, translated]) sectionFooter(sheet, doc, page, onBookSection);
   }
 
+  let pending: ReadonlySet<string> = new Set();
   function setTranslations(values: Record<string, string>, overwrite = false): void {
     for (const [id, { block, translation }] of pairs) {
       if (unchangedArticleBlock(doc.articleLayout?.[id]?.kind)) { block.translation = block.text; continue; }
       const supplied = values[id]?.trim() || undefined;
       block.translation = overwrite ? (supplied ?? block.translation) : (block.translation || supplied);
+      const busy = !block.translation && pending.has(id);
       translation.classList.toggle('is-untranslated', !block.translation);
-      const rendered = block.translation || label('Awaiting translation', '待翻译');
+      translation.classList.toggle('is-translating', busy);
+      const rendered = block.translation || (busy ? researchText.translatingRow() : label('Awaiting translation', '待翻译'));
       if (translation.firstElementChild!.textContent !== rendered) translation.firstElementChild!.textContent = rendered;
     }
     sizeRows();
@@ -346,6 +350,7 @@ export function renderArticle({ doc, sourceEl, translationEl, translations = {},
   }
   const view: PageView = {
     blocks: Array.from(pairs.values(), pair => pair.block), highlight, select, setTranslations,
+    setPendingBlocks(ids) { pending = ids; setTranslations({}); },
     ...(regions && {
       beginRegion: (attach?: boolean) => regions.begin(attach), cancelRegion: () => regions.end(),
       reopenRegion: (id: string, receive?: RegionAction) => regions.reopen(id, receive)

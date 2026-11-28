@@ -131,6 +131,7 @@ export interface PageView {
   cancelRegion?(): void;
   reopenRegion?(id: string, receive?: RegionAction): Promise<void>;
   setTranslations?(map: Record<string, string>, overwrite?: boolean): void;
+  setPendingBlocks?(ids: ReadonlySet<string>): void;
   dispose?(): void;
 }
 

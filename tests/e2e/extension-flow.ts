@@ -187,7 +187,6 @@ await withHost(async host => {
       await reader.getByRole('button', { name: 'Bilingual', exact: true }).click();
       await reader.getByRole('button', { name: 'Show notes' }).click();
       await reader.locator('.cm-line[data-note-id]').filter({hasText: annotation}).waitFor();
-      await reader.getByRole('button', { name: 'Translate article' }).click();
       await reader.getByText(fixture.answers[3], { exact: true }).waitFor();
       await reader.reload();
       const translated = reader.locator('#translated .web-reading-row > :first-child');

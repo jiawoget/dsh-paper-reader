@@ -154,7 +154,7 @@ export function createReviewTableView(): ResearchViewModule {
   function renderSubBar(): void {
     if (!subBarEl || !table) return;
     subBarEl.replaceChildren(); actionBtns = [];
-    stopBtn = mkBtn('btn rt-stop-btn', t('Stop', '停止'), () => abortCtrl?.abort()); stopBtn.hidden = !running;
+    stopBtn = mkBtn('btn rt-stop-btn', researchText.stop(), () => abortCtrl?.abort()); stopBtn.hidden = !running;
     if (step === 'screening') {
       const topRow = el('div', 'rt-screen-row'), chips = el('div', 'rt-crit-list'), addForm = el('form', 'rt-crit-form'), critIn = el('input', 'search rt-crit-in'), addBtn = el('button', 'btn rt-crit-add', t('+ Add Criterion', '+ 添加条件'));
       for (const cr of table.criteria) {

@@ -35,7 +35,7 @@ export async function runRetranslate(
   onApply: (translations: Record<string, string>) => void,
   openSettings: () => void
 ): Promise<void> {
-  const canLocal = Boolean(opts.isPdf && opts.settings.localTranslationAvailable && targetsSimplifiedChinese(opts.target));
+  const canLocal = Boolean(opts.settings.localTranslationAvailable && targetsSimplifiedChinese(opts.target));
   if (opts.settings.aiMode === 'unconfigured' && !canLocal) { openSettings(); return; }
   const wanted = opts.blockIds?.length ? new Set(opts.blockIds) : undefined;
   const blocks = opts.view.blocks.filter(b => b.text.trim() && (!wanted || wanted.has(b.id)));

@@ -1,6 +1,7 @@
 import { DEFAULT_TARGET_LANGUAGE, targetLanguageBcp47 } from '../shared/languages.js';
 import type { DocumentInfo, PageView, ReaderBlock, ReadingSide, SelectionHit } from '../shared/types.js';
 import { button, el, icon, message, readerLabel as label, responseJson, safeWeb } from './ui.js';
+import { researchText } from './research/labels.js';
 
 interface AbstractViewOptions {
   doc: DocumentInfo; sourceEl: HTMLElement; translationEl: HTMLElement; translations?: Record<string, string>;
@@ -97,12 +98,15 @@ export function renderAbstractView({
   );
   sourceSheet.append(zone); sourceEl.replaceChildren(sourceSheet); translationEl.replaceChildren(transSheet);
 
+  let pending: ReadonlySet<string> = new Set();
   const setTranslations = (values: Record<string, string>, overwrite = false) => {
     for (const [id, row] of rows) {
       const supplied = values[id]?.trim() || undefined;
       row.block.translation = overwrite ? (supplied ?? row.block.translation) : (row.block.translation || supplied);
-      row.translation.textContent = row.block.translation || label('Awaiting translation', '待翻译');
+      const busy = !row.block.translation && pending.has(id);
+      row.translation.textContent = row.block.translation || (busy ? researchText.translatingRow() : label('Awaiting translation', '待翻译'));
       row.translation.classList.toggle('is-untranslated', !row.block.translation);
+      row.translation.classList.toggle('is-translating', busy);
     }
   };
   setTranslations(translations);
@@ -126,7 +130,7 @@ export function renderAbstractView({
   let activeId = '';
   const toggleFlag = (id: string, cls: string, on: boolean) => { const r = rows.get(id); if (r) { r.source.classList.toggle(cls, on); r.translation.classList.toggle(cls, on); } };
   return {
-    blocks, setTranslations,
+    blocks, setTranslations, setPendingBlocks(ids) { pending = ids; setTranslations({}); },
     select(hit) { if (activeId) toggleFlag(activeId, 'is-highlighted', false); activeId = hit?.id ?? ''; if (activeId) toggleFlag(activeId, 'is-highlighted', true); },
     highlight(id, on = true) { if (on && activeId && activeId !== id) toggleFlag(activeId, 'is-highlighted', false); toggleFlag(id, 'is-highlighted', on); activeId = on ? id : ''; },
     locate(id) { const row = rows.get(id); if (!row) return false; for (const [k] of rows) toggleFlag(k, 'is-located', k === id); row.source.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); return true; },

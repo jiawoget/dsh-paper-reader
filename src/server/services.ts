@@ -208,10 +208,10 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     },
     'book.section': async input => ({ doc: await documents.bookSection(input.docId, input.page) }),
     'translation.get': async input => ({ translations: await documents.translations(input.docId, input.page, input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage)) }),
-    'translation.page': async input => {
+    'translation.page': async (input, options) => {
       if (input.force !== undefined && typeof input.force !== 'boolean') throw new ServiceError(400, 'Invalid force option.');
       const targetLanguage = input.targetLanguage === undefined ? database.settings().targetLanguage : readTargetLanguage(input.targetLanguage);
-      return { translations: await documents.translate(input.docId, input.page, input.blocks, async (blocks, documentKind) => (await model.blocks(database.settings(), { blocks, documentKind, targetLanguage })).translations, targetLanguage, input.force === true) };
+      return { translations: await documents.translate(input.docId, input.page, input.blocks, async (blocks, documentKind) => (await model.blocks(database.settings(), { blocks, documentKind, targetLanguage }, options)).translations, targetLanguage, input.force === true, options?.signal) };
     },
     'article.capture.save': input => database.saveArticleCapture(input, hostAttachments(ctx)),
     'article.capture.get': input => database.articleCapture(input),
@@ -247,7 +247,7 @@ export function createServices({ root, ctx, fetchImpl = globalThis.fetch, openOb
     'chat.delete': input => discussions.delete(input),
     'chat.ask': (input, options) => discussions.ask(input, options),
     'chat.searchTerms': input => model.searchTerms(database.settings(), input),
-    'ai.blocks': input => model.blocks(database.settings(), input),
+    'ai.blocks': (input, options) => model.blocks(database.settings(), input, options),
     'obsidian.export': input => notebooks.export(input),
     'zotero.collections': input => zotero().collections(input),
     'zotero.browse': input => zotero().browse(input),

@@ -331,7 +331,8 @@ export class Library {
       return Object.fromEntries(Object.entries(translations).filter(([, text]) => !hasDecoderRepetition(text)));
     } catch (error) { if (isFsError(error, 'ENOENT')) return {}; throw error; }
   }
-  async translate(id: unknown, page: unknown, input: unknown, translate: Translate, targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE, force = false): Promise<Record<string,string>> {
+  async translate(id: unknown, page: unknown, input: unknown, translate: Translate, targetLanguage: unknown = DEFAULT_TARGET_LANGUAGE, force = false, signal?: AbortSignal): Promise<Record<string,string>> {
+    if (signal?.aborted) fail('Request canceled.', 499);
     const doc = await this.get(id);
     const file = this.pageFile(id, page, targetLanguage);
     const checkChineseQuality = doc.kind === 'pdf' && typeof targetLanguage === 'string' && targetsSimplifiedChinese(targetLanguage);
@@ -345,11 +346,13 @@ export class Library {
     const previous = this.jobs.get(file);
     const job = (async () => {
       if (previous) await previous.catch(() => undefined);
+      if (signal?.aborted) fail('Request canceled.', 499);
       const result = await this.translations(id, page, targetLanguage);
       const pending = force ? blocks : blocks.filter(b => !Object.hasOwn(result, b.id) || !result[b.id]?.trim() || (checkChineseQuality && translationQualityError(b.text, result[b.id])));
       await mkdir(path.dirname(file), { recursive: true });
-      for (let i = 0; i < pending.length; i += 8) {
-        const batch = pending.slice(i,i+8);
+      for (let i = 0; i < pending.length; i += 12) {
+        if (signal?.aborted) fail('Request canceled.', 499);
+        const batch = pending.slice(i, i + 12);
         const translated = await translate(batch, doc.kind);
         for (const {id:key,text} of batch) {
           if (!Object.hasOwn(translated, key) || !translated[key]?.trim()) fail('The model omitted a paragraph. Retry to resume the translation.', 502);

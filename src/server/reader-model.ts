@@ -317,7 +317,7 @@ export class ReaderModel {
       'Return only JSON. A printed heading uses {"id":"<source id>","level":1}. A topic in unheaded prose uses {"id":"<source id>","level":1,"title":"Concise topic label"}. Put the entries in {"entries":[...]}, copying ids exclusively from this batch. Use an empty entries array if there is no new section.';
     return this.#complete(settings, system, data);
   }
-  async blocks(settings: PrivateSettings, input: Input): Promise<ServiceResults['ai.blocks']> {
+  async blocks(settings: PrivateSettings, input: Input, streamOptions?: StreamOptions): Promise<ServiceResults['ai.blocks']> {
     if (!Array.isArray(input.blocks) || !input.blocks.length || input.blocks.length > 128) throw new ServiceError(400, 'Invalid number of passages to translate.');
     const ids = new Set<string>();
     const blocks = input.blocks.map((block: unknown) => {
@@ -328,13 +328,13 @@ export class ReaderModel {
       return { id, text: stringValue(block.text, 'selected passage', 24_000, true) };
     });
     const target = input.targetLanguage === undefined ? settings.targetLanguage : readTargetLanguage(input.targetLanguage);
-    const chinesePdf = input.documentKind !== 'web' && targetsSimplifiedChinese(target);
+    const chinese = targetsSimplifiedChinese(target), chinesePdf = input.documentKind !== 'web' && chinese;
     const glossary = formatGlossaryPrompt(settings.glossary, blocks.map(b => b.text).join('\n'));
     let raw: string;
     try {
-      raw = await this.#complete(settings, role + 'Translate each passage in full into ' + target + '. Return only JSON shaped as {"translations":{"original-passage-id":"translation"}}. Include each original ID exactly once.' + (glossary ? ' ' + glossary : ''), { blocks });
+      raw = await this.#complete(settings, role + 'Translate each passage in full into ' + target + '. Return only JSON shaped as {"translations":{"original-passage-id":"translation"}}. Include each original ID exactly once.' + (glossary ? ' ' + glossary : ''), { blocks }, undefined, undefined, streamOptions);
     } catch (error) {
-      if (!(error instanceof MissingDefaultModel) || !chinesePdf) throw error;
+      if (!(error instanceof MissingDefaultModel) || !chinese) throw error;
       const translations = await translateLocally(blocks);
       for (const block of blocks) {
         const problem = translationQualityError(block.text, translations[block.id]);

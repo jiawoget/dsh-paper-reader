@@ -86,5 +86,12 @@ export const researchText = {
   tagsHeading: () => t('Tags', '标签'),
   noAbstract: () => t('No abstract recorded for this paper.', '该文献暂无摘要信息。'),
   paperQuickActions: () => t('Quick actions', '快捷操作'),
-  selectPaper: () => t('Select paper', '勾选文献')
+  selectPaper: () => t('Select paper', '勾选文献'),
+  stop: () => t('Stop', '停止'),
+  translatingRow: () => t('Translating…', '正在翻译…'),
+  translatingProgress: (done: number, total: number) => t(`Translating ${done} / ${total}…`, `正在翻译 ${done} / ${total}…`),
+  pausedProgress: (done: number, total: number) => t(`Paused (${done} / ${total})`, `已暂停（${done} / ${total}）`),
+  resumeTranslation: () => t('Resume', '继续翻译'),
+  translationGuidanceLocalOnly: (lang: string) => t(`Offline translation supports Simplified Chinese only. Connect a model for ${lang}.`, `离线翻译仅支持简体中文，请在连接设置中配置模型以翻译为${lang}。`),
+  translationGuidanceConnect: (lang: string) => t(`Connect a model in Connections to translate into ${lang}.`, `请在连接设置中配置模型以翻译为${lang}。`)
 };
